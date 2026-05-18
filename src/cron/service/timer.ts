@@ -8,7 +8,7 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
-import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
+import { clearCronJobActive, getActiveCronJobCount, markCronJobActive } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
@@ -34,7 +34,7 @@ import {
 import { locked } from "./locked.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
-import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
+import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs, shouldSkipWhenLaneBusy } from "./timeout-policy.js";
 
 export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 
@@ -468,7 +468,7 @@ export function applyJobResult(
       } else if (result.status === "error") {
         const retryConfig = resolveRetryConfig(state.deps.cronConfig);
         const transient = isTransientCronError(result.error, retryConfig.retryOn);
-        // consecutiveErrors is always set to ≥1 by the increment block above.
+        // consecutiveErrors is always set to at least 1 by the increment block above.
         const consecutive = job.state.consecutiveErrors;
         if (transient && consecutive <= retryConfig.maxAttempts) {
           // Schedule retry with backoff (#24355).
@@ -590,7 +590,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   if (!job) {
     state.deps.log.warn(
       { jobId: result.jobId },
-      "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",
+      "cron: applyOutcomeToStoredJob - job not found after forceReload, result discarded",
     );
     return;
   }
@@ -737,6 +737,25 @@ export async function onTimer(state: CronServiceState) {
       job: CronJob;
     }): Promise<TimedCronRunOutcome> => {
       const { id, job } = params;
+
+      // D-phase: skip low-priority jobs when the cron lane is already busy.
+      // This prevents inbox-trigger-watchdog, inbox-scan, and return-consumer
+      // from queuing up behind a long-running job and causing lane wait exceeded.
+      const activeBefore = getActiveCronJobCount();
+      if (shouldSkipWhenLaneBusy(job, activeBefore)) {
+        state.deps.log.info(
+          { jobId: id, jobName: job.name, activeCronJobs: activeBefore },
+          "cron: skipping low-priority job while lane is busy",
+        );
+        return {
+          jobId: id,
+          status: "skipped",
+          error: "lane busy: deferred to next run",
+          startedAt: state.deps.nowMs(),
+          endedAt: state.deps.nowMs(),
+        };
+      }
+
       const startedAt = state.deps.nowMs();
       job.state.runningAtMs = startedAt;
       markCronJobActive(job.id);
@@ -811,7 +830,7 @@ export async function onTimer(state: CronServiceState) {
   } finally {
     // Piggyback session reaper on timer tick (self-throttled to every 5 min).
     // Placed in `finally` so the reaper runs even when a long-running job keeps
-    // `state.running` true across multiple timer ticks — the early return at the
+    // `state.running` true across multiple timer ticks; the early return at the
     // top of onTimer would otherwise skip the reaper indefinitely.
     const storePaths = new Set<string>();
     if (state.deps.resolveSessionStorePath) {
@@ -1030,7 +1049,15 @@ async function executeStartupCatchupPlan(
   plan: StartupCatchupPlan,
 ): Promise<TimedCronRunOutcome[]> {
   const outcomes: TimedCronRunOutcome[] = [];
-  for (const candidate of plan.candidates) {
+  const staggerMs = Math.max(0, state.deps.missedJobStaggerMs ?? DEFAULT_MISSED_JOB_STAGGER_MS);
+  for (let index = 0; index < plan.candidates.length; index += 1) {
+    if (index > 0 && staggerMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(staggerMs, 5_000)));
+    }
+    const candidate = plan.candidates[index];
+    if (!candidate) {
+      continue;
+    }
     outcomes.push(await runStartupCatchupCandidate(state, candidate));
   }
   return outcomes;

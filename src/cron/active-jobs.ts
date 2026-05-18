@@ -33,6 +33,10 @@ export function isCronJobActive(jobId: string) {
   return getCronActiveJobState().activeJobIds.has(jobId);
 }
 
+export function getActiveCronJobCount(): number {
+  return getCronActiveJobState().activeJobIds.size;
+}
+
 export function resetCronActiveJobsForTests() {
   getCronActiveJobState().activeJobIds.clear();
 }
