@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -208,11 +207,14 @@ export async function getReplyFromConfig(
   }
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const syncFromWorkspaceDir =
+    agentId !== "main" ? resolveAgentWorkspaceDir(cfg, "main") : undefined;
   const workspace = useFastTestBootstrap
-    ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
+    ? { dir: workspaceDirRaw }
     : await ensureAgentWorkspace({
         dir: workspaceDirRaw,
         ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+        syncFromWorkspaceDir,
       });
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);

@@ -56,6 +56,27 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toBeNull();
   });
 
+  it("uses session-aware minimal bootstrap files for subagent sessions", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(path.join(workspaceDir, "NEXT_ACTION.md"), "do the next thing", "utf-8");
+    await fs.writeFile(
+      path.join(workspaceDir, "ENGINEERING_RULES.md"),
+      "keep changes minimal",
+      "utf-8",
+    );
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf-8");
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      sessionKey: "agent:main:subagent:test-worker",
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toContain("Bootstrap file: NEXT_ACTION.md");
+    expect(prelude).toContain("Bootstrap file: ENGINEERING_RULES.md");
+    expect(prelude).not.toContain("Bootstrap file: SOUL.md");
+  });
+
   it("honors startupContext.dailyMemoryDays override", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "today notes", "utf-8");

@@ -325,6 +325,8 @@ export async function runPreparedReply(
       ? await buildSessionStartupContextPrelude({
           workspaceDir,
           cfg,
+          sessionKey,
+          action: startupAction,
         })
       : null;
   const baseBodyFinal = isBareSessionReset
