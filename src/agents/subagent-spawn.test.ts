@@ -283,6 +283,52 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
+  it("forwards fallback models and subagent wait metadata to the agent run", async () => {
+    const calls: Array<{ method?: string; params?: unknown; clientDisplayName?: string; waitingForSubagentCompletion?: boolean }> = [];
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: {
+        method?: string;
+        params?: unknown;
+        clientDisplayName?: string;
+        waitingForSubagentCompletion?: boolean;
+      }) => {
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "run-fallbacks", status: "accepted", acceptedAt: 1000 };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "verify fallback forwarding",
+        fallbacks: [" openai/gpt-5.4 ", "", "deepseek/deepseek-reasoner"],
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "run-fallbacks",
+    });
+    const agentCall = calls.find((call) => call.method === "agent");
+    expect(agentCall).toMatchObject({
+      clientDisplayName: "subagent-task",
+      waitingForSubagentCompletion: true,
+    });
+    expect(agentCall?.params).toMatchObject({
+      fallbacks: ["openai/gpt-5.4", "deepseek/deepseek-reasoner"],
+    });
+  });
+
   it("returns an error when the initial model patch is rejected", async () => {
     hoisted.callGatewayMock.mockImplementation(
       async (request: { method?: string; params?: unknown }) => {

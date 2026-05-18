@@ -58,6 +58,7 @@ type CallGatewayBaseOptions = {
   minProtocol?: number;
   maxProtocol?: number;
   requiredMethods?: string[];
+  waitingForSubagentCompletion?: boolean;
   /**
    * Overrides the config path shown in connection error details.
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
@@ -478,6 +479,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       }
     };
 
+    const resolvedDisplayName = resolveGatewayClientDisplayName(opts);
     const client = gatewayCallDeps.createGatewayClient({
       url,
       token,
@@ -485,7 +487,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       tlsFingerprint,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: resolveGatewayClientDisplayName(opts),
+      clientDisplayName: resolvedDisplayName,
       clientVersion: opts.clientVersion ?? VERSION,
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
@@ -494,6 +496,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       deviceIdentity: resolveDeviceIdentityForGatewayCall(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
+      waitingForSubagentCompletion: opts.waitingForSubagentCompletion,
       onHelloOk: async (hello) => {
         try {
           ensureGatewaySupportsRequiredMethods({
@@ -559,7 +562,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const { token, password } = resolvedCredentials;
-  return await executeGatewayRequestWithScopes<T>({
+  const executeParams = {
     opts,
     scopes,
     url,
@@ -569,7 +572,9 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     timeoutMs,
     safeTimerTimeoutMs,
     connectionDetails,
-  });
+  };
+
+  return await executeGatewayRequestWithScopes<T>(executeParams);
 }
 
 export async function callGatewayScoped<T = Record<string, unknown>>(
@@ -603,11 +608,13 @@ export async function callGateway<T = Record<string, unknown>>(
   if (callerMode === GATEWAY_CLIENT_MODES.CLI || callerName === GATEWAY_CLIENT_NAMES.CLI) {
     return await callGatewayCli(opts);
   }
-  return await callGatewayLeastPrivilege({
+  const leastPrivilegeOpts = {
     ...opts,
     mode: callerMode,
     clientName: callerName,
-  });
+  };
+
+  return await callGatewayLeastPrivilege(leastPrivilegeOpts);
 }
 
 export function randomIdempotencyKey() {

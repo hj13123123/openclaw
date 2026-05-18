@@ -124,6 +124,7 @@ export type GatewayClientOptions = {
   onConnectError?: (err: Error) => void;
   onClose?: (code: number, reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  waitingForSubagentCompletion?: boolean;
 };
 
 export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
@@ -865,8 +866,12 @@ export class GatewayClient {
       if (!this.lastTick) {
         return;
       }
-      const gap = Date.now() - this.lastTick;
-      if (gap > this.tickIntervalMs * 2) {
+      const now = Date.now();
+      const gap = now - this.lastTick;
+      // Use a wider timeout window for subagent connections waiting for completion.
+      const isWaitingSubagent = this.opts.waitingForSubagentCompletion === true;
+      const timeoutMultiplier = isWaitingSubagent ? 4 : 2;
+      if (gap > this.tickIntervalMs * timeoutMultiplier) {
         this.ws?.close(4000, "tick timeout");
       }
     }, interval);

@@ -85,6 +85,7 @@ export type SpawnSubagentParams = {
   label?: string;
   agentId?: string;
   model?: string;
+  fallbacks?: string[];
   thinking?: string;
   runTimeoutSeconds?: number;
   thread?: boolean;
@@ -155,10 +156,12 @@ async function callSubagentGateway(
   // "agent" → write) keep their least-privilege scope so that the gateway does
   // not treat the caller as owner (senderIsOwner) and expose owner-only tools.
   const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
-  return await subagentSpawnDeps.callGateway({
+  const callParams = {
     ...params,
     ...(scopes != null ? { scopes } : {}),
-  });
+  };
+
+  return await subagentSpawnDeps.callGateway(callParams);
 }
 
 function readGatewayRunId(response: Awaited<ReturnType<typeof callGateway>>): string | undefined {
@@ -362,6 +365,11 @@ export async function spawnSubagentDirect(
     };
   }
   const modelOverride = params.model;
+  const fallbacksOverride = modelOverride
+    ? undefined
+    : Array.isArray(params.fallbacks)
+      ? params.fallbacks.map((value) => value.trim()).filter(Boolean)
+      : undefined;
   const thinkingOverrideRaw = params.thinking;
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
@@ -706,6 +714,8 @@ export async function spawnSubagentDirect(
     } = spawnedMetadata;
     const response = await callSubagentGateway({
       method: "agent",
+      clientDisplayName: "subagent-task",
+      waitingForSubagentCompletion: true,
       params: {
         message: childTaskMessage,
         sessionKey: childSessionKey,
@@ -718,6 +728,7 @@ export async function spawnSubagentDirect(
         lane: AGENT_LANE_SUBAGENT,
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
+        ...(fallbacksOverride ? { fallbacks: fallbacksOverride } : {}),
         timeout: runTimeoutSeconds,
         label: label || undefined,
         ...(bootstrapContextMode
