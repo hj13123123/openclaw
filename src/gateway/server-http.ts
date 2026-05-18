@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -86,6 +88,7 @@ let embeddingsHttpModulePromise: Promise<typeof import("./embeddings-http.js")> 
 let modelsHttpModulePromise: Promise<typeof import("./models-http.js")> | undefined;
 let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefined;
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
+let hudApiModulePromise: Promise<typeof import("./server-hud-api.js")> | undefined;
 let sessionHistoryHttpModulePromise:
   | Promise<typeof import("./sessions-history-http.js")>
   | undefined;
@@ -125,6 +128,11 @@ function getOpenAiHttpModule() {
 function getOpenResponsesHttpModule() {
   openResponsesHttpModulePromise ??= import("./openresponses-http.js");
   return openResponsesHttpModulePromise;
+}
+
+function getHudApiModule() {
+  hudApiModulePromise ??= import("./server-hud-api.js");
+  return hudApiModulePromise;
 }
 
 function getSessionHistoryHttpModule() {
@@ -193,6 +201,7 @@ const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
 function isLiveGatewayProbePath(requestPath: string): boolean {
   return GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath) === "live";
 }
+
 async function resolvePluginGatewayAuthBypassPaths(
   configSnapshot: OpenClawConfig,
 ): Promise<Set<string>> {
@@ -227,6 +236,16 @@ function isOpenResponsesPath(pathname: string): boolean {
 
 function isToolsInvokePath(pathname: string): boolean {
   return pathname === "/tools/invoke";
+}
+
+function isHudStatePath(pathname: string): boolean {
+  return pathname === "/api/hud/state" || pathname === "/api/hud/refresh"
+    || pathname === "/api/hud/scheduler-state"
+    || pathname === "/api/hud/scheduler-events"
+    || pathname === "/api/hud/task-state"
+    || pathname === "/api/hud/policy-state"
+    || pathname === "/api/hud/policy-actions"
+    || pathname === "/api/hud/runtime-loop";
 }
 
 function isSessionKillPath(pathname: string): boolean {
@@ -902,6 +921,9 @@ export function createGatewayHttpServer(opts: {
       }
 
       const configSnapshot = loadConfig();
+      const hudWorkspaceRoot =
+        configSnapshot.agents?.list?.find((agent) => agent.id === "main")?.workspace ??
+        path.join(os.homedir(), ".openclaw", "workspace-main");
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
@@ -913,6 +935,10 @@ export function createGatewayHttpServer(opts: {
         req.url = scopedCanvas.rewrittenUrl;
       }
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+
+      // Keep built-in safety probes and HUD state endpoints ahead of extension
+      // layers. These routes are used for runtime health gates and must remain
+      // responsive even when hooks, plugin HTTP routes, or the SPA layer stall.
       if (
         await handleGatewayProbeRequest(
           req,
@@ -925,6 +951,16 @@ export function createGatewayHttpServer(opts: {
         )
       ) {
         return;
+      }
+      if (isHudStatePath(requestPath)) {
+        const handled = await (await getHudApiModule()).handleHudStateHttpRequest(
+          req,
+          res,
+          hudWorkspaceRoot,
+        );
+        if (handled) {
+          return;
+        }
       }
 
       const pluginPathContext = handlePluginRequest
