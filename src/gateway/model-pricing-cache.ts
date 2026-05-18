@@ -432,7 +432,7 @@ export function startGatewayModelPricingRefresh(params: {
   fetchImpl?: typeof fetch;
 }): () => void {
   void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
-    log.warn(`pricing bootstrap failed: ${String(error)}`);
+    log.debug(`pricing bootstrap failed: ${String(error)}`);
   });
   return () => {
     clearRefreshTimer();
