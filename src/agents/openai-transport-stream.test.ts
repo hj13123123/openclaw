@@ -1061,6 +1061,102 @@ describe("openai transport stream", () => {
     expect(params.messages?.[0]?.content).toBe("Stable prefix\nDynamic suffix");
   });
 
+  it("replays assistant thinking as reasoning_content for DeepSeek completions payloads", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        api: "openai-completions",
+        provider: "deepseek",
+        baseUrl: "https://api.deepseek.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-completions",
+            provider: "deepseek",
+            model: "deepseek-v4-flash",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              { type: "thinking", thinking: "step by step" },
+              { type: "text", text: "final answer" },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages?: Array<Record<string, unknown>> };
+
+    const assistantMessage = params.messages?.find((message) => message.role === "assistant");
+    expect(assistantMessage?.content).toBe("final answer");
+    expect(assistantMessage?.reasoning_content).toBe("step by step");
+  });
+
+  it("does not inject reasoning_content for non-DeepSeek completions payloads", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-4.1",
+        name: "GPT-4.1",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-completions",
+            provider: "openai",
+            model: "gpt-4.1",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              { type: "thinking", thinking: "step by step" },
+              { type: "text", text: "final answer" },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages?: Array<Record<string, unknown>> };
+
+    const assistantMessage = params.messages?.find((message) => message.role === "assistant");
+    expect(assistantMessage?.content).toBe("final answer");
+    expect(assistantMessage).not.toHaveProperty("reasoning_content");
+  });
+
   it("uses shared stream reasoning as OpenAI completions effort", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -1138,6 +1234,254 @@ describe("openai transport stream", () => {
     ) as { reasoning_effort?: unknown };
 
     expect(params.reasoning_effort).toBe("high");
+  });
+
+  it("maps DeepSeek thinking off to explicit disabled thinking payload", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        api: "openai-completions",
+        provider: "deepseek",
+        baseUrl: "https://api.deepseek.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "none",
+      } as never,
+    ) as { thinking?: { type?: unknown }; reasoning_effort?: unknown; reasoning?: unknown };
+
+    expect(params.thinking).toEqual({ type: "disabled" });
+    expect(params).not.toHaveProperty("reasoning_effort");
+    expect(params).not.toHaveProperty("reasoning");
+  });
+
+  it("strips stale DeepSeek thinking replay history before disabled completions payloads", () => {
+    const context = {
+      systemPrompt: "system",
+      messages: [
+        {
+          role: "assistant",
+          api: "openai-completions",
+          provider: "deepseek",
+          model: "deepseek-v4-flash",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 1,
+          reasoning_content: "stale message reasoning",
+          content: [
+            {
+              type: "thinking",
+              thinking: "stale chain of thought",
+              thinkingSignature: "reasoning_content",
+            },
+            { type: "text", text: "final answer", reasoning_text: "stale block reasoning" },
+          ],
+        },
+      ],
+      tools: [],
+    };
+
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        api: "openai-completions",
+        provider: "deepseek",
+        baseUrl: "https://api.deepseek.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      context as never,
+      {
+        reasoningEffort: "none",
+      } as never,
+    ) as { messages?: Array<Record<string, unknown>>; thinking?: { type?: unknown } };
+
+    const assistantMessage = params.messages?.find((message) => message.role === "assistant");
+    expect(params.thinking).toEqual({ type: "disabled" });
+    expect(assistantMessage?.content).toBe("final answer");
+    expect(assistantMessage).not.toHaveProperty("reasoning_content");
+    expect(JSON.stringify(params.messages)).not.toContain("stale chain of thought");
+    expect(JSON.stringify(params.messages)).not.toContain("stale message reasoning");
+    expect(JSON.stringify(params.messages)).not.toContain("stale block reasoning");
+    expect(context.messages[0]?.content[0]?.type).toBe("thinking");
+  });
+
+  it("keeps DeepSeek thinking replay history when completions reasoning is enabled", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        api: "openai-completions",
+        provider: "deepseek",
+        baseUrl: "https://api.deepseek.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-completions",
+            provider: "deepseek",
+            model: "deepseek-v4-flash",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              { type: "thinking", thinking: "keep reasoning" },
+              { type: "text", text: "final answer" },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "high",
+      } as never,
+    ) as { messages?: Array<Record<string, unknown>>; thinking?: { type?: unknown } };
+
+    const assistantMessage = params.messages?.find((message) => message.role === "assistant");
+    expect(params.thinking?.type).not.toBe("disabled");
+    expect(assistantMessage?.reasoning_content).toBe("keep reasoning");
+  });
+
+  it("does not apply DeepSeek disabled history stripping to non-DeepSeek completions providers", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-completions",
+            provider: "openai",
+            model: "gpt-5.4",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              { type: "thinking", thinking: "non-deepseek reasoning" },
+              { type: "text", text: "final answer" },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "none",
+      } as never,
+    ) as { messages?: Array<Record<string, unknown>>; thinking?: unknown; reasoning_effort?: unknown };
+
+    const assistantMessage = params.messages?.find((message) => message.role === "assistant");
+    expect(params).not.toHaveProperty("thinking");
+    expect(params.reasoning_effort).toBe("none");
+    expect(assistantMessage).not.toHaveProperty("reasoning_content");
+  });
+
+  it("keeps DeepSeek thinking enabled requests unchanged when reasoning is on", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        api: "openai-completions",
+        provider: "deepseek",
+        baseUrl: "https://api.deepseek.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "high",
+      } as never,
+    ) as { thinking?: { type?: unknown } };
+
+    expect(params.thinking).not.toEqual({ type: "disabled" });
+    expect(params.thinking?.type).not.toBe("disabled");
+  });
+
+  it("does not add DeepSeek disabled thinking payload for non-DeepSeek providers", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "none",
+      } as never,
+    ) as { thinking?: unknown; reasoning_effort?: unknown };
+
+    expect(params).not.toHaveProperty("thinking");
+    expect(params.reasoning_effort).toBe("none");
   });
 
   it("uses system role and streaming usage compat for native Qwen completions providers", () => {
@@ -1604,6 +1948,42 @@ describe("openai transport stream", () => {
 
     expect(params).toHaveProperty("tools");
     expect(params).toHaveProperty("tool_choice", "required");
+  });
+
+  it("fills empty OpenAI transport errors with visible text", () => {
+    const output: Parameters<typeof __testing.applyOpenAITransportErrorOutput>[0] = {
+      role: "assistant" as const,
+      content: [],
+      api: "openai-completions" as const,
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    __testing.applyOpenAITransportErrorOutput(
+      output,
+      new Error("400 The reasoning_content in the thinking mode must be passed back to the API"),
+    );
+
+    expect(output.stopReason).toBe("error");
+    expect(output.errorMessage).toBe(
+      "400 The reasoning_content in the thinking mode must be passed back to the API",
+    );
+    expect(output.content).toEqual([
+      {
+        type: "text",
+        text: "模型请求失败：400 The reasoning_content in the thinking mode must be passed back to the API",
+      },
+    ]);
   });
 
   it("resets stopReason to stop when finish_reason is tool_calls but tool_calls array is empty", async () => {

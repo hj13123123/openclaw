@@ -1429,13 +1429,23 @@ export async function runEmbeddedPiAgent(
           const authFailure = isAuthAssistantError(assistantForFailover);
           const rateLimitFailure = isRateLimitAssistantError(assistantForFailover);
           const billingFailure = isBillingAssistantError(assistantForFailover);
-          const failoverFailure = isFailoverAssistantError(assistantForFailover);
-          const assistantFailoverReason = classifyFailoverReason(
-            assistantForFailover?.errorMessage ?? "",
-            {
+          const formattedAssistantFailoverText = assistantForFailover
+            ? formatAssistantErrorText(assistantForFailover, {
+                cfg: params.config,
+                sessionKey: params.sessionKey ?? params.sessionId,
+                provider: activeErrorContext.provider,
+                model: activeErrorContext.model,
+              })
+            : undefined;
+          const assistantFailoverReason =
+            classifyFailoverReason(assistantForFailover?.errorMessage ?? "", {
               provider: assistantForFailover?.provider,
-            },
-          );
+            }) ??
+            classifyFailoverReason(formattedAssistantFailoverText ?? "", {
+              provider: assistantForFailover?.provider ?? activeErrorContext.provider,
+            });
+          const failoverFailure =
+            isFailoverAssistantError(assistantForFailover) || assistantFailoverReason !== null;
           const assistantProfileFailureReason =
             resolveAuthProfileFailureReason(assistantFailoverReason);
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;

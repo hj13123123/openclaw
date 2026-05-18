@@ -102,6 +102,9 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
+const DEEPSEEK_REASONING_CONTENT_FIELD = "reasoning_content";
+const TRANSPORT_ERROR_TEXT_PREFIX = "模型请求失败：";
+
 export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 function stringifyUnknown(value: unknown, fallback = ""): string {
@@ -712,8 +715,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
       } catch (error) {
-        output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+        applyOpenAITransportErrorOutput(output, error, options?.signal);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       }
@@ -740,6 +742,234 @@ function getPromptCacheRetention(
     return undefined;
   }
   return baseUrl?.includes("api.openai.com") ? "24h" : undefined;
+}
+
+function shouldUseDeepSeekOpenAICompletionsCompat(model: OpenAIModeModel): boolean {
+  if (model.api !== "openai-completions") {
+    return false;
+  }
+  const { capabilities } = detectOpenAICompletionsCompat(model);
+  return (
+    capabilities.endpointClass === "deepseek-native" ||
+    (capabilities.endpointClass === "default" && model.provider === "deepseek")
+  );
+}
+
+function shouldForceDeepSeekReasoningReplay(model: OpenAIModeModel): boolean {
+  return shouldUseDeepSeekOpenAICompletionsCompat(model);
+}
+
+function ensureDeepSeekReasoningReplayContext(
+  model: OpenAIModeModel,
+  context: Context,
+): Context {
+  if (!shouldForceDeepSeekReasoningReplay(model)) {
+    return context;
+  }
+
+  let contextChanged = false;
+  const messages = context.messages.map((message) => {
+    if (message.role !== "assistant") {
+      return message;
+    }
+
+    const nonEmptyThinkingBlocks = message.content.filter(
+      (block) =>
+        block.type === "thinking" &&
+        typeof block.thinking === "string" &&
+        block.thinking.trim().length > 0,
+    );
+    if (nonEmptyThinkingBlocks.length === 0) {
+      return message;
+    }
+
+    let messageChanged = false;
+    const nextContent = message.content.map((block) => {
+      if (
+        block.type !== "thinking" ||
+        typeof block.thinking !== "string" ||
+        block.thinking.trim().length === 0 ||
+        block.thinkingSignature === DEEPSEEK_REASONING_CONTENT_FIELD
+      ) {
+        return block;
+      }
+      messageChanged = true;
+      return {
+        ...block,
+        thinkingSignature: DEEPSEEK_REASONING_CONTENT_FIELD,
+      };
+    });
+
+    if (!messageChanged) {
+      return message;
+    }
+    contextChanged = true;
+    return {
+      ...message,
+      content: nextContent,
+    };
+  });
+
+  return contextChanged ? { ...context, messages } : context;
+}
+
+function stripDeepSeekDisabledThinkingReplayContext(context: Context): Context {
+  let contextChanged = false;
+  const stripThinkingFields = <T extends Record<string, unknown>>(value: T): T => {
+    const next = { ...value };
+    let changed = false;
+    for (const key of [
+      "thinkingSignature",
+      "reasoning_content",
+      "reasoning",
+      "reasoning_text",
+    ] as const) {
+      if (Object.hasOwn(next, key)) {
+        delete next[key];
+        changed = true;
+      }
+    }
+    return changed ? (next as T) : value;
+  };
+
+  type ContextMessage = Context["messages"][number];
+  const messages: Context["messages"] = context.messages.map((message): ContextMessage => {
+    let messageChanged = false;
+    const strippedMessage = stripThinkingFields(message as unknown as Record<string, unknown>);
+    if (strippedMessage !== (message as unknown as Record<string, unknown>)) {
+      messageChanged = true;
+    }
+
+    const content = message.content;
+    if (message.role !== "assistant" || !Array.isArray(content)) {
+      if (!messageChanged) {
+        return message;
+      }
+      contextChanged = true;
+      return strippedMessage as unknown as ContextMessage;
+    }
+
+    type AssistantContentBlock = (typeof content)[number];
+    const nextContent = content
+      .filter((block: AssistantContentBlock): block is AssistantContentBlock => {
+        if (
+          block !== null &&
+          typeof block === "object" &&
+          (block as { type?: unknown }).type === "thinking"
+        ) {
+          messageChanged = true;
+          return false;
+        }
+        return true;
+      })
+      .map((block: AssistantContentBlock): AssistantContentBlock => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+        const blockRecord = block as unknown as Record<string, unknown>;
+        const strippedBlock = stripThinkingFields(blockRecord);
+        if (strippedBlock !== blockRecord) {
+          messageChanged = true;
+        }
+        return strippedBlock as unknown as AssistantContentBlock;
+      });
+
+    if (!messageChanged) {
+      return message;
+    }
+    contextChanged = true;
+    return {
+      ...(strippedMessage as unknown as typeof message),
+      content: nextContent as typeof message.content,
+    } as ContextMessage;
+  });
+
+  return contextChanged ? { ...context, messages } : context;
+}
+
+function isDeepSeekPayloadDebugEnabled(): boolean {
+  return typeof process !== "undefined" && process.env.OPENCLAW_DEBUG_DEEPSEEK_PAYLOAD === "1";
+}
+
+function summarizeCompletionMessageForDeepSeekDebug(
+  message: unknown,
+  index: number,
+): Record<string, unknown> {
+  const record = message && typeof message === "object" ? (message as Record<string, unknown>) : {};
+  const content = record.content;
+  const contentType =
+    typeof content === "string" ? "string" : Array.isArray(content) ? "array" : content === null ? "null" : "other";
+  const contentBlocks = Array.isArray(content) ? content : [];
+  const contentBlockTypes = contentBlocks.map((block) => {
+    if (!block || typeof block !== "object") {
+      return typeof block;
+    }
+    const type = (block as Record<string, unknown>).type;
+    return typeof type === "string" ? type : "object";
+  });
+  const thinkingSignatureValues = contentBlocks
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return undefined;
+      }
+      const signature = (block as Record<string, unknown>).thinkingSignature;
+      return typeof signature === "string" ? signature : undefined;
+    })
+    .filter((signature): signature is string => Boolean(signature));
+  const toolCalls = record.tool_calls ?? record.toolCalls;
+  return {
+    index,
+    role: typeof record.role === "string" ? record.role : undefined,
+    hasContent: Object.hasOwn(record, "content") && content !== undefined && content !== null,
+    contentType,
+    contentBlockTypes,
+    hasReasoningContent: Object.hasOwn(record, DEEPSEEK_REASONING_CONTENT_FIELD),
+    hasReasoning: Object.hasOwn(record, "reasoning"),
+    hasReasoningText: Object.hasOwn(record, "reasoning_text"),
+    hasThinkingBlock: contentBlocks.some(
+      (block) => !!block && typeof block === "object" && (block as Record<string, unknown>).type === "thinking",
+    ),
+    thinkingSignatureValues,
+    hasToolCalls: Array.isArray(toolCalls) && toolCalls.length > 0,
+    toolCallCount: Array.isArray(toolCalls) ? toolCalls.length : 0,
+  };
+}
+
+function logDeepSeekPayloadDebug(summary: Record<string, unknown>): void {
+  if (!isDeepSeekPayloadDebugEnabled()) {
+    return;
+  }
+  console.error(`OPENCLAW_DEBUG_DEEPSEEK_PAYLOAD ${JSON.stringify(summary)}`);
+}
+
+function applyOpenAITransportErrorOutput(
+  output: MutableAssistantOutput,
+  error: unknown,
+  signal?: AbortSignal,
+): void {
+  output.stopReason = signal?.aborted ? "aborted" : "error";
+  const nextErrorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+
+  if (output.errorMessage) {
+    const current = output.errorMessage.trim();
+    const next = nextErrorMessage.trim();
+    if (!current || current === "An unknown error occurred") {
+      output.errorMessage = next;
+    } else if (next && next !== "An unknown error occurred") {
+      output.errorMessage = next;
+    }
+  } else {
+    output.errorMessage = nextErrorMessage;
+  }
+
+  if (output.stopReason !== "error" || output.content.length > 0) {
+    return;
+  }
+
+  const visibleErrorMessage = sanitizeTransportPayloadText(
+    `${TRANSPORT_ERROR_TEXT_PREFIX}${output.errorMessage?.trim() || "unknown error"}`,
+  );
+  output.content.push({ type: "text", text: visibleErrorMessage });
 }
 
 function resolveOpenAIReasoningEffort(
@@ -874,8 +1104,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
       } catch (error) {
-        output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+        applyOpenAITransportErrorOutput(output, error, options?.signal);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       }
@@ -999,8 +1228,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
       } catch (error) {
-        output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+        applyOpenAITransportErrorOutput(output, error, options?.signal);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       }
@@ -1258,6 +1486,17 @@ function mapReasoningEffort(effort: string, reasoningEffortMap: Record<string, s
   return reasoningEffortMap[effort] ?? effort;
 }
 
+function shouldDisableOpenAICompletionsThinking(
+  options: OpenAICompletionsOptions | undefined,
+): boolean {
+  const reasoningEffort = options?.reasoningEffort as unknown;
+  const reasoning = options?.reasoning as unknown;
+  return (
+    (typeof reasoningEffort === "string" && reasoningEffort === "none") ||
+    (typeof reasoning === "string" && reasoning === "none")
+  );
+}
+
 function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
   return options?.reasoningEffort ?? options?.reasoning ?? "high";
 }
@@ -1298,13 +1537,23 @@ export function buildOpenAICompletionsParams(
   options: OpenAICompletionsOptions | undefined,
 ) {
   const compat = getCompat(model);
+  const shouldDisableThinking = shouldDisableOpenAICompletionsThinking(options);
+  const usesDeepSeekOpenAICompletionsCompat = shouldUseDeepSeekOpenAICompletionsCompat(model);
+  const shouldDisableDeepSeekThinking = usesDeepSeekOpenAICompletionsCompat && shouldDisableThinking;
   const completionsContext = context.systemPrompt
     ? {
         ...context,
         systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
       }
     : context;
-  const messages = convertMessages(model as never, completionsContext, compat as never);
+  const replayContext = shouldDisableDeepSeekThinking
+    ? stripDeepSeekDisabledThinkingReplayContext(completionsContext)
+    : ensureDeepSeekReasoningReplayContext(model, completionsContext);
+  const messages = convertMessages(
+    model as never,
+    replayContext,
+    compat as never,
+  );
   const params: Record<string, unknown> = {
     model: model.id,
     messages: compat.requiresStringContent
@@ -1337,7 +1586,9 @@ export function buildOpenAICompletionsParams(
     params.tools = [];
   }
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
-  if (compat.thinkingFormat === "openrouter" && model.reasoning && completionsReasoningEffort) {
+  if (shouldDisableDeepSeekThinking) {
+    params.thinking = { type: "disabled" };
+  } else if (compat.thinkingFormat === "openrouter" && model.reasoning && completionsReasoningEffort) {
     params.reasoning = {
       effort: mapReasoningEffort(completionsReasoningEffort, compat.reasoningEffortMap),
     };
@@ -1347,6 +1598,29 @@ export function buildOpenAICompletionsParams(
       compat.reasoningEffortMap,
     );
   }
+  const payloadMessages = Array.isArray(params.messages) ? params.messages : [];
+  logDeepSeekPayloadDebug({
+    provider: model.provider,
+    modelId: model.id,
+    modelReasoning: model.reasoning === true,
+    optionsReasoningEffort: options?.reasoningEffort,
+    shouldDisableThinking,
+    shouldDisableDeepSeekThinking,
+    shouldUseDeepSeekOpenAICompletionsCompat: usesDeepSeekOpenAICompletionsCompat,
+    messageCount: payloadMessages.length,
+    messages: payloadMessages.map((message, index) =>
+      summarizeCompletionMessageForDeepSeekDebug(message, index),
+    ),
+    paramsHasThinking: Object.hasOwn(params, "thinking"),
+    paramsHasReasoningEffort: Object.hasOwn(params, "reasoning_effort"),
+    paramsHasReasoning: Object.hasOwn(params, "reasoning"),
+    paramsHasTools: Object.hasOwn(params, "tools"),
+    instrumentation: {
+      ensureDeepSeekReasoningReplayContext: !shouldDisableDeepSeekThinking,
+      stripDeepSeekDisabledThinkingReplayContext: shouldDisableDeepSeekThinking,
+      replayContextChanged: replayContext !== completionsContext,
+    },
+  });
   return params;
 }
 
@@ -1396,5 +1670,7 @@ function mapStopReason(reason: string | null) {
 }
 
 export const __testing = {
+  applyOpenAITransportErrorOutput,
+  ensureDeepSeekReasoningReplayContext,
   processOpenAICompletionsStream,
 };

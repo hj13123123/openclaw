@@ -1,6 +1,7 @@
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import { detectOpenAICompletionsCompat } from "../../openai-completions-compat.js";
 import { validateAnthropicTurns, validateGeminiTurns } from "../../pi-embedded-helpers.js";
 import {
   isRedactedSessionsSpawnAttachment,
@@ -299,6 +300,55 @@ function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<str
   return true;
 }
 
+type AssistantContentMessage = AgentMessage & { role: "assistant"; content: unknown[] };
+
+function isAssistantContentMessage(message: AgentMessage): message is AssistantContentMessage {
+  return (
+    !!message &&
+    typeof message === "object" &&
+    message.role === "assistant" &&
+    Array.isArray((message as { content?: unknown }).content)
+  );
+}
+
+function hasThinkingAndReplayToolCallBlocks(message: AgentMessage): boolean {
+  if (!isAssistantContentMessage(message)) {
+    return false;
+  }
+  return (
+    message.content.some((block: unknown) => isThinkingLikeReplayBlock(block)) &&
+    message.content.some((block: unknown) => isReplayToolCallBlock(block))
+  );
+}
+
+function shouldPreserveDeepSeekThinkingToolCallMessages(model: unknown): boolean {
+  const typedModel = model as {
+    api?: unknown;
+    provider?: unknown;
+    baseUrl?: unknown;
+    id?: unknown;
+    compat?: unknown;
+  };
+  if (typedModel.api !== "openai-completions") {
+    return false;
+  }
+  const provider = typeof typedModel.provider === "string" ? typedModel.provider : undefined;
+  const baseUrl = typeof typedModel.baseUrl === "string" ? typedModel.baseUrl : undefined;
+  const id = typeof typedModel.id === "string" ? typedModel.id : "";
+  const compat =
+    typedModel.compat && typeof typedModel.compat === "object" ? typedModel.compat : undefined;
+  const { capabilities } = detectOpenAICompletionsCompat({
+    provider,
+    baseUrl,
+    id,
+    compat,
+  } as never);
+  return (
+    capabilities.endpointClass === "deepseek-native" ||
+    (capabilities.endpointClass === "default" && provider === "deepseek")
+  );
+}
+
 function isReplayToolCallBlock(block: unknown): block is ReplayToolCallBlock {
   if (!block || typeof block !== "object") {
     return false;
@@ -340,6 +390,7 @@ function sanitizeReplayToolCallInputs(
   messages: AgentMessage[],
   allowedToolNames?: Set<string>,
   allowProviderOwnedThinkingReplay?: boolean,
+  preserveDeepSeekThinkingToolCallMessages?: boolean,
 ): ReplayToolCallSanitizeReport {
   let changed = false;
   let droppedAssistantMessages = 0;
@@ -355,11 +406,12 @@ function sanitizeReplayToolCallInputs(
       out.push(message);
       continue;
     }
-    if (
-      allowProviderOwnedThinkingReplay &&
-      message.content.some((block) => isThinkingLikeReplayBlock(block)) &&
-      message.content.some((block) => isReplayToolCallBlock(block))
-    ) {
+    const hasThinkingToolCallReplayBlocks = hasThinkingAndReplayToolCallBlocks(message);
+    if (preserveDeepSeekThinkingToolCallMessages && hasThinkingToolCallReplayBlocks) {
+      out.push(message);
+      continue;
+    }
+    if (allowProviderOwnedThinkingReplay && hasThinkingToolCallReplayBlocks) {
       const replaySafeToolCalls = extractToolCallsFromAssistant(message);
       if (
         isReplaySafeThinkingTurn(message.content, allowedToolNames) &&
@@ -890,10 +942,12 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
         dropThinkingBlocks: transcriptPolicy?.dropThinkingBlocks === true,
       },
     });
+    const preserveDeepSeekThinkingReplay = shouldPreserveDeepSeekThinkingToolCallMessages(model);
     const sanitized = sanitizeReplayToolCallInputs(
       messages as AgentMessage[],
       allowedToolNames,
       allowProviderOwnedThinkingReplay,
+      preserveDeepSeekThinkingReplay,
     );
     const replayInputsChanged = sanitized.messages !== messages;
     let nextMessages = replayInputsChanged

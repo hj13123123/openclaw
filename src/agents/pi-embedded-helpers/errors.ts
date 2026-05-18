@@ -734,7 +734,12 @@ function classifyFailoverClassificationFromMessage(
   if (isJsonApiInternalServerError(raw)) {
     return toReasonClassification("timeout");
   }
-  if (isCloudCodeAssistFormatError(raw)) {
+  if (
+    isCloudCodeAssistFormatError(raw) ||
+    /provider rejected the request schema or tool payload/i.test(raw) ||
+    /\brequest schema\b/i.test(raw) ||
+    /\btool payload\b/i.test(raw)
+  ) {
     return toReasonClassification("format");
   }
   if (isTimeoutErrorMessage(raw)) {
