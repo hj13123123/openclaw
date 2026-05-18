@@ -842,6 +842,12 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+    const requestFallbacksRaw = (request as unknown as { fallbacks?: unknown }).fallbacks;
+    const requestFallbacks = Array.isArray(requestFallbacksRaw)
+      ? requestFallbacksRaw.filter(
+          (value): value is string => typeof value === "string",
+        )
+      : undefined;
 
     dispatchAgentRunFromGateway({
       ingressOpts: {
@@ -850,6 +856,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         imageOrder,
         provider: providerOverride,
         model: modelOverride,
+        fallbacks: requestFallbacks,
         to: resolvedTo,
         sessionId: resolvedSessionId,
         sessionKey: resolvedSessionKey,

@@ -856,11 +856,17 @@ async function agentCommandInternal(
           opts.replyChannel ?? opts.channel,
         );
         const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
-        const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
-          cfg,
-          agentId: sessionAgentId,
-          hasSessionModelOverride: Boolean(storedModelOverride),
-        });
+        const requestedFallbacksOverride =
+          !opts.model && Array.isArray(opts.fallbacks)
+            ? opts.fallbacks.map((value) => value.trim()).filter(Boolean)
+            : undefined;
+        const effectiveFallbacksOverride =
+          requestedFallbacksOverride ??
+          resolveEffectiveModelFallbacks({
+            cfg,
+            agentId: sessionAgentId,
+            hasSessionModelOverride: Boolean(storedModelOverride),
+          });
 
         let fallbackAttemptIndex = 0;
         const fallbackResult = await runWithModelFallback({

@@ -128,6 +128,7 @@ export const AgentParamsSchema = Type.Object(
     agentId: Type.Optional(NonEmptyString),
     provider: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
+    fallbacks: Type.Optional(Type.Array(Type.String())),
     to: Type.Optional(Type.String()),
     replyTo: Type.Optional(Type.String()),
     sessionId: Type.Optional(Type.String()),

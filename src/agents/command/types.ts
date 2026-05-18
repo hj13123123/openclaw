@@ -39,6 +39,8 @@ export type AgentCommandOpts = {
   provider?: string;
   /** Per-run model override. */
   model?: string;
+  /** Optional fallback models for this run. Ignored when an explicit model override is provided. */
+  fallbacks?: string[];
   to?: string;
   sessionId?: string;
   sessionKey?: string;

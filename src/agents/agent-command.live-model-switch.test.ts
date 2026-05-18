@@ -287,6 +287,7 @@ async function getAgentCommand() {
 type FallbackRunnerParams = {
   provider: string;
   model: string;
+  fallbacksOverride?: string[];
   run: (provider: string, model: string) => Promise<unknown>;
 };
 
@@ -311,6 +312,35 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("uses request fallback models for implicit model selection", async () => {
+    state.resolveEffectiveModelFallbacksMock.mockReturnValue(["configured/fallback"]);
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    const agentCommand = await getAgentCommand();
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      senderIsOwner: true,
+      fallbacks: [" openai/gpt-5.4 ", "", "deepseek/deepseek-reasoner"],
+    });
+
+    expect(state.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fallbacksOverride: ["openai/gpt-5.4", "deepseek/deepseek-reasoner"],
+      }),
+    );
   });
 
   it("retries with the switched provider/model when LiveSessionModelSwitchError is thrown", async () => {

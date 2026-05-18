@@ -455,6 +455,30 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("forwards fallback models for implicit model selection", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "test fallbacks",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        fallbacks: [" openai/gpt-5.4 ", "", "deepseek/deepseek-reasoner"],
+        idempotencyKey: "test-idem-fallbacks",
+      },
+      {
+        reqId: "test-idem-fallbacks",
+      },
+    );
+
+    const lastCall = mocks.agentCommand.mock.calls.at(-1);
+    expect(lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        fallbacks: [" openai/gpt-5.4 ", "", "deepseek/deepseek-reasoner"],
+      }),
+    );
+  });
+
   it("preserves cliSessionIds from existing session entry", async () => {
     const existingCliSessionIds = { "claude-cli": "abc-123-def" };
     const existingClaudeCliSessionId = "abc-123-def";
