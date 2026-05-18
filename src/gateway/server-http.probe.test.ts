@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AUTH_TOKEN,
   AUTH_NONE,
@@ -202,6 +202,31 @@ describe("gateway probe endpoints", () => {
 
         expect(res.statusCode).toBe(200);
         expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
+      },
+    });
+  });
+
+  it("handles live probes before hook and plugin route stages", async () => {
+    const handleHooksRequest = vi.fn(async () => {
+      throw new Error("hooks should not run for live probes");
+    });
+    const handlePluginRequest = vi.fn(async () => {
+      throw new Error("plugins should not run for live probes");
+    });
+
+    await withGatewayServer({
+      prefix: "probe-healthz-fast-path",
+      resolvedAuth: AUTH_NONE,
+      overrides: { handleHooksRequest, handlePluginRequest },
+      run: async (server) => {
+        const req = createRequest({ path: "/healthz" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
+        expect(handleHooksRequest).not.toHaveBeenCalled();
+        expect(handlePluginRequest).not.toHaveBeenCalled();
       },
     });
   });

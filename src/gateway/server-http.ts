@@ -189,6 +189,10 @@ const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
   ["/ready", "ready"],
   ["/readyz", "ready"],
 ]);
+
+function isLiveGatewayProbePath(requestPath: string): boolean {
+  return GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath) === "live";
+}
 async function resolvePluginGatewayAuthBypassPaths(
   configSnapshot: OpenClawConfig,
 ): Promise<Set<string>> {
@@ -881,6 +885,22 @@ export function createGatewayHttpServer(opts: {
     }
 
     try {
+      const initialRequestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (
+        isLiveGatewayProbePath(initialRequestPath) &&
+        await handleGatewayProbeRequest(
+          req,
+          res,
+          initialRequestPath,
+          resolvedAuth,
+          [],
+          false,
+          getReadiness,
+        )
+      ) {
+        return;
+      }
+
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
@@ -893,6 +913,20 @@ export function createGatewayHttpServer(opts: {
         req.url = scopedCanvas.rewrittenUrl;
       }
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (
+        await handleGatewayProbeRequest(
+          req,
+          res,
+          requestPath,
+          resolvedAuth,
+          trustedProxies,
+          allowRealIpFallback,
+          getReadiness,
+        )
+      ) {
+        return;
+      }
+
       const pluginPathContext = handlePluginRequest
         ? resolvePluginRoutePathContext(requestPath)
         : null;
@@ -1077,20 +1111,6 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-
-      requestStages.push({
-        name: "gateway-probes",
-        run: () =>
-          handleGatewayProbeRequest(
-            req,
-            res,
-            requestPath,
-            resolvedAuth,
-            trustedProxies,
-            allowRealIpFallback,
-            getReadiness,
-          ),
-      });
 
       if (await runGatewayHttpRequestStages(requestStages)) {
         return;
