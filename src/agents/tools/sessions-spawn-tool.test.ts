@@ -84,6 +84,25 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("passes fallback models through for implicit model selection", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-fallbacks", {
+      task: "do thing",
+      fallbacks: [" openai/gpt-5.4 ", "deepseek/deepseek-reasoner"],
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "do thing",
+        fallbacks: ["openai/gpt-5.4", "deepseek/deepseek-reasoner"],
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("supports legacy timeoutSeconds alias", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
