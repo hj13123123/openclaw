@@ -174,6 +174,23 @@ describe("waitForAgentRun", () => {
       endedAt: 200,
     });
   });
+
+  it("marks subagent wait calls for gateway visibility", async () => {
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+
+    await waitForAgentRun({ runId: "run-subagent", timeoutMs: 500, subagentTask: true });
+
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "agent.wait",
+      params: {
+        runId: "run-subagent",
+        timeoutMs: 500,
+      },
+      timeoutMs: 2_500,
+      clientDisplayName: "subagent-task",
+      waitingForSubagentCompletion: true,
+    });
+  });
 });
 
 describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
@@ -242,6 +259,34 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
     expect(result).toEqual({
       status: "ok",
       replyText: "fresh reply",
+    });
+  });
+
+  it("passes subagent visibility metadata through reply polling waits", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        status: "ok",
+      })
+      .mockResolvedValueOnce({
+        messages: [],
+      });
+
+    await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-subagent-reply",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
+      subagentTask: true,
+    });
+
+    expect(callGatewayMock.mock.calls[0]?.[0]).toEqual({
+      method: "agent.wait",
+      params: {
+        runId: "run-subagent-reply",
+        timeoutMs: 1_000,
+      },
+      timeoutMs: 3_000,
+      clientDisplayName: "subagent-task",
+      waitingForSubagentCompletion: true,
     });
   });
 });

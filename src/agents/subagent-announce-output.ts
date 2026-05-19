@@ -278,6 +278,8 @@ export async function waitForSubagentRunOutcome(
   const waitMs = Math.max(0, Math.floor(timeoutMs));
   return await subagentAnnounceOutputDeps.callGateway({
     method: "agent.wait",
+    clientDisplayName: "subagent-task",
+    waitingForSubagentCompletion: true,
     params: {
       runId,
       timeoutMs: waitMs,

@@ -524,6 +524,8 @@ export async function steerControlledSubagentRun(params: {
   try {
     await subagentControlDeps.callGateway({
       method: "agent.wait",
+      clientDisplayName: "subagent-task",
+      waitingForSubagentCompletion: true,
       params: {
         runId: params.entry.runId,
         timeoutMs: STEER_ABORT_SETTLE_TIMEOUT_MS,
@@ -667,6 +669,7 @@ export async function sendControlledSubagentMessage(params: {
       limit: SUBAGENT_REPLY_HISTORY_LIMIT,
       baseline: baselineReply,
       callGateway: subagentControlDeps.callGateway,
+      subagentTask: true,
     });
     if (result.status === "timeout") {
       return { status: "timeout" as const, runId };

@@ -78,6 +78,7 @@ export function createSubagentRunManager(params: {
         runId,
         timeoutMs: Math.max(1, Math.floor(waitTimeoutMs)),
         callGateway: params.callGateway,
+        subagentTask: true,
       });
       const entry = params.runs.get(runId);
       if (!entry) {

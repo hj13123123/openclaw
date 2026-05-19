@@ -1101,8 +1101,10 @@ describe("steerControlledSubagentRun", () => {
       .spyOn(await import("./subagent-registry.js"), "replaceSubagentRunAfterSteer")
       .mockReturnValue(false);
 
+    const gatewayCalls: CallGatewayOptions[] = [];
     __testing.setDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        gatewayCalls.push(request);
         if (request.method === "agent.wait") {
           return {} as T;
         }
@@ -1146,6 +1148,10 @@ describe("steerControlledSubagentRun", () => {
       expect(getSubagentRunByChildSessionKey("agent:main:subagent:steer-worker")).toMatchObject({
         runId: "run-steer-old",
         suppressAnnounceReason: undefined,
+      });
+      expect(gatewayCalls.find((request) => request.method === "agent.wait")).toMatchObject({
+        clientDisplayName: "subagent-task",
+        waitingForSubagentCompletion: true,
       });
     } finally {
       replaceSpy.mockRestore();

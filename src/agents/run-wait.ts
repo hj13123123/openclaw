@@ -1,4 +1,5 @@
 import { callGateway } from "../gateway/call.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { extractAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
 
@@ -119,17 +120,24 @@ export async function waitForAgentRun(params: {
   runId: string;
   timeoutMs: number;
   callGateway?: GatewayCaller;
+  subagentTask?: boolean;
 }): Promise<AgentWaitResult> {
   const timeoutMs = Math.max(1, Math.floor(params.timeoutMs));
+  const subagentTask = params.subagentTask ?? false;
+  const callOpts: CallGatewayOptions = {
+    method: "agent.wait",
+    params: {
+      runId: params.runId,
+      timeoutMs,
+    },
+    timeoutMs: timeoutMs + 2000,
+  };
+  if (subagentTask) {
+    callOpts.clientDisplayName = "subagent-task";
+    callOpts.waitingForSubagentCompletion = true;
+  }
   try {
-    const wait = await (params.callGateway ?? runWaitDeps.callGateway)({
-      method: "agent.wait",
-      params: {
-        runId: params.runId,
-        timeoutMs,
-      },
-      timeoutMs: timeoutMs + 2000,
-    });
+    const wait = await (params.callGateway ?? runWaitDeps.callGateway)(callOpts);
     if (wait?.status === "timeout") {
       return normalizeAgentWaitResult("timeout", wait);
     }
@@ -156,11 +164,13 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   limit?: number;
   baseline?: AssistantReplySnapshot;
   callGateway?: GatewayCaller;
+  subagentTask?: boolean;
 }): Promise<AgentWaitResult & { replyText?: string }> {
   const wait = await waitForAgentRun({
     runId: params.runId,
     timeoutMs: params.timeoutMs,
     callGateway: params.callGateway,
+    subagentTask: params.subagentTask,
   });
   if (wait.status !== "ok") {
     return wait;
@@ -188,6 +198,7 @@ export async function waitForAgentRunsToDrain(params: {
   timeoutMs?: number;
   deadlineAtMs?: number;
   callGateway?: GatewayCaller;
+  subagentTask?: boolean;
 }): Promise<AgentRunsDrainResult> {
   const deadlineAtMs =
     params.deadlineAtMs ?? Date.now() + Math.max(1, Math.floor(params.timeoutMs ?? 0));
@@ -205,6 +216,7 @@ export async function waitForAgentRunsToDrain(params: {
           runId,
           timeoutMs: remainingMs,
           callGateway: params.callGateway,
+          subagentTask: params.subagentTask,
         }),
       ),
     );
