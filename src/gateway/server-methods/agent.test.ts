@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearAllBootstrapSnapshots } from "../../agents/bootstrap-cache.js";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
@@ -64,7 +65,11 @@ vi.mock("../../config/config.js", async () => {
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentEntries: () => [],
   listAgentIds: () => ["main"],
+  resolveAgentConfig: () => undefined,
+  resolveDefaultAgentId: () => "main",
+  resolveSessionAgentIds: () => ({ defaultAgentId: "main", sessionAgentId: "main" }),
   resolveAgentWorkspaceDir: (cfg: { agents?: { defaults?: { workspace?: string } } }) =>
     cfg?.agents?.defaults?.workspace ?? "/tmp/workspace",
 }));
@@ -315,6 +320,7 @@ describe("gateway agent handler", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
+    clearAllBootstrapSnapshots();
     resetTaskRegistryForTests();
   });
 
@@ -1084,9 +1090,10 @@ describe("gateway agent handler", () => {
     expect(call?.sessionId).toBe("reset-session-id");
   });
 
-  it("prepends runtime-loaded startup memory to bare /new agent runs", async () => {
+  it("prepends reduced startup bootstrap to bare /new main agent runs", async () => {
     await withTempDir({ prefix: "openclaw-gateway-reset-startup-" }, async (workspaceDir) => {
       await fs.mkdir(`${workspaceDir}/memory`, { recursive: true });
+      await fs.writeFile(`${workspaceDir}/SOUL.md`, "main persona note", "utf-8");
       await fs.writeFile(`${workspaceDir}/memory/2026-01-28.md`, "today gateway note", "utf-8");
       await fs.writeFile(`${workspaceDir}/memory/2026-01-27.md`, "yesterday gateway note", "utf-8");
       setupNewYorkTimeConfig("2026-01-28T20:30:00.000Z");
@@ -1116,10 +1123,10 @@ describe("gateway agent handler", () => {
       await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
       const call = readLastAgentCommandCall();
       expect(call?.message).toContain("[Startup context loaded by runtime]");
-      expect(call?.message).toContain("[Untrusted daily memory: memory/2026-01-28.md]");
-      expect(call?.message).toContain("today gateway note");
-      expect(call?.message).toContain("[Untrusted daily memory: memory/2026-01-27.md]");
-      expect(call?.message).toContain("yesterday gateway note");
+      expect(call?.message).toContain("[Bootstrap file: SOUL.md]");
+      expect(call?.message).toContain("main persona note");
+      expect(call?.message).not.toContain("[Untrusted daily memory: memory/2026-01-28.md]");
+      expect(call?.message).not.toContain("today gateway note");
       resetTimeConfig();
     });
   });

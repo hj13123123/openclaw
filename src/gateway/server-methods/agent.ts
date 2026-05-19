@@ -499,6 +499,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let isNewSession = false;
     let skipTimestampInjection = false;
     let shouldPrependStartupContext = false;
+    let startupContextAction: "new" | "reset" = "new";
 
     const resetCommandMatch = message.match(RESET_COMMAND_RE);
     if (resetCommandMatch && requestedSessionKey) {
@@ -512,6 +513,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       const resetReason =
         normalizeOptionalLowercaseString(resetCommandMatch[1]) === "new" ? "new" : "reset";
+      startupContextAction = resetReason;
       const resetResult = await runSessionResetFromAgent({
         key: requestedSessionKey,
         reason: resetReason,
@@ -835,6 +837,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       const startupContextPrelude = await buildSessionStartupContextPrelude({
         workspaceDir: runtimeWorkspaceDir,
         cfg: cfgForAgent ?? cfg,
+        sessionKey: resolvedSessionKey,
+        action: startupContextAction,
       });
       if (startupContextPrelude) {
         message = `${startupContextPrelude}\n\n${message}`;
