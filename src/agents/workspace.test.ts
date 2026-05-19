@@ -188,6 +188,41 @@ describe("ensureAgentWorkspace", () => {
       "# Add tasks below when you want the agent to check something periodically.",
     );
   });
+
+  it("syncs shared continuity files from a source workspace", async () => {
+    const sourceDir = await makeTempWorkspace("openclaw-workspace-source-");
+    const targetDir = await makeTempWorkspace("openclaw-workspace-target-");
+    await writeWorkspaceFile({
+      dir: sourceDir,
+      name: "SESSION_SUMMARY.md",
+      content: "summary from main",
+    });
+    await writeWorkspaceFile({
+      dir: sourceDir,
+      name: "ENGINEERING_RULES.md",
+      content: "rules from main",
+    });
+    await writeWorkspaceFile({
+      dir: sourceDir,
+      name: "MEMORY.md",
+      content: "memory should not sync",
+    });
+
+    await ensureAgentWorkspace({
+      dir: targetDir,
+      syncFromWorkspaceDir: sourceDir,
+    });
+
+    await expect(fs.readFile(path.join(targetDir, "SESSION_SUMMARY.md"), "utf-8")).resolves.toBe(
+      "summary from main",
+    );
+    await expect(fs.readFile(path.join(targetDir, "ENGINEERING_RULES.md"), "utf-8")).resolves.toBe(
+      "rules from main",
+    );
+    await expect(fs.access(path.join(targetDir, "MEMORY.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 });
 
 describe("loadWorkspaceBootstrapFiles", () => {
@@ -227,6 +262,17 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
     const files = await loadWorkspaceBootstrapFiles(tempDir);
     expect(getMemoryEntries(files)).toHaveLength(0);
+  });
+
+  it("loads continuity and rule bootstrap files when present", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: "SESSION_SUMMARY.md", content: "summary" });
+    await writeWorkspaceFile({ dir: tempDir, name: "ENGINEERING_RULES.md", content: "rules" });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+
+    expect(files.find((file) => file.name === "SESSION_SUMMARY.md")?.content).toBe("summary");
+    expect(files.find((file) => file.name === "ENGINEERING_RULES.md")?.content).toBe("rules");
   });
 
   it("treats hardlinked bootstrap aliases as missing", async () => {

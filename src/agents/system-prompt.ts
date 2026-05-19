@@ -37,13 +37,20 @@ import type { PromptMode } from "./system-prompt.types.js";
 type OwnerIdDisplay = "raw" | "hash";
 
 const CONTEXT_FILE_ORDER = new Map<string, number>([
-  ["agents.md", 10],
+  ["continuity.md", 15],
+  ["session_summary.md", 16],
+  ["next_action.md", 17],
+  ["risks.md", 18],
+  ["open_loops.md", 19],
   ["soul.md", 20],
+  ["engineering_rules.md", 13],
+  ["evolution_layer_mvp.md", 14],
   ["identity.md", 30],
   ["user.md", 40],
+  ["state_jinbao.md", 21],
+  ["ticket_a1.json", 22],
+  ["agents.md", 45],
   ["tools.md", 50],
-  ["bootstrap.md", 60],
-  ["memory.md", 70],
 ]);
 
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set(["heartbeat.md"]);

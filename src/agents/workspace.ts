@@ -5,7 +5,12 @@ import path from "node:path";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import {
+  DEFAULT_AGENT_ID,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
@@ -139,7 +144,16 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_HEARTBEAT_FILENAME
   | typeof DEFAULT_BOOTSTRAP_FILENAME
   | typeof DEFAULT_MEMORY_FILENAME
-  | typeof DEFAULT_MEMORY_ALT_FILENAME;
+  | typeof DEFAULT_MEMORY_ALT_FILENAME
+  | "CONTINUITY.md"
+  | "SESSION_SUMMARY.md"
+  | "NEXT_ACTION.md"
+  | "RISKS.md"
+  | "OPEN_LOOPS.md"
+  | "ENGINEERING_RULES.md"
+  | "EVOLUTION_LAYER_MVP.md"
+  | "STATE_jinbao.md"
+  | "ticket_A1.json";
 
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
@@ -177,7 +191,66 @@ const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
+  "CONTINUITY.md",
+  "SESSION_SUMMARY.md",
+  "NEXT_ACTION.md",
+  "RISKS.md",
+  "OPEN_LOOPS.md",
+  "ENGINEERING_RULES.md",
+  "EVOLUTION_LAYER_MVP.md",
+  "STATE_jinbao.md",
+  "ticket_A1.json",
 ]);
+
+const WORKSPACE_SHARED_SYNC_FILENAMES = [
+  "SESSION_SUMMARY.md",
+  "NEXT_ACTION.md",
+  "ENGINEERING_RULES.md",
+  "EVOLUTION_LAYER_MVP.md",
+  "RISKS.md",
+  "OPEN_LOOPS.md",
+] as const;
+
+async function syncWorkspaceSharedFilesFromSource(params: {
+  sourceDir: string;
+  targetDir: string;
+}): Promise<void> {
+  const sourceDir = resolveUserPath(params.sourceDir);
+  const targetDir = resolveUserPath(params.targetDir);
+  if (sourceDir === targetDir) {
+    return;
+  }
+
+  for (const name of WORKSPACE_SHARED_SYNC_FILENAMES) {
+    const sourcePath = path.join(sourceDir, name);
+    const targetPath = path.join(targetDir, name);
+
+    let sourceContent: string;
+    try {
+      sourceContent = await fs.readFile(sourcePath, "utf-8");
+    } catch (error) {
+      const anyError = error as NodeJS.ErrnoException;
+      if (anyError.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+
+    try {
+      const targetContent = await fs.readFile(targetPath, "utf-8");
+      if (targetContent === sourceContent) {
+        continue;
+      }
+    } catch (error) {
+      const anyError = error as NodeJS.ErrnoException;
+      if (anyError.code !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    await fs.writeFile(targetPath, sourceContent, "utf-8");
+  }
+}
 
 async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
   try {
@@ -325,6 +398,7 @@ async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
+  syncFromWorkspaceDir?: string;
 }): Promise<{
   dir: string;
   agentsPath?: string;
@@ -339,6 +413,13 @@ export async function ensureAgentWorkspace(params?: {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
   await fs.mkdir(dir, { recursive: true });
+
+  if (typeof params?.syncFromWorkspaceDir === "string" && params.syncFromWorkspaceDir.trim()) {
+    await syncWorkspaceSharedFilesFromSource({
+      sourceDir: params.syncFromWorkspaceDir,
+      targetDir: dir,
+    });
+  }
 
   if (!params?.ensureBootstrapFiles) {
     return { dir };
@@ -492,32 +573,52 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     filePath: string;
   }> = [
     {
-      name: DEFAULT_AGENTS_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_AGENTS_FILENAME),
+      name: "CONTINUITY.md" as WorkspaceBootstrapFileName,
+      filePath: path.join(resolvedDir, "CONTINUITY.md"),
+    },
+    {
+      name: "SESSION_SUMMARY.md" as WorkspaceBootstrapFileName,
+      filePath: path.join(resolvedDir, "SESSION_SUMMARY.md"),
+    },
+    {
+      name: "NEXT_ACTION.md" as WorkspaceBootstrapFileName,
+      filePath: path.join(resolvedDir, "NEXT_ACTION.md"),
+    },
+    {
+      name: "ENGINEERING_RULES.md" as WorkspaceBootstrapFileName,
+      filePath: path.join(resolvedDir, "ENGINEERING_RULES.md"),
+    },
+    {
+      name: "RISKS.md" as WorkspaceBootstrapFileName,
+      filePath: path.join(resolvedDir, "RISKS.md"),
     },
     {
       name: DEFAULT_SOUL_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_SOUL_FILENAME),
     },
     {
-      name: DEFAULT_TOOLS_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_TOOLS_FILENAME),
+      name: DEFAULT_USER_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_USER_FILENAME),
     },
     {
       name: DEFAULT_IDENTITY_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_IDENTITY_FILENAME),
     },
     {
-      name: DEFAULT_USER_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_USER_FILENAME),
+      name: DEFAULT_AGENTS_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_AGENTS_FILENAME),
+    },
+    {
+      name: DEFAULT_TOOLS_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_TOOLS_FILENAME),
     },
     {
       name: DEFAULT_HEARTBEAT_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_HEARTBEAT_FILENAME),
     },
     {
-      name: DEFAULT_BOOTSTRAP_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME),
+      name: "OPEN_LOOPS.md" as WorkspaceBootstrapFileName,
+      filePath: path.join(resolvedDir, "OPEN_LOOPS.md"),
     },
   ];
 
@@ -552,13 +653,30 @@ const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_SOUL_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
+  "ENGINEERING_RULES.md",
+  "NEXT_ACTION.md",
 ]);
+
+export function shouldUseMinimalBootstrapForSession(sessionKey?: string): boolean {
+  if (!sessionKey) {
+    return false;
+  }
+  if (isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey)) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(sessionKey);
+  return (
+    parsed?.agentId !== undefined &&
+    parsed.agentId !== DEFAULT_AGENT_ID &&
+    parsed.rest === "main"
+  );
+}
 
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   sessionKey?: string,
 ): WorkspaceBootstrapFile[] {
-  if (!sessionKey || (!isSubagentSessionKey(sessionKey) && !isCronSessionKey(sessionKey))) {
+  if (!shouldUseMinimalBootstrapForSession(sessionKey)) {
     return files;
   }
   return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
