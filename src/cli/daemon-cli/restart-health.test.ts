@@ -252,6 +252,7 @@ describe("inspectGatewayRestart", () => {
   });
 
   it("annotates stopped-free early exits with the actual elapsed time", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     const service = makeGatewayService({ status: "stopped" });
     inspectPortUsage.mockResolvedValue({
       port: 18789,

@@ -134,22 +134,6 @@ export async function inspectGatewayRestart(params: {
     };
   }
 
-  if (portUsage.status === "busy" && runtime.status !== "running") {
-    try {
-      const reachable = await confirmGatewayReachable(params.port);
-      if (reachable) {
-        return {
-          runtime,
-          portUsage,
-          healthy: true,
-          staleGatewayPids: [],
-        };
-      }
-    } catch {
-      // Probe is best-effort; keep the ownership-based diagnostics.
-    }
-  }
-
   const gatewayListeners =
     portUsage.status === "busy"
       ? portUsage.listeners.filter(
@@ -176,32 +160,34 @@ export async function inspectGatewayRestart(params: {
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
   let healthy = running && ownsPort;
-  if (!healthy && running && portUsage.status === "busy") {
+  if (!healthy && portUsage.status === "busy") {
     try {
       healthy = await confirmGatewayReachable(params.port);
     } catch {
       // best-effort probe
     }
   }
-  const staleGatewayPids = Array.from(
-    new Set([
-      ...gatewayListeners
-        .filter((listener) => Number.isFinite(listener.pid))
-        .filter((listener) => {
-          if (!running) {
-            return true;
-          }
-          if (runtimePid == null) {
-            return false;
-          }
-          return !listenerOwnedByRuntimePid({ listener, runtimePid });
-        })
-        .map((listener) => listener.pid as number),
-      ...fallbackListenerPids.filter(
-        (pid) => runtime.pid == null || pid !== runtime.pid || !running,
-      ),
-    ]),
-  );
+  const staleGatewayPids = healthy
+    ? []
+    : Array.from(
+        new Set([
+          ...gatewayListeners
+            .filter((listener) => Number.isFinite(listener.pid))
+            .filter((listener) => {
+              if (!running) {
+                return true;
+              }
+              if (runtimePid == null) {
+                return false;
+              }
+              return !listenerOwnedByRuntimePid({ listener, runtimePid });
+            })
+            .map((listener) => listener.pid as number),
+          ...fallbackListenerPids.filter(
+            (pid) => runtime.pid == null || pid !== runtime.pid || !running,
+          ),
+        ]),
+      );
 
   return {
     runtime,
@@ -256,7 +242,7 @@ export async function waitForGatewayHealthyRestart(params: {
   });
 
   let consecutiveStoppedFreeCount = 0;
-  const STOPPED_FREE_THRESHOLD = 6;
+  const stoppedFreeThreshold = 6;
   const minAttemptForEarlyExit = Math.min(
     Math.ceil(stoppedFreeEarlyExitGraceMs() / delayMs),
     Math.floor(attempts / 2),
@@ -271,7 +257,7 @@ export async function waitForGatewayHealthyRestart(params: {
     }
     if (shouldEarlyExitStoppedFree(snapshot, attempt, minAttemptForEarlyExit)) {
       consecutiveStoppedFreeCount += 1;
-      if (consecutiveStoppedFreeCount >= STOPPED_FREE_THRESHOLD) {
+      if (consecutiveStoppedFreeCount >= stoppedFreeThreshold) {
         return withWaitContext(snapshot, "stopped-free", attempt * delayMs);
       }
     } else if (snapshot.runtime.status !== "stopped" || snapshot.portUsage.status !== "free") {
