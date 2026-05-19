@@ -861,4 +861,43 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       expect(store["agent:codex:acp-task"]).toBeDefined();
     });
   });
+
+  test("caches combined session store briefly and refreshes after ttl", async () => {
+    await withStateDirEnv("openclaw-combined-cache-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "sessions.json");
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          "agent:main:main": { sessionId: "s-old", updatedAt: 100 },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: storePath,
+        },
+      } as OpenClawConfig;
+
+      const first = loadCombinedSessionStoreForGateway(cfg);
+      expect(first.store["agent:main:main"]?.sessionId).toBe("s-old");
+
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          "agent:main:main": { sessionId: "s-new", updatedAt: 200 },
+        }),
+        "utf8",
+      );
+
+      const cached = loadCombinedSessionStoreForGateway(cfg);
+      expect(cached.store["agent:main:main"]?.sessionId).toBe("s-old");
+
+      await new Promise((resolve) => setTimeout(resolve, 2_100));
+
+      const refreshed = loadCombinedSessionStoreForGateway(cfg);
+      expect(refreshed.store["agent:main:main"]?.sessionId).toBe("s-new");
+    });
+  });
 });

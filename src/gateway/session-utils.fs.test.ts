@@ -8,6 +8,7 @@ import {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscript,
+  readRecentSessionMessages,
   readSessionMessages,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
@@ -535,6 +536,59 @@ describe("readSessionMessages", () => {
       expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
     },
   );
+});
+
+describe("readRecentSessionMessages", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-recent-fs-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("returns only the requested recent transcript messages", () => {
+    const sessionId = "test-session-recent";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "old" } }),
+      JSON.stringify({
+        type: "compaction",
+        id: "comp-recent",
+        timestamp: "2026-02-07T00:00:00.000Z",
+      }),
+      JSON.stringify({ message: { role: "assistant", content: "new" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const out = readRecentSessionMessages(sessionId, storePath, undefined, 2);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({
+      role: "system",
+      content: [{ type: "text", text: "Compaction" }],
+      __openclaw: { kind: "compaction", id: "comp-recent" },
+    });
+    expect(out[1]).toMatchObject({ role: "assistant", content: "new" });
+  });
+
+  test("bounds non-finite limits to one message", () => {
+    const sessionId = "test-session-recent-nan";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: "first" } }),
+        JSON.stringify({ message: { role: "assistant", content: "last" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const out = readRecentSessionMessages(sessionId, storePath, undefined, Number.NaN);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ role: "assistant", content: "last" });
+  });
 });
 
 describe("readSessionPreviewItemsFromTranscript", () => {

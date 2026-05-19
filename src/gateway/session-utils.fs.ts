@@ -90,6 +90,34 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
+function parseTranscriptMessageLine(line: string, seq: number): unknown | null {
+  try {
+    const parsed = JSON.parse(line);
+    if (parsed?.message) {
+      return attachOpenClawTranscriptMeta(parsed.message, {
+        ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
+        seq,
+      });
+    }
+    if (parsed?.type === "compaction") {
+      const ts = typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
+      const timestamp = Number.isFinite(ts) ? ts : Date.now();
+      return {
+        role: "system",
+        content: [{ type: "text", text: "Compaction" }],
+        timestamp,
+        __openclaw: {
+          kind: "compaction",
+          id: typeof parsed.id === "string" ? parsed.id : undefined,
+          seq,
+        },
+      };
+    }
+  } catch {
+    // ignore bad lines
+  }
+  return null;
+}
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -109,41 +137,36 @@ export function readSessionMessages(
     if (!line.trim()) {
       continue;
     }
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed?.message) {
-        messageSeq += 1;
-        messages.push(
-          attachOpenClawTranscriptMeta(parsed.message, {
-            ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-            seq: messageSeq,
-          }),
-        );
-        continue;
-      }
-
-      // Compaction entries are not "message" records, but they're useful context for debugging.
-      // Emit a lightweight synthetic message that the Web UI can render as a divider.
-      if (parsed?.type === "compaction") {
-        const ts = typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
-        const timestamp = Number.isFinite(ts) ? ts : Date.now();
-        messageSeq += 1;
-        messages.push({
-          role: "system",
-          content: [{ type: "text", text: "Compaction" }],
-          timestamp,
-          __openclaw: {
-            kind: "compaction",
-            id: typeof parsed.id === "string" ? parsed.id : undefined,
-            seq: messageSeq,
-          },
-        });
-      }
-    } catch {
-      // ignore bad lines
+    const message = parseTranscriptMessageLine(line, messageSeq + 1);
+    if (message) {
+      messageSeq += 1;
+      messages.push(message);
     }
   }
   return messages;
+}
+
+export function readRecentSessionMessages(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  maxMessages: number,
+): unknown[] {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+  const filePath = candidates.find((p) => fs.existsSync(p));
+  if (!filePath) {
+    return [];
+  }
+
+  const requestedMax = Number.isFinite(maxMessages) ? Math.floor(maxMessages) : 1;
+  const boundedMax = Math.max(1, Math.min(requestedMax, 1_000));
+  for (const readSize of PREVIEW_READ_SIZES) {
+    const messages = readRecentTranscriptMessages(filePath, boundedMax, readSize);
+    if (messages.length > 0 || readSize === PREVIEW_READ_SIZES[PREVIEW_READ_SIZES.length - 1]) {
+      return messages;
+    }
+  }
+  return [];
 }
 
 export {
@@ -728,6 +751,47 @@ function buildPreviewItems(
   return items.slice(-maxItems);
 }
 
+function readRecentTranscriptMessages(filePath: string, maxMessages: number, readBytes: number): unknown[] {
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const stat = fs.fstatSync(fd);
+    const size = stat.size;
+    if (size === 0) {
+      return [];
+    }
+
+    const readStart = Math.max(0, size - readBytes);
+    const readLen = Math.min(size, readBytes);
+    const buf = Buffer.alloc(readLen);
+    fs.readSync(fd, buf, 0, readLen, readStart);
+
+    const chunk = buf.toString("utf-8");
+    const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
+    const tailLines = lines.slice(-Math.max(PREVIEW_MAX_LINES, maxMessages * 4));
+    const collected: unknown[] = [];
+    for (let i = tailLines.length - 1; i >= 0; i -= 1) {
+      const line = tailLines[i];
+      if (typeof line !== "string") {
+        continue;
+      }
+      const message = parseTranscriptMessageLine(line, i + 1);
+      if (message) {
+        collected.push(message);
+        if (collected.length >= maxMessages) {
+          break;
+        }
+      }
+    }
+    return collected.toReversed();
+  } catch {
+    return [];
+  } finally {
+    if (fd !== null) {
+      fs.closeSync(fd);
+    }
+  }
+}
 function readRecentMessagesFromTranscript(
   filePath: string,
   maxMessages: number,

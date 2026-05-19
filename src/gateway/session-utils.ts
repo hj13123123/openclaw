@@ -69,6 +69,7 @@ import {
 } from "./session-store-key.js";
 import {
   readLatestSessionUsageFromTranscript,
+  readRecentSessionMessages,
   readSessionTitleFieldsFromTranscript,
 } from "./session-utils.fs.js";
 import type {
@@ -86,6 +87,7 @@ export {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscript,
+  readRecentSessionMessages,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   readSessionMessages,
@@ -893,10 +895,40 @@ function mergeSessionEntryIntoCombined(params: {
   }
 }
 
+type CombinedSessionStoreCacheEntry = {
+  key: string;
+  expiresAt: number;
+  storePath: string;
+  store: Record<string, SessionEntry>;
+};
+
+let combinedSessionStoreCache: CombinedSessionStoreCacheEntry | null = null;
+const COMBINED_SESSION_STORE_CACHE_TTL_MS = 2_000;
+
+function getCombinedSessionStoreCacheKey(cfg: OpenClawConfig): string {
+  const storeConfig = cfg.session?.store;
+  const agentIds = Array.isArray(cfg.agents?.list)
+    ? cfg.agents.list.map((agent) => agent.id).filter(Boolean).join(",")
+    : "";
+  return `${typeof storeConfig === "string" ? storeConfig : ""}|${agentIds}`;
+}
 export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   storePath: string;
   store: Record<string, SessionEntry>;
 } {
+  const cacheKey = getCombinedSessionStoreCacheKey(cfg);
+  const now = Date.now();
+  if (
+    combinedSessionStoreCache &&
+    combinedSessionStoreCache.key === cacheKey &&
+    combinedSessionStoreCache.expiresAt > now
+  ) {
+    return {
+      storePath: combinedSessionStoreCache.storePath,
+      store: combinedSessionStoreCache.store,
+    };
+  }
+
   const storeConfig = cfg.session?.store;
   if (storeConfig && !isStorePathTemplate(storeConfig)) {
     const storePath = resolveStorePath(storeConfig);
@@ -913,7 +945,13 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
         canonicalKey,
       });
     }
-    return { storePath, store: combined };
+    const result = { storePath, store: combined };
+    combinedSessionStoreCache = {
+      key: cacheKey,
+      expiresAt: now + COMBINED_SESSION_STORE_CACHE_TTL_MS,
+      ...result,
+    };
+    return result;
   }
 
   const targets = resolveAllAgentSessionStoreTargetsSync(cfg);
@@ -936,7 +974,13 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
 
   const storePath =
     typeof storeConfig === "string" && storeConfig.trim() ? storeConfig.trim() : "(multiple)";
-  return { storePath, store: combined };
+  const result = { storePath, store: combined };
+  combinedSessionStoreCache = {
+    key: cacheKey,
+    expiresAt: now + COMBINED_SESSION_STORE_CACHE_TTL_MS,
+    ...result,
+  };
+  return result;
 }
 
 export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
