@@ -25,6 +25,7 @@ let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
 let enqueueCommand: CommandQueueModule["enqueueCommand"];
 let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
+let LaneWaitDegradedError: CommandQueueModule["LaneWaitDegradedError"];
 let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
 let getQueueSize: CommandQueueModule["getQueueSize"];
 let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
@@ -63,6 +64,7 @@ describe("command queue", () => {
       enqueueCommand,
       enqueueCommandInLane,
       GatewayDrainingError,
+      LaneWaitDegradedError,
       getActiveTaskCount,
       getQueueSize,
       markGatewayDraining,
@@ -356,6 +358,33 @@ describe("command queue", () => {
     deferred.resolve();
     await expect(first).resolves.toBe("first");
     await expect(second).resolves.toBe("second");
+  });
+
+  it("rejects stale queued lane entries without executing them", async () => {
+    const lane = `drain-max-wait-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const deferred = createDeferred();
+      const first = enqueueCommandInLane(lane, async () => {
+        await deferred.promise;
+        return "first";
+      });
+      const staleTask = vi.fn(async () => "stale");
+      const second = enqueueCommandInLane(lane, staleTask, {
+        maxWaitMs: 5,
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+      deferred.resolve();
+
+      await expect(first).resolves.toBe("first");
+      await expect(second).rejects.toBeInstanceOf(LaneWaitDegradedError);
+      expect(staleTask).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects new enqueues with GatewayDrainingError after markGatewayDraining", async () => {

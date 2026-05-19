@@ -18,6 +18,26 @@ export class CommandLaneClearedError extends Error {
 }
 
 /**
+ * Thrown when a lane entry waited longer than its maxWaitMs
+ * and was degraded (rejected without execution). Callers can catch this
+ * to silently skip the result rather than treating it as a hard error.
+ */
+export class LaneWaitDegradedError extends Error {
+  public readonly lane: string;
+  public readonly waitedMs: number;
+  public readonly maxWaitMs: number;
+  constructor(lane: string, waitedMs: number, maxWaitMs: number) {
+    super(
+      `Lane "${lane}" wait degraded after ${waitedMs}ms (maxWaitMs=${maxWaitMs}ms)`,
+    );
+    this.name = "LaneWaitDegradedError";
+    this.lane = lane;
+    this.waitedMs = waitedMs;
+    this.maxWaitMs = maxWaitMs;
+  }
+}
+
+/**
  * Dedicated error type thrown when a new command is rejected because the
  * gateway is currently draining for restart.
  */
@@ -39,6 +59,7 @@ type QueueEntry = {
   reject: (reason?: unknown) => void;
   enqueuedAt: number;
   warnAfterMs: number;
+  maxWaitMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
@@ -169,6 +190,17 @@ function drainLane(lane: string) {
       while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
         const entry = state.queue.shift() as QueueEntry;
         const waitedMs = Date.now() - entry.enqueuedAt;
+
+        // Reject stale non-critical lane tasks instead of running them long
+        // after their result is useful.
+        if (typeof entry.maxWaitMs === "number" && waitedMs > entry.maxWaitMs) {
+          diag.warn(
+            `lane wait degraded: lane=${lane} waitedMs=${waitedMs} maxWaitMs=${entry.maxWaitMs} - rejecting`,
+          );
+          entry.reject(new LaneWaitDegradedError(lane, waitedMs, entry.maxWaitMs));
+          continue;
+        }
+
         if (waitedMs >= entry.warnAfterMs) {
           try {
             entry.onWait?.(waitedMs, state.queue.length);
@@ -244,6 +276,7 @@ export function enqueueCommandInLane<T>(
   task: () => Promise<T>,
   opts?: {
     warnAfterMs?: number;
+    maxWaitMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
@@ -261,6 +294,7 @@ export function enqueueCommandInLane<T>(
       reject,
       enqueuedAt: Date.now(),
       warnAfterMs,
+      maxWaitMs: opts?.maxWaitMs,
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
@@ -272,6 +306,7 @@ export function enqueueCommand<T>(
   task: () => Promise<T>,
   opts?: {
     warnAfterMs?: number;
+    maxWaitMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
