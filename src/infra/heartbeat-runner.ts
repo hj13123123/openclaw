@@ -103,6 +103,9 @@ import {
   resolveSystemEventDeliveryContext,
 } from "./system-events.js";
 
+const MAX_HEARTBEAT_TIMER_MS = 2_147_483_647;
+const HEARTBEAT_TIMER_FALLBACK_MS = 60_000;
+
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
     getReplyFromConfig?: typeof import("./heartbeat-runner.runtime.js").getReplyFromConfig;
@@ -1327,10 +1330,13 @@ export function startHeartbeatRunner(opts: {
       return;
     }
     const delay = Math.max(0, nextDue - now);
+    const safeDelay = Number.isFinite(delay)
+      ? Math.min(delay, MAX_HEARTBEAT_TIMER_MS)
+      : HEARTBEAT_TIMER_FALLBACK_MS;
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
-    }, delay);
+    }, safeDelay);
     state.timer.unref?.();
   };
 
