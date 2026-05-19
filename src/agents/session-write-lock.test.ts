@@ -158,6 +158,42 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("records the source in the lock file for diagnostics", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const lock = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 500,
+        source: "unit-test-source",
+      });
+
+      const raw = await fs.readFile(lockPath, "utf8");
+      const payload = JSON.parse(raw) as { source?: string };
+      expect(payload.source).toBe("unit-test-source");
+
+      await lock.release();
+    });
+  });
+
+  it("includes the owner source in lock timeout errors", async () => {
+    await withTempSessionLockFile(async ({ sessionFile }) => {
+      const lock = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 500,
+        source: "blocking-writer",
+      });
+
+      await expect(
+        acquireSessionWriteLock({
+          sessionFile,
+          timeoutMs: 50,
+          allowReentrant: false,
+        }),
+      ).rejects.toThrow(/source=blocking-writer/);
+
+      await lock.release();
+    });
+  });
+
   it("reclaims stale lock files", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     try {

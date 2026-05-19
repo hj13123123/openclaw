@@ -9,6 +9,8 @@ type LockFilePayload = {
   createdAt?: string;
   /** Process start time in clock ticks (from /proc/pid/stat field 22). */
   starttime?: number;
+  /** Origin/caller that acquired this lock, for diagnostics. */
+  source?: string;
 };
 
 function isValidLockNumber(value: unknown): value is number {
@@ -21,6 +23,8 @@ type HeldLock = {
   lockPath: string;
   acquiredAt: number;
   maxHoldMs: number;
+  /** Origin/caller that acquired this lock, for diagnostics. */
+  source?: string;
   releasePromise?: Promise<void>;
 };
 
@@ -201,7 +205,7 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
     }
 
     process.stderr.write(
-      `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}\n`,
+      `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms)${held.source ? ` source=${held.source}` : ""}: ${held.lockPath}\n`,
     );
 
     const didRelease = await releaseHeldLock(sessionFile, held, { force: true });
@@ -308,6 +312,9 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
     }
     if (isValidLockNumber(parsed.starttime)) {
       payload.starttime = parsed.starttime;
+    }
+    if (typeof parsed.source === "string") {
+      payload.source = parsed.source;
     }
     return payload;
   } catch {
@@ -471,6 +478,9 @@ export async function acquireSessionWriteLock(params: {
   staleMs?: number;
   maxHoldMs?: number;
   allowReentrant?: boolean;
+  /** Origin/caller identifier for diagnostics. Recorded in the lock file
+   * and in watchdog logs when a lock is force-released. */
+  source?: string;
 }): Promise<{
   release: () => Promise<void>;
 }> {
@@ -514,6 +524,9 @@ export async function acquireSessionWriteLock(params: {
       if (starttime !== null) {
         lockPayload.starttime = starttime;
       }
+      if (params.source) {
+        lockPayload.source = params.source;
+      }
       await handle.writeFile(JSON.stringify(lockPayload, null, 2), "utf8");
       const createdHeld: HeldLock = {
         count: 1,
@@ -521,6 +534,7 @@ export async function acquireSessionWriteLock(params: {
         lockPath,
         acquiredAt: Date.now(),
         maxHoldMs,
+        source: params.source,
       };
       HELD_LOCKS.set(normalizedSessionFile, createdHeld);
       return {
@@ -573,7 +587,10 @@ export async function acquireSessionWriteLock(params: {
 
   const payload = await readLockPayload(lockPath);
   const owner = typeof payload?.pid === "number" ? `pid=${payload.pid}` : "unknown";
-  throw new Error(`session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`);
+  const sourceSuffix = payload?.source ? ` source=${payload.source}` : "";
+  throw new Error(
+    `session file locked (timeout ${timeoutMs}ms): ${owner}${sourceSuffix} ${lockPath}`,
+  );
 }
 
 export const __testing = {
