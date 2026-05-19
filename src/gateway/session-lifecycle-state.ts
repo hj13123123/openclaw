@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { updateSessionStoreEntry, type SessionEntry } from "../config/sessions.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -89,6 +91,29 @@ function resolveRuntimeMs(params: {
   return undefined;
 }
 
+async function readCheckpoint(workspaceDir: string): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = await fs.readFile(path.join(workspaceDir, "continuity_checkpoint.json"), "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return null;
+  }
+}
+
+async function writeCheckpoint(
+  workspaceDir: string,
+  checkpoint: Record<string, unknown>,
+): Promise<void> {
+  await fs.writeFile(
+    path.join(workspaceDir, "continuity_checkpoint.json"),
+    `${JSON.stringify(checkpoint, null, 2)}\n`,
+    "utf-8",
+  );
+}
+
 export function deriveGatewaySessionLifecycleSnapshot(params: {
   session?: Partial<LifecycleSessionShape> | null;
   event: LifecycleEventLike;
@@ -141,6 +166,77 @@ export function derivePersistedSessionLifecyclePatch(params: {
     ...snapshot,
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
   };
+}
+
+export async function updateCheckpointInterruptState(params: {
+  workspaceDir: string;
+  interruptState: Record<string, unknown>;
+  pendingWrites?: unknown[];
+  humanGate?: Record<string, unknown>;
+  rollbackHint?: Record<string, unknown>;
+}): Promise<void> {
+  const existing = (await readCheckpoint(params.workspaceDir)) ?? {};
+  const updated: Record<string, unknown> = {
+    ...existing,
+    interruptState: params.interruptState,
+    lastAutoWriteAt: new Date().toISOString(),
+  };
+  if (params.pendingWrites && params.pendingWrites.length > 0) {
+    updated.pendingWrites = params.pendingWrites;
+  }
+  if (params.humanGate) {
+    updated.humanGate = params.humanGate;
+  }
+  if (params.rollbackHint) {
+    updated.rollbackHint = params.rollbackHint;
+  }
+  await writeCheckpoint(params.workspaceDir, updated);
+}
+
+export async function readCurrentInterruptState(workspaceDir: string): Promise<{
+  interruptState: Record<string, unknown> | null;
+  humanGate: Record<string, unknown> | null;
+} | null> {
+  const checkpoint = await readCheckpoint(workspaceDir);
+  if (!checkpoint) {
+    return null;
+  }
+  const interruptState =
+    checkpoint.interruptState &&
+    typeof checkpoint.interruptState === "object" &&
+    !Array.isArray(checkpoint.interruptState)
+      ? (checkpoint.interruptState as Record<string, unknown>)
+      : null;
+  const humanGate =
+    checkpoint.humanGate &&
+    typeof checkpoint.humanGate === "object" &&
+    !Array.isArray(checkpoint.humanGate)
+      ? (checkpoint.humanGate as Record<string, unknown>)
+      : null;
+  return { interruptState, humanGate };
+}
+
+export function isCandidateExpired(interruptState: Record<string, unknown>): boolean {
+  const expiresAt = typeof interruptState.expiresAt === "string" ? interruptState.expiresAt : null;
+  if (!expiresAt) {
+    return true;
+  }
+  const expiresDate = new Date(expiresAt);
+  return Number.isNaN(expiresDate.getTime()) || Date.now() > expiresDate.getTime();
+}
+
+export async function clearBlockedInterruptState(workspaceDir: string): Promise<void> {
+  const checkpoint = await readCheckpoint(workspaceDir);
+  if (!checkpoint) {
+    return;
+  }
+  const updated: Record<string, unknown> = {};
+  for (const key of ["lastAutoWriteAt", "sessionKey", "filesChecked", "summaryProtected"]) {
+    if (Object.prototype.hasOwnProperty.call(checkpoint, key)) {
+      updated[key] = checkpoint[key];
+    }
+  }
+  await writeCheckpoint(workspaceDir, updated);
 }
 
 export async function persistGatewaySessionLifecycleEvent(params: {
