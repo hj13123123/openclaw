@@ -95,10 +95,20 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(params: {
     const auth = await resolveGatewayProbeAuthWithSecretInputs(params);
     return { auth };
   } catch (error) {
-    return {
-      auth: {},
-      warning: resolveGatewayProbeWarning(error),
-    };
+    // If secret-ref resolution fails, try the synchronous config path before
+    // falling back to unauthenticated probing.
+    try {
+      const auth = resolveGatewayProbeAuth(params);
+      return {
+        auth,
+        warning: resolveGatewayProbeWarning(error),
+      };
+    } catch {
+      return {
+        auth: {},
+        warning: resolveGatewayProbeWarning(error),
+      };
+    }
   }
 }
 
