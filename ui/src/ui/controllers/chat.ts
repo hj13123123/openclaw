@@ -1,5 +1,5 @@
 import { resetToolStream } from "../app-tool-stream.ts";
-import { extractText } from "../chat/message-extract.ts";
+import { extractRawText, extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
@@ -13,9 +13,9 @@ import {
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
-const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
+const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 10_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
-const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
+const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 2_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 
 function beginChatHistoryRequest(state: ChatState): number {
@@ -136,7 +136,143 @@ function maybeResetToolStream(state: ChatState) {
   }
 }
 
-export async function loadChatHistory(state: ChatState) {
+function getMessageIdentity(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const m = message as Record<string, unknown>;
+  // Prefer stable server-side identifiers
+  for (const key of ["id", "messageId", "toolCallId", "toolResultId", "runId"]) {
+    const value = m[key];
+    if (typeof value === "string" && value) {
+      return `${key}:${value}`;
+    }
+  }
+  const role = String(m.role ?? "");
+  // Use raw text (ignoring phase-aware extraction differences) for content hash.
+  // extractText uses phase-aware extraction that diverges between live messages
+  // (no textSignature) and history messages (with textSignature), causing the
+  // same underlying text to produce different hashes.
+  const text = extractRawText(message) ?? "";
+  return `${role}:${text.slice(0, 400)}`;
+}
+
+export function areMessagesDuplicate(a: unknown, b: unknown): boolean {
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") {
+    return false;
+  }
+  const ma = a as Record<string, unknown>;
+  const mb = b as Record<string, unknown>;
+  if (String(ma.role ?? "") !== String(mb.role ?? "")) {
+    return false;
+  }
+  // Cross-match stable identifiers: if any id field value appears in both
+  // messages (across different key names), they are duplicates. Handles cases
+  // where live message has runId but history message has id/messageId.
+  const idKeys = ["id", "messageId", "toolCallId", "toolResultId", "runId"];
+  const aIds = idKeys
+    .map((key) => ma[key])
+    .filter((v): v is string => typeof v === "string" && v.length > 0);
+  const bIds = idKeys
+    .map((key) => mb[key])
+    .filter((v): v is string => typeof v === "string" && v.length > 0);
+  if (aIds.some((id) => bIds.includes(id))) {
+    return true;
+  }
+  // Normalize whitespace: collapse consecutive whitespace to single space,
+  // trim leading/trailing. Handles differences between live messages (string
+  // content) and history messages (array content with split text blocks),
+  // as well as newline/space variations from different rendering paths.
+  const normalizeWhitespace = (s: string) => s.replace(/\s+/g, " ").trim();
+
+  // Normalize content text regardless of shape: string, text block array, or text field.
+  const getNormalizedContentText = (msg: Record<string, unknown>): string => {
+    const content = msg.content;
+    // Handle string content directly
+    if (typeof content === "string") {
+      return normalizeWhitespace(content);
+    }
+    // Handle array content
+    if (Array.isArray(content)) {
+      return content
+        .filter(
+          (block): block is { type?: string; text?: string } =>
+            block &&
+            typeof block === "object" &&
+            (block as Record<string, unknown>).type === "text" &&
+            typeof (block as Record<string, unknown>).text === "string",
+        )
+        .map((block) => normalizeWhitespace(block.text ?? ""))
+        .join("");
+    }
+    // Handle text field (fallback)
+    if (typeof msg.text === "string") {
+      return normalizeWhitespace(msg.text);
+    }
+    return "";
+  };
+
+  // Fallback 1: compare normalized text content (ignoring timestamp differences)
+  const ta = normalizeWhitespace(extractText(a) ?? "");
+  const tb = normalizeWhitespace(extractText(b) ?? "");
+  if (ta === tb && ta.length > 0) {
+    return true;
+  }
+  // Fallback 2: compare raw text (ignoring phase-aware extraction differences).
+  // Live messages lack textSignature while history messages include it,
+  // causing extractText to diverge for the same underlying text.
+  const rawA = normalizeWhitespace(extractRawText(a) ?? "");
+  const rawB = normalizeWhitespace(extractRawText(b) ?? "");
+  if (rawA === rawB && rawA.length > 0) {
+    return true;
+  }
+  // Fallback 3: compare normalized content text regardless of content shape.
+  // Handles cases where content array shape differs (e.g. live string content
+  // vs history array content, or blocks in different order with same combined text).
+  const normA = getNormalizedContentText(ma);
+  const normB = getNormalizedContentText(mb);
+  if (normA.length > 0 && normA === normB) {
+    return true;
+  }
+  return false;
+}
+
+function dedupeMergedMessages(merged: unknown[]): unknown[] {
+  if (merged.length < 2) {
+    return merged;
+  }
+  const result: unknown[] = [];
+  for (const item of merged) {
+    const isDup = result.some((prev) => areMessagesDuplicate(prev, item));
+    if (!isDup) {
+      result.push(item);
+    }
+  }
+  return result;
+}
+
+function mergeChatMessages(existing: unknown[], incoming: unknown[]): unknown[] {
+  if (existing.length === 0) {
+    return incoming;
+  }
+  const seen = new Set(existing.map(getMessageIdentity));
+  const additions = incoming.filter((m) => !seen.has(getMessageIdentity(m)));
+  if (additions.length === 0) {
+    return existing;
+  }
+  const merged = [...existing, ...additions];
+  const deduped = dedupeMergedMessages(merged);
+  if (deduped.length > 500) {
+    return deduped.slice(deduped.length - 500);
+  }
+  return deduped;
+}
+
+export async function loadChatHistory(
+  state: ChatState,
+  opts?: { mode?: "replace" | "merge" },
+) {
+  const mode = opts?.mode ?? "replace";
   if (!state.client || !state.connected) {
     return;
   }
@@ -153,7 +289,7 @@ export async function loadChatHistory(state: ChatState) {
           "chat.history",
           {
             sessionKey,
-            limit: 200,
+            limit: 500,
           },
         );
         break;
@@ -177,7 +313,12 @@ export async function loadChatHistory(state: ChatState) {
       return;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    const filteredMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    if (mode === "merge") {
+      state.chatMessages = mergeChatMessages(state.chatMessages, filteredMessages);
+    } else {
+      state.chatMessages = filteredMessages;
+    }
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
@@ -410,15 +551,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     return null;
   }
 
-  // Final from another run (e.g. sub-agent announce): refresh history to show new message.
-  // See https://github.com/openclaw/openclaw/issues/1909
+  // Final from another run (e.g. sub-agent announce): DO NOT live append.
+  // This will always trigger a subsequent history merge in app-gateway,
+  // which becomes the single source of truth for the complete message (including
+  // tool results, attachments, etc.). Prevents duplicate render from dual paths.
   if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
-      const finalMessage = normalizeFinalAssistantMessage(payload.message);
-      if (finalMessage && !isAssistantSilentReply(finalMessage)) {
-        state.chatMessages = [...state.chatMessages, finalMessage];
-        return null;
-      }
       return "final";
     }
     return null;
@@ -432,16 +570,36 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
-      state.chatMessages = [...state.chatMessages, finalMessage];
+      // Attach runId from payload to the appended message for dedup matching.
+      // Live messages from payload.message may not have runId in the message
+      // object itself, but chat.history messages may have runId or matching
+      // identifiers. This ensures dedup can match live vs history versions.
+      const messageWithRunId = payload.runId
+        ? { ...finalMessage, runId: payload.runId }
+        : finalMessage;
+      // Dedupe before append: session.message event may have already merged
+      // the persisted version of this message before chat.final event arrives.
+      const isDuplicate = state.chatMessages.some((m: unknown) =>
+        areMessagesDuplicate(m, messageWithRunId),
+      );
+      if (!isDuplicate) {
+        state.chatMessages = [...state.chatMessages, messageWithRunId];
+      }
     } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
-      state.chatMessages = [
-        ...state.chatMessages,
-        {
-          role: "assistant",
-          content: [{ type: "text", text: state.chatStream }],
-          timestamp: Date.now(),
-        },
-      ];
+      const streamMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: state.chatStream }],
+        timestamp: Date.now(),
+        ...(payload.runId ? { runId: payload.runId } : {}),
+      };
+      // Dedupe before append: session.message event may have already merged
+      // the persisted version of this message before chat.final event arrives.
+      const isDuplicate = state.chatMessages.some((m: unknown) =>
+        areMessagesDuplicate(m, streamMessage),
+      );
+      if (!isDuplicate) {
+        state.chatMessages = [...state.chatMessages, streamMessage];
+      }
     }
     state.chatStream = null;
     state.chatRunId = null;
@@ -449,18 +607,35 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
-      state.chatMessages = [...state.chatMessages, normalizedMessage];
+      // Attach runId for dedup matching with history merge.
+      const messageWithRunId = payload.runId
+        ? { ...normalizedMessage, runId: payload.runId }
+        : normalizedMessage;
+      // Dedupe before append: session.message event may have already merged
+      // the persisted version of this message before chat.aborted event arrives.
+      const isDuplicate = state.chatMessages.some((m: unknown) =>
+        areMessagesDuplicate(m, messageWithRunId),
+      );
+      if (!isDuplicate) {
+        state.chatMessages = [...state.chatMessages, messageWithRunId];
+      }
     } else {
       const streamedText = state.chatStream ?? "";
       if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
-        state.chatMessages = [
-          ...state.chatMessages,
-          {
-            role: "assistant",
-            content: [{ type: "text", text: streamedText }],
-            timestamp: Date.now(),
-          },
-        ];
+        const streamMessage = {
+          role: "assistant",
+          content: [{ type: "text", text: streamedText }],
+          timestamp: Date.now(),
+          ...(payload.runId ? { runId: payload.runId } : {}),
+        };
+        // Dedupe before append: session.message event may have already merged
+        // the persisted version of this message before chat.aborted event arrives.
+        const isDuplicate = state.chatMessages.some((m: unknown) =>
+          areMessagesDuplicate(m, streamMessage),
+        );
+        if (!isDuplicate) {
+          state.chatMessages = [...state.chatMessages, streamMessage];
+        }
       }
     }
     state.chatStream = null;

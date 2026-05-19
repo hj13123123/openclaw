@@ -97,6 +97,7 @@ vi.mock("./controllers/chat.ts", async (importOriginal) => {
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
+  chatMessages: unknown[];
   chatStream: string | null;
   chatToolMessages: Record<string, unknown>[];
   toolStreamById: Map<string, unknown>;
@@ -744,6 +745,31 @@ describe("connectGateway", () => {
     });
 
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("merges history for cross-run final messages without clearing the active run", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-1";
+    host.chatStream = "active stream";
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "sub-run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Sub-agent result" }],
+        },
+      },
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host, { mode: "merge" });
+    expect(host.chatRunId).toBe("main-run-1");
+    expect(host.chatStream).toBe("active stream");
+    expect(host.chatMessages).toEqual([]);
   });
 });
 

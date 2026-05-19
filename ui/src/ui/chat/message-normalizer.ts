@@ -245,6 +245,7 @@ function expandTextContent(text: string): {
 export function normalizeMessage(message: unknown): NormalizedMessage {
   const m = message as Record<string, unknown>;
   let role = typeof m.role === "string" ? m.role : "unknown";
+  const model = typeof m.model === "string" ? m.model : null;
 
   // Detect tool messages by common gateway shapes.
   // Some tool events come through as assistant role with tool_* items in the content array.
@@ -391,15 +392,28 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     timestamp,
     id,
     senderLabel,
+    model,
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyTarget ? { replyTarget } : {}),
   };
 }
 
 /**
- * Normalize role for grouping purposes.
+ * Check if a message is a gateway-injected notification.
  */
-export function normalizeRoleForGrouping(role: string): string {
+export function isGatewayInjected(message: NormalizedMessage): boolean {
+  return message.model === "gateway-injected";
+}
+
+/**
+ * Normalize role for grouping purposes.
+ * If model is provided, gateway-injected messages get their own group.
+ */
+export function normalizeRoleForGrouping(role: string, model?: string | null): string {
+  // Gateway-injected messages get their own distinct group
+  if (model === "gateway-injected") {
+    return "gateway-injected";
+  }
   const lower = role.toLowerCase();
   // Preserve original casing when it's already a core role.
   if (role === "user" || role === "User") {

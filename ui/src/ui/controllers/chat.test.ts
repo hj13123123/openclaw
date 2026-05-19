@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../gateway.ts";
 import {
   abortChatRun,
+  areMessagesDuplicate,
   handleChatEvent,
   loadChatHistory,
   sendChatMessage,
@@ -109,7 +110,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Hello");
   });
 
-  it("appends final payload from another run without clearing active stream", () => {
+  it("does not append cross-run final payload (history merge is single source)", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-user",
@@ -125,12 +126,14 @@ describe("handleChatEvent", () => {
         content: [{ type: "text", text: "Sub-agent findings" }],
       },
     };
-    expect(handleChatEvent(state, payload)).toBe(null);
+    // Cross-run final returns "final" status but does NOT live append.
+    // Single source of truth is the subsequent history merge in app-gateway.
+    expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
     expect(state.chatStreamStartedAt).toBe(123);
-    expect(state.chatMessages).toHaveLength(1);
-    expect(state.chatMessages[0]).toEqual(payload.message);
+    // No live append - message comes from history merge instead
+    expect(state.chatMessages).toHaveLength(0);
   });
 
   it("drops NO_REPLY final payload from another run without clearing active stream", () => {
@@ -258,7 +261,7 @@ describe("handleChatEvent", () => {
       message: finalMsg,
     };
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([finalMsg]);
+    expect(state.chatMessages).toEqual([{ ...finalMsg, runId: "run-1" }]);
     expect(state.chatStream).toBe(null);
   });
 
@@ -280,7 +283,7 @@ describe("handleChatEvent", () => {
       },
     };
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([payload.message]);
+    expect(state.chatMessages).toEqual([{ ...(payload.message as object), runId: "run-1" }]);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
@@ -315,7 +318,7 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
-    expect(state.chatMessages).toEqual([existingMessage, partialMessage]);
+    expect(state.chatMessages).toEqual([existingMessage, { ...partialMessage, runId: "run-1" }]);
   });
 
   it("falls back to streamed partial when aborted payload message is invalid", () => {
@@ -348,6 +351,56 @@ describe("handleChatEvent", () => {
       role: "assistant",
       content: [{ type: "text", text: "Partial reply" }],
     });
+  });
+
+  it("dedupes messages with string content vs array content", () => {
+    // Live message: string content
+    const liveMessage = {
+      role: "assistant",
+      content: "Hello world",
+      runId: "run-live",
+    };
+    // History message: array content (same text, different structure)
+    const historyMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello world" }],
+      id: "msg-history-1",
+    };
+
+    // Same content, different structure should be detected as duplicate
+    expect(areMessagesDuplicate(liveMessage, historyMessage)).toBe(true);
+  });
+
+  it("dedupes messages with different whitespace but same text", () => {
+    const messageA = {
+      role: "assistant",
+      content: "Hello\n\nworld  test",
+      runId: "run-a",
+    };
+    const messageB = {
+      role: "assistant",
+      content: "Hello world test",
+      runId: "run-b",
+    };
+
+    // Same text, different whitespace should be detected as duplicate
+    expect(areMessagesDuplicate(messageA, messageB)).toBe(true);
+  });
+
+  it("does not dedupe messages with different content", () => {
+    const messageA = {
+      role: "assistant",
+      content: "Hello world",
+      runId: "run-a",
+    };
+    const messageB = {
+      role: "assistant",
+      content: "Different content",
+      runId: "run-b",
+    };
+
+    // Different content should not be detected as duplicate
+    expect(areMessagesDuplicate(messageA, messageB)).toBe(false);
   });
 
   it("falls back to streamed partial when aborted payload has non-assistant role", () => {
@@ -742,7 +795,7 @@ describe("loadChatHistory", () => {
 
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "main",
-      limit: 200,
+      limit: 500,
     });
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "visible answer" }] },

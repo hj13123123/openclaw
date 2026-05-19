@@ -171,6 +171,12 @@
   color: var(--muted);
 }
 
+.chat-avatar.gateway-injected {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
 /* Image avatar support */
 img.chat-avatar {
   display: block;
@@ -299,6 +305,19 @@ img.chat-avatar {
 
 .chat-bubble:hover {
   background: var(--bg-hover);
+}
+
+/* Gateway-injected notification bubbles */
+.chat-group.gateway-injected .chat-bubble {
+  background: var(--accent-subtle);
+  border-color: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-size: 13px;
+}
+
+:root[data-theme-mode="light"] .chat-group.gateway-injected .chat-bubble {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 /* User bubbles have different styling */

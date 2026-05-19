@@ -174,7 +174,9 @@ export function renderMessageGroup(
         ? assistantName
         : normalizedRole === "tool"
           ? "Tool"
-          : normalizedRole;
+          : normalizedRole === "gateway-injected"
+            ? "System"
+            : normalizedRole;
   const roleClass =
     normalizedRole === "user"
       ? "user"
@@ -182,7 +184,9 @@ export function renderMessageGroup(
         ? "assistant"
         : normalizedRole === "tool"
           ? "tool"
-          : "other";
+          : normalizedRole === "gateway-injected"
+            ? "gateway-injected"
+            : "other";
   const timestamp = new Date(group.timestamp).toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",

@@ -52,6 +52,7 @@ export type NormalizedMessage = {
   id?: string;
   senderLabel?: string | null;
   audioAsVoice?: boolean;
+  model?: string | null;
   replyTarget?:
     | {
         kind: "current";

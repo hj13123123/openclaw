@@ -1185,7 +1185,7 @@ export function renderChat(props: ChatProps) {
       @click=${handleCodeBlockCopy}
     >
       <div class="chat-thread-inner">
-        ${props.loading
+        ${props.loading && chatItems.length === 0
           ? html`
               <div class="chat-loading-skeleton" aria-label="Loading chat">
                 <div class="chat-line assistant">
@@ -1223,7 +1223,13 @@ export function renderChat(props: ChatProps) {
                 </div>
               </div>
             `
-          : nothing}
+          : props.loading
+            ? html`
+                <div style="padding: 8px 16px; text-align: center; font-size: 12px; color: var(--color-text-secondary, #888);">
+                  Loading history…
+                </div>
+              `
+            : nothing}
         ${isEmpty && !vs.searchOpen ? renderWelcomeState(props) : nothing}
         ${isEmpty && vs.searchOpen
           ? html` <div class="agent-chat__empty">No matching messages</div> `
@@ -1697,7 +1703,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
     }
 
     const normalized = normalizeMessage(item.message);
-    const role = normalizeRoleForGrouping(normalized.role);
+    const role = normalizeRoleForGrouping(normalized.role, normalized.model);
     const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
     const timestamp = normalized.timestamp || Date.now();
 

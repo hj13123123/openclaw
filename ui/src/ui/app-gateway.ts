@@ -90,6 +90,7 @@ type GatewayHost = {
   assistantAgentId: string | null;
   serverVersion: string | null;
   sessionKey: string;
+  chatLoading: boolean;
   chatRunId: string | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
@@ -275,6 +276,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
       (host as GatewayHostWithSideResults).chatSideResultTerminalRuns?.clear();
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+      host.chatLoading = false;
       if (shutdownHost.resumeChatQueueAfterReconnect) {
         // The interrupted run will never emit its terminal event now that the
         // old client is gone, so resume any deferred commands after hello.
@@ -376,11 +378,34 @@ function handleTerminalChatEvent(
   // Reload history when tools were used so the persisted tool results
   // replace the now-cleared streaming state.
   if (hadToolEvents && state === "final") {
+    const chatState = host as unknown as ChatState;
+    // Remove the live-appended final message before history merge.
+    // handleChatEvent already appended it, but history merge will bring
+    // the complete version including tool results. This prevents duplicate
+    // render from dual paths (live append + history merge).
+    chatState.chatMessages = chatState.chatMessages.filter((msg: unknown) => {
+      if (!msg || typeof msg !== "object") return true;
+      const m = msg as Record<string, unknown>;
+      // Keep all messages except the just-appended final message for this run
+      return !(
+        m.role === "assistant" &&
+        runId &&
+        m.runId === runId
+      );
+    });
+    // Clear tool stream BEFORE loading history to prevent duplicate render.
+    // If we wait until finally, the first render will show both:
+    // 1) chatToolMessages (live stream) + 2) chatMessages (persisted history)
+    // Finally block retains resetToolStream as a safety net only.
+    resetToolStream(toolHost);
     const completedRunId = runId ?? null;
-    void loadChatHistory(host as unknown as ChatState).finally(() => {
+    void loadChatHistory(chatState, { mode: "merge" }).finally(() => {
       if (completedRunId && host.chatRunId && host.chatRunId !== completedRunId) {
         return;
       }
+      // Safety net: re-clear in case any tool events arrived during the
+      // history load network round-trip. This should be a no-op under normal
+      // conditions since we already cleared above.
       resetToolStream(toolHost);
       flushQueue();
     });
@@ -409,8 +434,35 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
   const state = handleChatEvent(host as unknown as ChatState, payload);
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
-  if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
-    void loadChatHistory(host as unknown as ChatState);
+  // Skip redundant loadChatHistory when handleChatEvent already appended the
+  // final message to chatMessages (state === "final") and there were no tool
+  // events requiring server-persisted replacements (historyReloaded === false).
+  //
+  // Previously, shouldReloadHistoryForFinalEvent() returned true unconditionally
+  // for every final event, causing a redundant network request that cleared
+  // chatMessages and reloaded from the server — producing a visible flicker /
+  // intermittent content loss.  handleChatEvent already appends the correct
+  // message (from payload.message or chatStream), and tool-event reloads are
+  // handled by handleTerminalChatEvent.  The isCrossRunFinal path below still
+  // covers sub-agent announce cases.
+  //
+  // Retain loadChatHistory only when the final event has no message payload
+  // (edge cases: silent NO_REPLY, or final events without a message body).
+  if (state === "final" && !historyReloaded && !payload?.message) {
+    if (shouldReloadHistoryForFinalEvent(payload)) {
+      void loadChatHistory(host as unknown as ChatState, { mode: "merge" });
+    }
+  }
+  // Cross-run final events (e.g. sub-agent announce) are not live-appended by
+  // message in handleChatEvent but return null — no terminal reload is
+  // the single source of truth without clearing the active run.
+  const isCrossRunFinal =
+    payload?.state === "final" &&
+    payload?.runId &&
+    host.chatRunId &&
+    payload.runId !== host.chatRunId;
+  if (isCrossRunFinal && !historyReloaded) {
+    void loadChatHistory(host as unknown as ChatState, { mode: "merge" });
   }
 }
 
@@ -422,7 +474,7 @@ function handleSessionMessageGatewayEvent(
   if (!sessionKey || sessionKey !== host.sessionKey) {
     return;
   }
-  void loadChatHistory(host as unknown as ChatState);
+  void loadChatHistory(host as unknown as ChatState, { mode: "merge" });
 }
 
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {

@@ -29,6 +29,7 @@ describe("message-normalizer", () => {
         content: [{ type: "text", text: "Hello world" }],
         timestamp: 1000,
         id: "msg-1",
+        model: null,
         senderLabel: null,
       });
     });

@@ -139,7 +139,7 @@ describe("handleGatewayEvent session.message", () => {
     });
 
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
-    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host, { mode: "merge" });
   });
 
   it("ignores transcript updates for other sessions", () => {

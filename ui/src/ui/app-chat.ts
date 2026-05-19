@@ -432,7 +432,7 @@ async function clearChatHistory(host: ChatHost) {
     host.chatSideResultTerminalRuns?.clear();
     host.chatStream = null;
     host.chatRunId = null;
-    await loadChatHistory(host as unknown as ChatState);
+    await loadChatHistory(host as unknown as ChatState, { mode: "replace" });
   } catch (err) {
     host.lastError = String(err);
   }
@@ -452,7 +452,7 @@ function injectCommandResult(host: ChatHost, content: string) {
 
 export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
   await Promise.all([
-    loadChatHistory(host as unknown as ChatState),
+    loadChatHistory(host as unknown as ChatState, { mode: "merge" }),
     loadSessions(host as unknown as SessionsState, {
       activeMinutes: 0,
       limit: 0,
