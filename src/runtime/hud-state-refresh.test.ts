@@ -65,6 +65,34 @@ describe("HUD state refresh", () => {
       checkedAt: "2026-05-20T00:01:00.000Z",
       severity: "warning",
     });
+    writeJson(workspaceRoot, "runtime/main/tmp/mirror-observe-2026-05-20T00-01-30-000Z.json", {
+      taskId: "DOMAIN10-MIRROR-OBSERVE-ONLY-A",
+      mirrorId: "mirror-20260520-000130000Z",
+      generatedAt: "2026-05-20T00:01:30.000Z",
+      mode: "observe-only",
+      workspaceRoot,
+      outputFile: path.join(workspaceRoot, "runtime/main/tmp/mirror-observe-2026-05-20T00-01-30-000Z.json"),
+      observations: [],
+      findings: [],
+      stats: {
+        observationCount: 4,
+        findingCount: 4,
+        bySeverity: {
+          attention: 2,
+          info: 2,
+        },
+      },
+      constraintsVerified: {
+        MEMORYWritten: "no",
+        ENGINEERING_RULESWritten: "no",
+        skillLibraryWritten: "no",
+        caseLibraryWritten: "no",
+        promoted: "none",
+        autoLoopTriggered: "no",
+        applyPerformed: "no",
+      },
+      verdict: "PASS / MIRROR OBSERVE COMPLETE / NO APPLY OR PROMOTE PERFORMED",
+    });
 
     const result = writeHudStateSnapshot(workspaceRoot, "2026-05-20T00:02:00.000Z");
     const statePath = path.join(workspaceRoot, HUD_STATE_RELATIVE_PATH);
@@ -96,6 +124,19 @@ describe("HUD state refresh", () => {
         blocked: 1,
       },
       nextRunnable: ["c"],
+    });
+    expect(written.mirrorObserve).toMatchObject({
+      available: true,
+      reportPath: "runtime/main/tmp/mirror-observe-2026-05-20T00-01-30-000Z.json",
+      mirrorId: "mirror-20260520-000130000Z",
+      generatedAt: "2026-05-20T00:01:30.000Z",
+      mode: "observe-only",
+      constraintsVerified: {
+        MEMORYWritten: "no",
+        ENGINEERING_RULESWritten: "no",
+        promoted: "none",
+        applyPerformed: "no",
+      },
     });
   }));
 

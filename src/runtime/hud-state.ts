@@ -75,6 +75,21 @@ export interface HudTaskGraphItem {
   validationSeverity: string | null;
 }
 
+export interface HudMirrorObserveSummary {
+  available: boolean;
+  reportPath: string | null;
+  mirrorId: string | null;
+  generatedAt: string | null;
+  mode: string | null;
+  stats: {
+    observationCount: number;
+    findingCount: number;
+    bySeverity: Record<string, number>;
+  } | null;
+  constraintsVerified: Record<string, string> | null;
+  verdict: string | null;
+}
+
 export interface HudStateInput {
   generatedAt: string;
   positionStatesByAgentId?: Record<string, HudPositionState>;
@@ -83,6 +98,7 @@ export interface HudStateInput {
   lastCaseAt?: string | null;
   taskGraphItems?: HudTaskGraphItem[];
   taskGraphSourcePath?: string;
+  mirrorObserve?: HudMirrorObserveSummary;
   warnings?: string[];
   agentDefaults?: HudAgentDefault[];
 }
@@ -126,6 +142,7 @@ export interface HudState {
     sourcePath: string;
     items: HudTaskGraphItem[];
   };
+  mirrorObserve: HudMirrorObserveSummary;
   warnings: string[];
 }
 
@@ -271,6 +288,16 @@ export function generateHudState(input: HudStateInput): HudState {
       blocked: (input.taskGraphItems ?? []).filter((item) => item.aggregateStatus === "blocked").length,
       sourcePath: input.taskGraphSourcePath ?? "runtime/main/tmp/v2-task-graph-01/",
       items: taskGraphItems,
+    },
+    mirrorObserve: input.mirrorObserve ?? {
+      available: false,
+      reportPath: null,
+      mirrorId: null,
+      generatedAt: null,
+      mode: null,
+      stats: null,
+      constraintsVerified: null,
+      verdict: null,
     },
     warnings,
   };

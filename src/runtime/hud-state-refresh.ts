@@ -3,10 +3,17 @@ import path from "node:path";
 import {
   generateHudState,
   type HudPendingReturnItem,
+  type HudMirrorObserveSummary,
   type HudPositionState,
   type HudState,
   type HudTaskGraphItem,
 } from "./hud-state.js";
+import {
+  MIRROR_REPORT_DIR_RELATIVE_PATH,
+  MIRROR_REPORT_PREFIX,
+  summarizeMirrorObserve,
+  type MirrorObserveReport,
+} from "./mirror/mirror-observe.js";
 
 export const HUD_STATE_RELATIVE_PATH = "runtime/main/tmp/task-hud-state.json";
 const POSITIONS_STATE_REL = "system/positions/state";
@@ -14,6 +21,7 @@ const RETURNS_INBOX_REL = "system/returns/inbox";
 const CASE_LIBRARY_REL = "system/case-library";
 const TASK_GRAPH_SOURCE_REL = "runtime/main/tmp/v2-task-graph-01";
 const TASK_GRAPH_VALIDATION_REL = "runtime/main/tmp";
+const REPORT_FILE_SUFFIX = ".json";
 
 export interface HudStateRefreshResult {
   refreshed: true;
@@ -229,6 +237,65 @@ function readTaskGraphs(workspaceRoot: string, warnings: string[]): HudTaskGraph
     .filter((item): item is HudTaskGraphItem => item !== null);
 }
 
+function readLatestMirrorObserve(workspaceRoot: string, warnings: string[]): HudMirrorObserveSummary {
+  const reportDir = path.join(workspaceRoot, MIRROR_REPORT_DIR_RELATIVE_PATH);
+  if (!existsSync(reportDir)) {
+    return {
+      available: false,
+      reportPath: null,
+      mirrorId: null,
+      generatedAt: null,
+      mode: null,
+      stats: null,
+      constraintsVerified: null,
+      verdict: null,
+    };
+  }
+
+  const latestReport = listFiles(reportDir, (name) => name.startsWith(MIRROR_REPORT_PREFIX) && name.endsWith(REPORT_FILE_SUFFIX))
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+  if (!latestReport) {
+    return {
+      available: false,
+      reportPath: null,
+      mirrorId: null,
+      generatedAt: null,
+      mode: null,
+      stats: null,
+      constraintsVerified: null,
+      verdict: null,
+    };
+  }
+
+  const reportPath = path.relative(workspaceRoot, latestReport).replace(/\\/gu, "/");
+  try {
+    const report = JSON.parse(readFileSync(latestReport, "utf8")) as MirrorObserveReport;
+    const summary = summarizeMirrorObserve(report);
+    return {
+      available: true,
+      reportPath,
+      mirrorId: summary.mirrorId,
+      generatedAt: summary.generatedAt,
+      mode: summary.mode,
+      stats: summary.stats,
+      constraintsVerified: summary.constraintsVerified,
+      verdict: summary.verdict,
+    };
+  } catch {
+    warnings.push(`Failed to parse mirror observe report: ${path.basename(latestReport)}`);
+    return {
+      available: false,
+      reportPath,
+      mirrorId: null,
+      generatedAt: null,
+      mode: null,
+      stats: null,
+      constraintsVerified: null,
+      verdict: null,
+    };
+  }
+}
+
 export function generateHudStateFromWorkspace(workspaceRoot: string, generatedAt = new Date().toISOString()): HudState {
   const warnings: string[] = [];
   const { totalCaseFiles, lastCaseAt } = readCaseLibraryState(workspaceRoot, warnings);
@@ -240,6 +307,7 @@ export function generateHudStateFromWorkspace(workspaceRoot: string, generatedAt
     lastCaseAt,
     taskGraphItems: readTaskGraphs(workspaceRoot, warnings),
     taskGraphSourcePath: `${TASK_GRAPH_SOURCE_REL}/`,
+    mirrorObserve: readLatestMirrorObserve(workspaceRoot, warnings),
     warnings,
   });
 }

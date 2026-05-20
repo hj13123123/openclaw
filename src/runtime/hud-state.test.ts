@@ -117,4 +117,42 @@ describe("HUD state core", () => {
     expect(state.taskGraphs.blocked).toBe(1);
     expect(state.taskGraphs.items.map((item) => item.graphId)).toEqual(["graph-a", "graph-b", "graph-c", "graph-d", "graph-e"]);
   });
+
+  it("carries mirror observe visibility without changing global health", () => {
+    const state = generateHudState({
+      generatedAt,
+      mirrorObserve: {
+        available: true,
+        reportPath: "runtime/main/tmp/mirror-observe-a.json",
+        mirrorId: "mirror-a",
+        generatedAt,
+        mode: "observe-only",
+        stats: {
+          observationCount: 4,
+          findingCount: 4,
+          bySeverity: {
+            attention: 2,
+            info: 2,
+          },
+        },
+        constraintsVerified: {
+          promoted: "none",
+          applyPerformed: "no",
+        },
+        verdict: "PASS / MIRROR OBSERVE COMPLETE / NO APPLY OR PROMOTE PERFORMED",
+      },
+    });
+
+    expect(state.globalStatus.status).toBe("degraded");
+    expect(state.mirrorObserve).toMatchObject({
+      available: true,
+      reportPath: "runtime/main/tmp/mirror-observe-a.json",
+      mirrorId: "mirror-a",
+      mode: "observe-only",
+      constraintsVerified: {
+        promoted: "none",
+        applyPerformed: "no",
+      },
+    });
+  });
 });
