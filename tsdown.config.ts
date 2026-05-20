@@ -150,6 +150,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
     "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
+    "runtime/distillation/promote-gate-dry-run": "src/runtime/distillation/promote-gate-dry-run.ts",
     "runtime/kb-index-refresh": "src/runtime/kb-index-refresh.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
