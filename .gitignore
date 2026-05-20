@@ -150,3 +150,7 @@ test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
 extensions/qa-lab/web/dist/
+
+# Local runtime state and execution evidence
+evolution/runtime/dispatch-leases/*.json
+runtime/scheduler/*.json

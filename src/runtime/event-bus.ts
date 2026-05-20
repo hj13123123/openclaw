@@ -5,7 +5,16 @@ import path from "node:path";
 const EVENTS_REL = "runtime/events/events.jsonl";
 
 export const RUNTIME_EVENT_SOURCE_REGISTRY = {
-  "gateway-task-scheduler": ["scheduler_tick", "scheduler_tick_skipped", "scheduler_tick_completed", "scheduler_tick_failed"],
+  "gateway-task-scheduler": [
+    "scheduler_started",
+    "scheduler_state_changed",
+    "scheduler_tick",
+    "scheduler_tick_started",
+    "scheduler_tick_skipped",
+    "scheduler_tick_completed",
+    "scheduler_tick_failed",
+    "scheduler_max_ticks_reached",
+  ],
   "gateway-task-state-machine": ["task_reconciled", "task_state_reconcile_completed"],
   "gateway-policy-engine": ["policy_decision", "policy_evaluation_completed"],
   "gateway-policy-action-executor": ["policy_action_planned", "policy_action_skipped", "policy_action_dry_run_completed", "policy_action_executed_shadow", "policy_action_apply_shadow_completed", "policy_action_executed_copy", "policy_action_apply_copy_completed"],
