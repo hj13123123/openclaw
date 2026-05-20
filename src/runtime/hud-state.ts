@@ -122,7 +122,7 @@ export interface HudState {
   attentionQueue: unknown[];
   watchdogSnapshot: {
     totalAlerts: number;
-    byCondition: Record<string, never>;
+    byCondition: Record<string, number>;
     healthyCount: number;
     fixtureCount: 0;
   };
@@ -233,6 +233,36 @@ function buildAgentGroups(input: HudStateInput): HudAgentGroup[] {
   });
 }
 
+function numberFromRecord(record: Record<string, number> | undefined, key: string): number {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function buildWatchdogConditions(mirrorObserve: HudMirrorObserveSummary): Record<string, number> {
+  const byCondition: Record<string, number> = {};
+  const bySeverity = mirrorObserve.stats?.bySeverity;
+  const attentionCount = numberFromRecord(bySeverity, "attention");
+  const warningCount = numberFromRecord(bySeverity, "warning");
+  if (attentionCount > 0) byCondition.mirrorObserveAttention = attentionCount;
+  if (warningCount > 0) byCondition.mirrorObserveWarning = warningCount;
+
+  const constraints = mirrorObserve.constraintsVerified ?? {};
+  const expectedConstraints: Record<string, string> = {
+    MEMORYWritten: "no",
+    ENGINEERING_RULESWritten: "no",
+    skillLibraryWritten: "no",
+    caseLibraryWritten: "no",
+    promoted: "none",
+    autoLoopTriggered: "no",
+    applyPerformed: "no",
+  };
+  const violationCount = Object.entries(expectedConstraints)
+    .filter(([key, expected]) => constraints[key] !== undefined && constraints[key] !== expected)
+    .length;
+  if (violationCount > 0) byCondition.mirrorObserveConstraintViolation = violationCount;
+  return byCondition;
+}
+
 export function generateHudState(input: HudStateInput): HudState {
   const agentGroups = buildAgentGroups(input);
   const warnings = input.warnings ?? [];
@@ -242,6 +272,18 @@ export function generateHudState(input: HudStateInput): HudState {
   const completedCount = agentGroups.filter((agent) => agent.status === "completed").length;
   const failedCount = agentGroups.filter((agent) => agent.status === "failed").length;
   const alertCount = agentGroups.filter((agent) => agent.hasAlerts).length;
+  const mirrorObserve = input.mirrorObserve ?? {
+    available: false,
+    reportPath: null,
+    mirrorId: null,
+    generatedAt: null,
+    mode: null,
+    stats: null,
+    constraintsVerified: null,
+    verdict: null,
+  };
+  const watchdogConditions = buildWatchdogConditions(mirrorObserve);
+  const watchdogConditionAlertCount = Object.values(watchdogConditions).reduce((sum, count) => sum + count, 0);
 
   let globalStatus: HudState["globalStatus"]["status"] = "healthy";
   if (failedCount > 0 || pendingReturnItems.length > 0) {
@@ -268,8 +310,8 @@ export function generateHudState(input: HudStateInput): HudState {
     projectGroups: [],
     attentionQueue: [],
     watchdogSnapshot: {
-      totalAlerts: alertCount,
-      byCondition: {},
+      totalAlerts: alertCount + watchdogConditionAlertCount,
+      byCondition: watchdogConditions,
       healthyCount: agentGroups.filter((agent) => !agent.hasAlerts).length,
       fixtureCount: 0,
     },
@@ -289,16 +331,7 @@ export function generateHudState(input: HudStateInput): HudState {
       sourcePath: input.taskGraphSourcePath ?? "runtime/main/tmp/v2-task-graph-01/",
       items: taskGraphItems,
     },
-    mirrorObserve: input.mirrorObserve ?? {
-      available: false,
-      reportPath: null,
-      mirrorId: null,
-      generatedAt: null,
-      mode: null,
-      stats: null,
-      constraintsVerified: null,
-      verdict: null,
-    },
+    mirrorObserve,
     warnings,
   };
 }

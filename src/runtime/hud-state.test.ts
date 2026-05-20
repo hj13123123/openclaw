@@ -154,5 +154,44 @@ describe("HUD state core", () => {
         applyPerformed: "no",
       },
     });
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 2,
+      byCondition: {
+        mirrorObserveAttention: 2,
+      },
+    });
+  });
+
+  it("flags mirror observe constraint deviations in watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      mirrorObserve: {
+        available: true,
+        reportPath: "runtime/main/tmp/mirror-observe-a.json",
+        mirrorId: "mirror-a",
+        generatedAt,
+        mode: "observe-only",
+        stats: {
+          observationCount: 1,
+          findingCount: 1,
+          bySeverity: {
+            warning: 1,
+          },
+        },
+        constraintsVerified: {
+          promoted: "candidate-a",
+          applyPerformed: "yes",
+        },
+        verdict: "unexpected",
+      },
+    });
+
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 3,
+      byCondition: {
+        mirrorObserveWarning: 1,
+        mirrorObserveConstraintViolation: 2,
+      },
+    });
   });
 });

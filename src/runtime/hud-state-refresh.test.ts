@@ -138,6 +138,9 @@ describe("HUD state refresh", () => {
         applyPerformed: "no",
       },
     });
+    expect(written.watchdogSnapshot.byCondition).toMatchObject({
+      mirrorObserveAttention: 2,
+    });
   }));
 
   it("keeps missing optional runtime directories as warnings instead of throwing", () => withTempRoot((workspaceRoot) => {
