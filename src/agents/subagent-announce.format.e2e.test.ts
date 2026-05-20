@@ -191,6 +191,7 @@ vi.mock("./subagent-registry-runtime.js", () => subagentRegistryMock);
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
+  let subagentAnnounceTesting: (typeof import("./subagent-announce.js"))["__testing"];
 
   beforeAll(async () => {
     // Set FAST_TEST_MODE before importing the module to ensure the module-level
@@ -199,10 +200,13 @@ describe("subagent announce formatting", () => {
     // See: https://github.com/openclaw/openclaw/issues/31298
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+    ({ __testing: subagentAnnounceTesting, runSubagentAnnounceFlow } = await import(
+      "./subagent-announce.js"
+    ));
   });
 
   afterAll(() => {
+    subagentAnnounceTesting.setDepsForTest();
     subagentAnnounceDeliveryTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
     if (previousFastTestEnv === undefined) {
@@ -213,6 +217,9 @@ describe("subagent announce formatting", () => {
   });
 
   beforeEach(() => {
+    subagentAnnounceTesting.setDepsForTest({
+      resolveCompletionEventsDir: () => undefined,
+    });
     // OPENCLAW_TEST_FAST is set in beforeAll before module import
     // to ensure the module-level constant picks it up.
     agentSpy

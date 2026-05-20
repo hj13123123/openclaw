@@ -1,3 +1,7 @@
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
@@ -43,12 +47,53 @@ type SubagentAnnounceDeps = {
   callGateway: typeof callGateway;
   loadConfig: typeof loadConfig;
   loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
+  resolveCompletionEventsDir: () => string | undefined;
 };
+
+type SubagentCompletionEvent = {
+  type: "completion" | "completion_delivery" | "completion_failed";
+  childRunId: string;
+  childSessionKey: string;
+  announceId: string;
+  timestamp: string;
+  taskLabel?: string;
+  status?: SubagentRunOutcome["status"];
+  findings?: string;
+  internalEvents?: AgentInternalEvent[];
+  delivered?: boolean;
+  path?: string;
+  error?: string;
+};
+
+function resolveDefaultCompletionEventsDir(): string {
+  return path.join(os.homedir(), ".openclaw", "completions", "pending");
+}
+
+function sanitizeCompletionEventFilePart(value: string): string {
+  const sanitized = value.trim().replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 128);
+  return sanitized || "unknown";
+}
+
+async function writeSubagentCompletionEvent(event: SubagentCompletionEvent): Promise<void> {
+  try {
+    const completionsDir = subagentAnnounceDeps.resolveCompletionEventsDir();
+    if (!completionsDir) {
+      return;
+    }
+    await fs.mkdir(completionsDir, { recursive: true });
+    const filename = `${event.type}-${sanitizeCompletionEventFilePart(event.childRunId)}-${Date.now()}.json`;
+    const filePath = path.join(completionsDir, filename);
+    await fs.writeFile(filePath, `${JSON.stringify(event, null, 2)}\n`, "utf8");
+  } catch (err) {
+    defaultRuntime.error?.(`Failed to write subagent completion event: ${err}`);
+  }
+}
 
 const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
   callGateway,
   loadConfig,
   loadSubagentRegistryRuntime,
+  resolveCompletionEventsDir: resolveDefaultCompletionEventsDir,
 };
 
 let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
@@ -464,6 +509,19 @@ export async function runSubagentAnnounceFlow(params: {
         replyInstruction,
       },
     ];
+
+    await writeSubagentCompletionEvent({
+      type: "completion",
+      childRunId: params.childRunId,
+      childSessionKey: params.childSessionKey,
+      announceId,
+      taskLabel,
+      status: outcome.status,
+      findings,
+      internalEvents,
+      timestamp: new Date().toISOString(),
+    });
+
     const triggerMessage = buildAnnounceSteerMessage(internalEvents);
 
     // Send to the requester session. For nested subagents this is an internal
@@ -510,6 +568,18 @@ export async function runSubagentAnnounceFlow(params: {
       signal: params.signal,
     });
     didAnnounce = delivery.delivered;
+
+    await writeSubagentCompletionEvent({
+      type: delivery.delivered ? "completion_delivery" : "completion_failed",
+      childRunId: params.childRunId,
+      childSessionKey: params.childSessionKey,
+      announceId,
+      delivered: delivery.delivered,
+      path: delivery.path,
+      error: delivery.error,
+      timestamp: new Date().toISOString(),
+    });
+
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.error?.(
         `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,

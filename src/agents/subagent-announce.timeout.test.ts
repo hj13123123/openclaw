@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type GatewayCall = {
@@ -190,7 +190,7 @@ vi.mock("./subagent-announce.registry.runtime.js", () => ({
   replaceSubagentRunAfterSteer: () => true,
   resolveRequesterForChildSession: () => fallbackRequesterResolution,
 }));
-import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+import { __testing, runSubagentAnnounceFlow } from "./subagent-announce.js";
 type AnnounceFlowParams = Parameters<
   typeof import("./subagent-announce.js").runSubagentAnnounceFlow
 >[0];
@@ -257,6 +257,9 @@ function setupParentSessionFallback(parentSessionKey: string): void {
 
 describe("subagent announce timeout config", () => {
   beforeEach(() => {
+    __testing.setDepsForTest({
+      resolveCompletionEventsDir: () => undefined,
+    });
     gatewayCalls.length = 0;
     chatHistoryMessages = [];
     callGatewayImpl = async (request) => {
@@ -276,6 +279,10 @@ describe("subagent announce timeout config", () => {
     isEmbeddedPiRunActiveMock.mockReset().mockReturnValue(false);
     waitForEmbeddedPiRunEndMock.mockReset().mockResolvedValue(true);
     fallbackRequesterResolution = null;
+  });
+
+  afterEach(() => {
+    __testing.setDepsForTest();
   });
 
   it("uses 120s timeout by default for direct announce agent call", async () => {

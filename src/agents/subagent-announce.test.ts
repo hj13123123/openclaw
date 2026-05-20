@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
@@ -168,10 +172,16 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 }));
 
 vi.mock("./subagent-announce.registry.runtime.js", () => subagentRegistryRuntimeMock);
-import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+import { __testing, runSubagentAnnounceFlow } from "./subagent-announce.js";
 
 describe("subagent announce seam flow", () => {
-  beforeEach(() => {
+  let completionEventsDir = "";
+
+  beforeEach(async () => {
+    completionEventsDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-completion-events-"));
+    __testing.setDepsForTest({
+      resolveCompletionEventsDir: () => completionEventsDir,
+    });
     agentSpy.mockClear();
     sessionsDeleteSpy.mockClear();
     callGatewayMock.mockReset().mockImplementation(async (req: unknown) => {
@@ -224,6 +234,14 @@ describe("subagent announce seam flow", () => {
     subagentRegistryRuntimeMock.replaceSubagentRunAfterSteer.mockReturnValue(true);
     subagentRegistryRuntimeMock.resolveRequesterForChildSession.mockReset();
     subagentRegistryRuntimeMock.resolveRequesterForChildSession.mockReturnValue(null);
+  });
+
+  afterEach(async () => {
+    __testing.setDepsForTest();
+    if (completionEventsDir) {
+      await rm(completionEventsDir, { recursive: true, force: true });
+      completionEventsDir = "";
+    }
   });
 
   it("suppresses ANNOUNCE_SKIP delivery while still deleting the child session", async () => {
@@ -285,6 +303,51 @@ describe("subagent announce seam flow", () => {
       },
       timeoutMs: 10_000,
     });
+  });
+
+  it("writes restart-continuity completion and delivery events", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run:with:colon",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+    });
+
+    expect(didAnnounce).toBe(true);
+    const filenames = (await readdir(completionEventsDir)).sort();
+    expect(filenames).toHaveLength(2);
+    expect(filenames[0]).toMatch(/^completion-run_with_colon-\d+\.json$/);
+    expect(filenames[1]).toMatch(/^completion_delivery-run_with_colon-\d+\.json$/);
+
+    const events = await Promise.all(
+      filenames.map(async (filename) =>
+        JSON.parse(await readFile(path.join(completionEventsDir, filename), "utf8")),
+      ),
+    );
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "completion",
+        childRunId: "run:with:colon",
+        childSessionKey: "agent:main:subagent:test",
+        status: "ok",
+        findings: "done",
+      }),
+      expect.objectContaining({
+        type: "completion_delivery",
+        childRunId: "run:with:colon",
+        childSessionKey: "agent:main:subagent:test",
+        delivered: true,
+        path: "direct",
+      }),
+    ]);
   });
 
   it("uses origin.provider for channel-specific queue settings in active announce delivery", async () => {
