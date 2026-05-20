@@ -87,6 +87,9 @@ let controlUiModulePromise: Promise<typeof import("./control-ui.js")> | undefine
 let embeddingsHttpModulePromise: Promise<typeof import("./embeddings-http.js")> | undefined;
 let modelsHttpModulePromise: Promise<typeof import("./models-http.js")> | undefined;
 let mirrorApiModulePromise: Promise<typeof import("./server-mirror-api.js")> | undefined;
+let autoEvolutionApiModulePromise:
+  | Promise<typeof import("./server-auto-evolution-api.js")>
+  | undefined;
 let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefined;
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
 let hudApiModulePromise: Promise<typeof import("./server-hud-api.js")> | undefined;
@@ -126,6 +129,11 @@ function getModelsHttpModule() {
 function getMirrorApiModule() {
   mirrorApiModulePromise ??= import("./server-mirror-api.js");
   return mirrorApiModulePromise;
+}
+
+function getAutoEvolutionApiModule() {
+  autoEvolutionApiModulePromise ??= import("./server-auto-evolution-api.js");
+  return autoEvolutionApiModulePromise;
 }
 
 function getOpenAiHttpModule() {
@@ -276,6 +284,10 @@ function isPromoteGateStatePath(pathname: string): boolean {
 
 function isMirrorStatePath(pathname: string): boolean {
   return pathname === "/api/mirror/state" || pathname === "/api/mirror/observe";
+}
+
+function isAutoEvolutionStatePath(pathname: string): boolean {
+  return pathname === "/api/auto-evolution/state" || pathname === "/api/auto-evolution/observe";
 }
 
 function isSessionKillPath(pathname: string): boolean {
@@ -1014,6 +1026,16 @@ export function createGatewayHttpServer(opts: {
       }
       if (isMirrorStatePath(requestPath)) {
         const handled = await (await getMirrorApiModule()).handleMirrorHttpRequest(
+          req,
+          res,
+          hudWorkspaceRoot,
+        );
+        if (handled) {
+          return;
+        }
+      }
+      if (isAutoEvolutionStatePath(requestPath)) {
+        const handled = await (await getAutoEvolutionApiModule()).handleAutoEvolutionHttpRequest(
           req,
           res,
           hudWorkspaceRoot,
