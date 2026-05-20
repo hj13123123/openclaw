@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { getRecentEvents } from "../runtime/event-bus.js";
+import { writeHudStateSnapshot } from "../runtime/hud-state-refresh.js";
 import { getTaskState } from "../runtime/task-state-machine.js";
 import { sendJson } from "./http-common.js";
 
@@ -341,30 +342,51 @@ export async function handleHudStateHttpRequest(
   }
 
   try {
-    execSync(
-      `powershell -NoProfile -ExecutionPolicy Bypass -File "${hudRefreshScriptPath}"`,
-      {
-        cwd: workspaceRoot,
-        encoding: "utf8",
-        stdio: "pipe",
-      },
-    );
-    const state = JSON.parse(await readFile(hudStatePath, "utf8")) as {
-      generatedAt?: string;
-      warnings?: unknown;
-    };
-    const warnings = Array.isArray(state.warnings) ? state.warnings : [];
+    const result = writeHudStateSnapshot(workspaceRoot);
     sendJson(res, 200, {
       refreshed: true,
-      generatedAt: state.generatedAt ?? null,
-      statePath: HUD_STATE_RELATIVE_PATH,
-      warnings,
+      generatedAt: result.generatedAt,
+      statePath: result.statePath,
+      warnings: result.warnings,
+      refreshMode: "runtime",
     });
-  } catch (error) {
-    sendJson(res, 500, {
-      refreshed: false,
-      error: `任务看板刷新失败：${error instanceof Error ? error.message : String(error)}`,
-    });
+  } catch (runtimeError) {
+    if (!existsSync(hudRefreshScriptPath)) {
+      sendJson(res, 500, {
+        refreshed: false,
+        error: `任务看板刷新失败：${runtimeError instanceof Error ? runtimeError.message : String(runtimeError)}`,
+      });
+      return true;
+    }
+
+    try {
+      execSync(
+        `powershell -NoProfile -ExecutionPolicy Bypass -File "${hudRefreshScriptPath}"`,
+        {
+          cwd: workspaceRoot,
+          encoding: "utf8",
+          stdio: "pipe",
+        },
+      );
+      const state = JSON.parse(await readFile(hudStatePath, "utf8")) as {
+        generatedAt?: string;
+        warnings?: unknown;
+      };
+      const warnings = Array.isArray(state.warnings) ? state.warnings : [];
+      sendJson(res, 200, {
+        refreshed: true,
+        generatedAt: state.generatedAt ?? null,
+        statePath: HUD_STATE_RELATIVE_PATH,
+        warnings,
+        refreshMode: "powershell_fallback",
+      });
+    } catch (fallbackError) {
+      sendJson(res, 500, {
+        refreshed: false,
+        error: `任务看板刷新失败：${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
+        runtimeError: runtimeError instanceof Error ? runtimeError.message : String(runtimeError),
+      });
+    }
   }
   return true;
 }

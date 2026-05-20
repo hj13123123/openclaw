@@ -1,0 +1,113 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { HUD_STATE_RELATIVE_PATH, writeHudStateSnapshot } from "./hud-state-refresh.js";
+
+function withTempRoot<T>(fn: (workspaceRoot: string) => T): T {
+  const workspaceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-hud-refresh-"));
+  try {
+    return fn(workspaceRoot);
+  } finally {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  }
+}
+
+function writeJson(workspaceRoot: string, relativePath: string, value: unknown): void {
+  const filePath = path.join(workspaceRoot, relativePath);
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+describe("HUD state refresh", () => {
+  it("generates and writes HUD state from workspace files", () => withTempRoot((workspaceRoot) => {
+    writeJson(workspaceRoot, "system/positions/state/main_workspace-main.json", {
+      agentId: "main",
+      status: "running",
+      currentTask: "TASK-MAIN",
+      progressPct: 25,
+      updatedAt: "2026-05-20T00:00:00.000Z",
+    });
+    writeJson(workspaceRoot, "system/positions/state/engineering-executive_workspace-main.json", {
+      agentId: "engineering-executive",
+      status: "idle",
+      progressPct: 100,
+    });
+    writeJson(workspaceRoot, "system/returns/inbox/return-a.json", {
+      routing: {
+        taskId: "TASK-A",
+        sourceRole: "engineering-executive",
+        action: "complete",
+      },
+      outcome: {
+        summary: "return summary",
+      },
+    });
+    writeJson(workspaceRoot, "system/returns/inbox/return.mock.skip.json", {
+      taskId: "MOCK",
+    });
+    writeJson(workspaceRoot, "system/case-library/case-a.json", {
+      caseId: "case-a",
+    });
+    writeJson(workspaceRoot, "runtime/main/tmp/v2-task-graph-01/task-graph-a.json", {
+      graphId: "graph-a",
+      title: "Graph A",
+      aggregateStatus: "blocked",
+      nodes: [
+        { nodeId: "a", status: "completed" },
+        { nodeId: "b", status: "blocked" },
+      ],
+      blockers: [{ nodeId: "b", reason: "unit test" }],
+      nextRunnable: ["c"],
+    });
+    writeJson(workspaceRoot, "runtime/main/tmp/task-graph-validation-a.json", {
+      graphId: "graph-a",
+      checkedAt: "2026-05-20T00:01:00.000Z",
+      severity: "warning",
+    });
+
+    const result = writeHudStateSnapshot(workspaceRoot, "2026-05-20T00:02:00.000Z");
+    const statePath = path.join(workspaceRoot, HUD_STATE_RELATIVE_PATH);
+    const written = JSON.parse(readFileSync(statePath, "utf8")) as typeof result.state;
+
+    expect(existsSync(statePath)).toBe(true);
+    expect(result.statePath).toBe(HUD_STATE_RELATIVE_PATH);
+    expect(written.generator).toBe("runtime-hud-state");
+    expect(written.globalStatus.status).toBe("attention_required");
+    expect(written.returnInbox.pendingCount).toBe(1);
+    expect(written.returnInbox.pendingItems[0]).toMatchObject({
+      returnId: "return-a.json",
+      taskId: "TASK-A",
+      sourceRole: "engineering-executive",
+      summary: "return summary",
+    });
+    expect(written.caseLibrary.totalCases).toBe(1);
+    expect(written.taskGraphs).toMatchObject({
+      total: 1,
+      active: 1,
+      blocked: 1,
+    });
+    expect(written.taskGraphs.items[0]).toMatchObject({
+      graphId: "graph-a",
+      validationSeverity: "warning",
+      nodeSummary: {
+        total: 2,
+        completed: 1,
+        blocked: 1,
+      },
+      nextRunnable: ["c"],
+    });
+  }));
+
+  it("keeps missing optional runtime directories as warnings instead of throwing", () => withTempRoot((workspaceRoot) => {
+    const result = writeHudStateSnapshot(workspaceRoot, "2026-05-20T00:03:00.000Z");
+
+    expect(result.refreshed).toBe(true);
+    expect(result.state.globalStatus.status).toBe("degraded");
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      "case library directory missing",
+      "positions state directory missing",
+      "return inbox directory missing",
+    ]));
+  }));
+});
