@@ -99,7 +99,8 @@ export function resolveReturnConsumerWorkspaceRoot(cfg: OpenClawConfig): string 
   );
 }
 
-function processReturnInbox(workspaceRoot: string, log: ReturnConsumerLog): void {
+export function processReturnInbox(workspaceRoot: string, log: ReturnConsumerLog): ProcessResult[] {
+  ensureReturnConsumerDirs(workspaceRoot);
   const lock = tryAcquireLock(workspaceRoot);
   if (!lock.acquired) {
     writeWarning(workspaceRoot, {
@@ -108,7 +109,7 @@ function processReturnInbox(workspaceRoot: string, log: ReturnConsumerLog): void
       reason: "lock-held",
       lockPath: lock.lockPath,
     });
-    return;
+    return [];
   }
 
   const results: ProcessResult[] = [];
@@ -135,9 +136,17 @@ function processReturnInbox(workspaceRoot: string, log: ReturnConsumerLog): void
       const skipped = results.length - processed;
       log.info(`[return-consumer] processed=${processed} skipped=${skipped}`);
     }
+    return results;
   } finally {
     releaseLock(lock.lockPath);
   }
+}
+
+function ensureReturnConsumerDirs(workspaceRoot: string): void {
+  fs.mkdirSync(path.join(workspaceRoot, "system", "returns", "inbox"), { recursive: true });
+  fs.mkdirSync(path.join(workspaceRoot, "system", "returns", "processed"), { recursive: true });
+  fs.mkdirSync(path.join(workspaceRoot, "runtime", "main", "tmp"), { recursive: true });
+  fs.mkdirSync(path.join(workspaceRoot, "runtime", "notifications", "inbox"), { recursive: true });
 }
 
 function processReturnFile(workspaceRoot: string, fileName: string): ProcessResult {
