@@ -90,6 +90,7 @@ let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefi
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
 let hudApiModulePromise: Promise<typeof import("./server-hud-api.js")> | undefined;
 let kbApiModulePromise: Promise<typeof import("./server-kb-api.js")> | undefined;
+let promoteGateApiModulePromise: Promise<typeof import("./server-promote-gate-api.js")> | undefined;
 let sessionHistoryHttpModulePromise:
   | Promise<typeof import("./sessions-history-http.js")>
   | undefined;
@@ -139,6 +140,11 @@ function getHudApiModule() {
 function getKbApiModule() {
   kbApiModulePromise ??= import("./server-kb-api.js");
   return kbApiModulePromise;
+}
+
+function getPromoteGateApiModule() {
+  promoteGateApiModulePromise ??= import("./server-promote-gate-api.js");
+  return promoteGateApiModulePromise;
 }
 
 function getSessionHistoryHttpModule() {
@@ -256,6 +262,10 @@ function isHudStatePath(pathname: string): boolean {
 
 function isKbStatePath(pathname: string): boolean {
   return pathname === "/api/kb/state" || pathname === "/api/kb/refresh";
+}
+
+function isPromoteGateStatePath(pathname: string): boolean {
+  return pathname === "/api/promote-gate/state" || pathname === "/api/promote-gate/dry-run";
 }
 
 function isSessionKillPath(pathname: string): boolean {
@@ -974,6 +984,16 @@ export function createGatewayHttpServer(opts: {
       }
       if (isKbStatePath(requestPath)) {
         const handled = await (await getKbApiModule()).handleKbHttpRequest(
+          req,
+          res,
+          hudWorkspaceRoot,
+        );
+        if (handled) {
+          return;
+        }
+      }
+      if (isPromoteGateStatePath(requestPath)) {
+        const handled = await (await getPromoteGateApiModule()).handlePromoteGateHttpRequest(
           req,
           res,
           hudWorkspaceRoot,
