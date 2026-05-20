@@ -151,6 +151,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
     "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
     "runtime/distillation/promote-gate-dry-run": "src/runtime/distillation/promote-gate-dry-run.ts",
+    "runtime/evolution/auto-evolution-observe": "src/runtime/evolution/auto-evolution-observe.ts",
     "runtime/kb-index-refresh": "src/runtime/kb-index-refresh.ts",
     "runtime/mirror/mirror-observe": "src/runtime/mirror/mirror-observe.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
