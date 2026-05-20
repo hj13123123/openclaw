@@ -89,6 +89,7 @@ let modelsHttpModulePromise: Promise<typeof import("./models-http.js")> | undefi
 let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefined;
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
 let hudApiModulePromise: Promise<typeof import("./server-hud-api.js")> | undefined;
+let kbApiModulePromise: Promise<typeof import("./server-kb-api.js")> | undefined;
 let sessionHistoryHttpModulePromise:
   | Promise<typeof import("./sessions-history-http.js")>
   | undefined;
@@ -133,6 +134,11 @@ function getOpenResponsesHttpModule() {
 function getHudApiModule() {
   hudApiModulePromise ??= import("./server-hud-api.js");
   return hudApiModulePromise;
+}
+
+function getKbApiModule() {
+  kbApiModulePromise ??= import("./server-kb-api.js");
+  return kbApiModulePromise;
 }
 
 function getSessionHistoryHttpModule() {
@@ -246,6 +252,10 @@ function isHudStatePath(pathname: string): boolean {
     || pathname === "/api/hud/policy-state"
     || pathname === "/api/hud/policy-actions"
     || pathname === "/api/hud/runtime-loop";
+}
+
+function isKbStatePath(pathname: string): boolean {
+  return pathname === "/api/kb/state" || pathname === "/api/kb/refresh";
 }
 
 function isSessionKillPath(pathname: string): boolean {
@@ -954,6 +964,16 @@ export function createGatewayHttpServer(opts: {
       }
       if (isHudStatePath(requestPath)) {
         const handled = await (await getHudApiModule()).handleHudStateHttpRequest(
+          req,
+          res,
+          hudWorkspaceRoot,
+        );
+        if (handled) {
+          return;
+        }
+      }
+      if (isKbStatePath(requestPath)) {
+        const handled = await (await getKbApiModule()).handleKbHttpRequest(
           req,
           res,
           hudWorkspaceRoot,
