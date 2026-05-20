@@ -12,11 +12,11 @@ const DISPATCH_PLAN_REL = "runtime/dispatch/dispatch-plan.jsonl";
 const DEFAULT_LIMIT = 3;
 
 type DispatchBlockedReason =
-  | "stale_queued_batch_completed"
   | "status_completed"
   | "status_blocked_by_policy"
   | "status_deferred"
   | "status_quarantined"
+  | "status_not_queued"
   | "missing_source_role"
   | "missing_policy_decision"
   | "missing_risk_level"
@@ -179,8 +179,8 @@ function policyAction(task: LooseTaskRecord): string | undefined {
   return undefined;
 }
 
-function isStaleQueuedBatch6(task: LooseTaskRecord): boolean {
-  return typeof task.taskId === "string" && task.status === "queued" && task.taskId.startsWith("P1-BATCH6-");
+function isDispatchCandidate(task: LooseTaskRecord): boolean {
+  return task.status === "queued";
 }
 
 function planTask(task: LooseTaskRecord, executedTaskIds: Set<string>): DispatchPlanItem | null {
@@ -191,10 +191,6 @@ function planTask(task: LooseTaskRecord, executedTaskIds: Set<string>): Dispatch
     riskLevel: policyRisk(task) ?? "N/A",
     policyAction: policyAction(task) ?? "N/A",
   };
-
-  if (isStaleQueuedBatch6(task)) {
-    return { ...base, wouldDispatch: false, blockedReason: "stale_queued_batch_completed" };
-  }
 
   if (isHardBlocked(task)) return null;
 
@@ -211,6 +207,7 @@ function planTask(task: LooseTaskRecord, executedTaskIds: Set<string>): Dispatch
       break;
   }
 
+  if (!isDispatchCandidate(task)) return { ...base, wouldDispatch: false, blockedReason: "status_not_queued" };
   if (!task.sourceRole) return { ...base, wouldDispatch: false, blockedReason: "missing_source_role" };
   if (!task.policyDecision) return { ...base, wouldDispatch: false, blockedReason: "missing_policy_decision" };
 
@@ -233,12 +230,12 @@ export function generateDispatchPlan(workspaceRoot: string, limit = DEFAULT_LIMI
   const tasks = readJsonlTasks(workspaceRoot);
   const executedTaskIds = readExecutedTaskIds(workspaceRoot);
   const hardBlocked = tasks
-    .filter((task) => typeof task.taskId === "string" && /^(EP-8|EP-9|A1.*)$/u.test(task.taskId))
+    .filter((task) => typeof task.taskId === "string" && isHardBlocked(task))
     .map((task) => task.taskId as string)
     .filter((taskId, index, all) => all.indexOf(taskId) === index);
 
-  const staleQueued = tasks.filter(isStaleQueuedBatch6).slice(0, Math.max(0, Math.floor(limit)));
-  const items = staleQueued
+  const candidates = tasks.filter(isDispatchCandidate).slice(0, Math.max(0, Math.floor(limit)));
+  const items = candidates
     .map((task) => planTask(task, executedTaskIds))
     .filter((item): item is DispatchPlanItem => item !== null);
 

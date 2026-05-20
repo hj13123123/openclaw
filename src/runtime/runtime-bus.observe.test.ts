@@ -86,9 +86,10 @@ describe("runtime bus observe-only validation", () => {
     expect(state.tasks.map((item) => [item.taskId, item.status])).toContainEqual(["TASK-1", "completed"]);
   }));
 
-  it("keeps auto-dispatch in dry-run and only records stale batch-6 candidates", () => withTempRoot((workspaceRoot) => {
-    appendTask(workspaceRoot, task("P1-BATCH6-A", "queued", { policyDecision: autoCloseDecision }));
-    appendTask(workspaceRoot, task("NORMAL-QUEUED", "queued", { policyDecision: autoCloseDecision }));
+  it("keeps auto-dispatch in dry-run and records generic queued candidates", () => withTempRoot((workspaceRoot) => {
+    appendTask(workspaceRoot, task("GENERIC-QUEUED-A", "queued", { policyDecision: autoCloseDecision }));
+    appendTask(workspaceRoot, task("GENERIC-QUEUED-B", "queued", { policyDecision: autoCloseDecision }));
+    appendTask(workspaceRoot, task("COMPLETED-A", "completed", { policyDecision: autoCloseDecision }));
 
     const plan = runAutoDispatcherDryRun(workspaceRoot, 5);
     const planPath = path.join(workspaceRoot, "runtime", "dispatch", "dispatch-plan.jsonl");
@@ -96,12 +97,15 @@ describe("runtime bus observe-only validation", () => {
     expect(plan.mode).toBe("dry_run");
     expect(plan.items).toEqual([
       expect.objectContaining({
-        taskId: "P1-BATCH6-A",
-        wouldDispatch: false,
-        blockedReason: "stale_queued_batch_completed",
+        taskId: "GENERIC-QUEUED-A",
+        wouldDispatch: true,
+      }),
+      expect.objectContaining({
+        taskId: "GENERIC-QUEUED-B",
+        wouldDispatch: true,
       }),
     ]);
-    expect(plan.candidates).toMatchObject({ total: 1, eligible: 0, skipped: 1, wouldDispatch: 0 });
+    expect(plan.candidates).toMatchObject({ total: 2, eligible: 2, skipped: 0, wouldDispatch: 2 });
     expect(readJsonl(planPath)).toHaveLength(1);
     expect(getRecentEvents(workspaceRoot, 2).map((event) => event.eventType)).toContain("dispatch_plan_completed");
     expect(generateDispatchPlan(workspaceRoot, 0).items).toEqual([]);
