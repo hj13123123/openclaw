@@ -86,6 +86,7 @@ let identityAvatarModulePromise: Promise<typeof import("../agents/identity-avata
 let controlUiModulePromise: Promise<typeof import("./control-ui.js")> | undefined;
 let embeddingsHttpModulePromise: Promise<typeof import("./embeddings-http.js")> | undefined;
 let modelsHttpModulePromise: Promise<typeof import("./models-http.js")> | undefined;
+let mirrorApiModulePromise: Promise<typeof import("./server-mirror-api.js")> | undefined;
 let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefined;
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
 let hudApiModulePromise: Promise<typeof import("./server-hud-api.js")> | undefined;
@@ -120,6 +121,11 @@ function getEmbeddingsHttpModule() {
 function getModelsHttpModule() {
   modelsHttpModulePromise ??= import("./models-http.js");
   return modelsHttpModulePromise;
+}
+
+function getMirrorApiModule() {
+  mirrorApiModulePromise ??= import("./server-mirror-api.js");
+  return mirrorApiModulePromise;
 }
 
 function getOpenAiHttpModule() {
@@ -266,6 +272,10 @@ function isKbStatePath(pathname: string): boolean {
 
 function isPromoteGateStatePath(pathname: string): boolean {
   return pathname === "/api/promote-gate/state" || pathname === "/api/promote-gate/dry-run";
+}
+
+function isMirrorStatePath(pathname: string): boolean {
+  return pathname === "/api/mirror/state" || pathname === "/api/mirror/observe";
 }
 
 function isSessionKillPath(pathname: string): boolean {
@@ -994,6 +1004,16 @@ export function createGatewayHttpServer(opts: {
       }
       if (isPromoteGateStatePath(requestPath)) {
         const handled = await (await getPromoteGateApiModule()).handlePromoteGateHttpRequest(
+          req,
+          res,
+          hudWorkspaceRoot,
+        );
+        if (handled) {
+          return;
+        }
+      }
+      if (isMirrorStatePath(requestPath)) {
+        const handled = await (await getMirrorApiModule()).handleMirrorHttpRequest(
           req,
           res,
           hudWorkspaceRoot,
