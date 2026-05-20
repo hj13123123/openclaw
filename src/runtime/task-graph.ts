@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+
 export const TASK_GRAPH_STATUSES = [
   "planned",
   "ready",
@@ -91,6 +94,44 @@ export interface TaskGraphReconcileResult {
   blockedNodeIds: string[];
 }
 
+export const TASK_GRAPH_SOURCE_RELATIVE_PATH = "runtime/main/tmp/v2-task-graph-01";
+export const TASK_GRAPH_VALIDATION_REPORT_DIR_RELATIVE_PATH = "runtime/main/tmp";
+export const TASK_GRAPH_VALIDATION_REPORT_PREFIX = "task-graph-validation-";
+
+export type TaskGraphValidationReportSeverity = "pass" | "warning" | "error";
+
+export interface TaskGraphValidationReport {
+  reportId: string;
+  graphId: string | null;
+  graphPath: string;
+  checkedAt: string;
+  status: "PASS" | "FAIL";
+  severity: TaskGraphValidationReportSeverity;
+  valid: boolean;
+  errors: TaskGraphValidationIssue[];
+  warnings: TaskGraphValidationIssue[];
+  calculatedAggregateStatus: TaskGraphStatus;
+  calculatedNextRunnable: string[];
+  calculatedBlockers: TaskGraphBlocker[];
+  mode: "observe-only";
+  wouldDispatch: false;
+  applied: false;
+}
+
+export interface TaskGraphValidationObserveOptions {
+  checkedAt?: string;
+  writeReports?: boolean;
+  graphFiles?: string[];
+}
+
+export interface TaskGraphValidationObserveResult {
+  workspaceRoot: string;
+  sourceDir: string;
+  reportDir: string;
+  reports: TaskGraphValidationReport[];
+  writtenReportPaths: string[];
+}
+
 const BLOCKING_STATUSES = new Set<TaskGraphStatus>(["blocked", "failed", "cancelled"]);
 const ACTIVE_STATUSES = new Set<TaskGraphStatus>(["dispatched", "running", "returned", "review_pending"]);
 const DISPATCHABLE_STATUSES = new Set<TaskGraphStatus>(["planned", "ready"]);
@@ -111,6 +152,24 @@ function jsonType(value: unknown): string {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function safeFileSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/gu, "_").slice(0, 120) || "unknown";
+}
+
+function checkedAtFileSegment(checkedAt: string): string {
+  return safeFileSegment(checkedAt.replace(/[:]/gu, "-"));
+}
+
+function parseIssue(filePath: string, error: unknown): TaskGraphValidationIssue {
+  return issue({
+    check: "json_parse",
+    field: "$",
+    expected: "valid JSON task graph",
+    actual: error instanceof Error ? error.message : String(error),
+    message: `Failed to parse task graph JSON: ${filePath}`,
+  });
 }
 
 export function isTaskGraphStatus(value: unknown): value is TaskGraphStatus {
@@ -449,5 +508,106 @@ export function reconcileTaskGraph(graph: TaskGraph, nowIso = new Date().toISOSt
     },
     changedNodeIds,
     blockedNodeIds,
+  };
+}
+
+export function listTaskGraphFiles(workspaceRoot: string): string[] {
+  const sourceDir = path.join(workspaceRoot, TASK_GRAPH_SOURCE_RELATIVE_PATH);
+  try {
+    if (!existsSync(sourceDir)) return [];
+    return readdirSync(sourceDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /^task-graph-.*\.json$/u.test(entry.name))
+      .map((entry) => path.join(sourceDir, entry.name))
+      .sort((a, b) => a.localeCompare(b));
+  } catch {
+    return [];
+  }
+}
+
+export function validateTaskGraphFile(filePath: string, checkedAt = new Date().toISOString()): TaskGraphValidationReport {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(filePath, "utf8")) as unknown;
+  } catch (error) {
+    const errors = [parseIssue(filePath, error)];
+    return {
+      reportId: `${TASK_GRAPH_VALIDATION_REPORT_PREFIX}unknown-${checkedAtFileSegment(checkedAt)}`,
+      graphId: null,
+      graphPath: filePath,
+      checkedAt,
+      status: "FAIL",
+      severity: "error",
+      valid: false,
+      errors,
+      warnings: [],
+      calculatedAggregateStatus: "planned",
+      calculatedNextRunnable: [],
+      calculatedBlockers: [],
+      mode: "observe-only",
+      wouldDispatch: false,
+      applied: false,
+    };
+  }
+
+  const validation = validateTaskGraph(parsed);
+  const graphId = isRecord(parsed) && isNonEmptyString(parsed.graphId) ? parsed.graphId : null;
+  const severity: TaskGraphValidationReportSeverity = validation.errors.length > 0
+    ? "error"
+    : validation.warnings.length > 0
+      ? "warning"
+      : "pass";
+
+  return {
+    reportId: `${TASK_GRAPH_VALIDATION_REPORT_PREFIX}${safeFileSegment(graphId ?? "unknown")}-${checkedAtFileSegment(checkedAt)}`,
+    graphId,
+    graphPath: filePath,
+    checkedAt,
+    status: validation.valid ? "PASS" : "FAIL",
+    severity,
+    valid: validation.valid,
+    errors: validation.errors,
+    warnings: validation.warnings,
+    calculatedAggregateStatus: validation.calculatedAggregateStatus,
+    calculatedNextRunnable: validation.calculatedNextRunnable,
+    calculatedBlockers: validation.calculatedBlockers,
+    mode: "observe-only",
+    wouldDispatch: false,
+    applied: false,
+  };
+}
+
+export function taskGraphValidationReportPath(workspaceRoot: string, report: Pick<TaskGraphValidationReport, "graphId" | "checkedAt">): string {
+  const graphSegment = safeFileSegment(report.graphId ?? "unknown");
+  return path.join(
+    workspaceRoot,
+    TASK_GRAPH_VALIDATION_REPORT_DIR_RELATIVE_PATH,
+    `${TASK_GRAPH_VALIDATION_REPORT_PREFIX}${graphSegment}-${checkedAtFileSegment(report.checkedAt)}.json`,
+  );
+}
+
+export function writeTaskGraphValidationReport(workspaceRoot: string, report: TaskGraphValidationReport): string {
+  const reportPath = taskGraphValidationReportPath(workspaceRoot, report);
+  mkdirSync(path.dirname(reportPath), { recursive: true });
+  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  return reportPath;
+}
+
+export function runTaskGraphValidationObserve(
+  workspaceRoot: string,
+  options: TaskGraphValidationObserveOptions = {},
+): TaskGraphValidationObserveResult {
+  const checkedAt = options.checkedAt ?? new Date().toISOString();
+  const graphFiles = options.graphFiles ?? listTaskGraphFiles(workspaceRoot);
+  const reports = graphFiles.map((filePath) => validateTaskGraphFile(filePath, checkedAt));
+  const writtenReportPaths = options.writeReports
+    ? reports.map((report) => writeTaskGraphValidationReport(workspaceRoot, report))
+    : [];
+
+  return {
+    workspaceRoot,
+    sourceDir: path.join(workspaceRoot, TASK_GRAPH_SOURCE_RELATIVE_PATH),
+    reportDir: path.join(workspaceRoot, TASK_GRAPH_VALIDATION_REPORT_DIR_RELATIVE_PATH),
+    reports,
+    writtenReportPaths,
   };
 }

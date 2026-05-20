@@ -1,8 +1,17 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  TASK_GRAPH_SOURCE_RELATIVE_PATH,
+  listTaskGraphFiles,
   reconcileTaskGraph,
   resolveTaskGraphNextRunnable,
+  runTaskGraphValidationObserve,
+  taskGraphValidationReportPath,
   validateTaskGraph,
+  validateTaskGraphFile,
+  writeTaskGraphValidationReport,
   type TaskGraph,
   type TaskGraphNode,
   type TaskGraphStatus,
@@ -43,6 +52,20 @@ function graph(overrides: Partial<TaskGraph> = {}): TaskGraph {
     updatedAt: timestamp,
     ...overrides,
   };
+}
+
+function withTempWorkspace<T>(callback: (workspaceRoot: string) => T): T {
+  const workspaceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-task-graph-"));
+  try {
+    return callback(workspaceRoot);
+  } finally {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  }
+}
+
+function writeJson(filePath: string, value: unknown): void {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 describe("task graph core", () => {
@@ -131,5 +154,95 @@ describe("task graph core", () => {
       "edge_reference",
       "aggregate_status",
     ]));
+  });
+
+  it("lists workspace task graph files and returns an observe-only pass report", () => {
+    withTempWorkspace((workspaceRoot) => {
+      const graphPath = path.join(workspaceRoot, TASK_GRAPH_SOURCE_RELATIVE_PATH, "task-graph-a.json");
+      writeJson(graphPath, graph({
+        nodes: [
+          node("a", "completed"),
+          node("b", "planned", { dependsOn: ["a"] }),
+        ],
+        edges: [{ from: "a", to: "b", type: "hard" }],
+      }));
+
+      expect(listTaskGraphFiles(workspaceRoot)).toEqual([graphPath]);
+
+      const report = validateTaskGraphFile(graphPath, timestamp);
+      expect(report).toMatchObject({
+        graphId: "graph-a",
+        graphPath,
+        checkedAt: timestamp,
+        status: "PASS",
+        severity: "pass",
+        valid: true,
+        mode: "observe-only",
+        wouldDispatch: false,
+        applied: false,
+        calculatedNextRunnable: ["b"],
+      });
+      expect(report.errors).toEqual([]);
+    });
+  });
+
+  it("writes validation reports without mutating the source graph", () => {
+    withTempWorkspace((workspaceRoot) => {
+      const graphPath = path.join(workspaceRoot, TASK_GRAPH_SOURCE_RELATIVE_PATH, "task-graph-a.json");
+      const sourceGraph = graph();
+      writeJson(graphPath, sourceGraph);
+
+      const result = runTaskGraphValidationObserve(workspaceRoot, { checkedAt: timestamp, writeReports: true });
+      expect(result.reports).toHaveLength(1);
+      expect(result.writtenReportPaths).toEqual([taskGraphValidationReportPath(workspaceRoot, result.reports[0])]);
+
+      const writtenReport = JSON.parse(readFileSync(result.writtenReportPaths[0], "utf8")) as Record<string, unknown>;
+      expect(writtenReport).toMatchObject({
+        graphId: "graph-a",
+        checkedAt: timestamp,
+        severity: "pass",
+        mode: "observe-only",
+        wouldDispatch: false,
+        applied: false,
+      });
+      expect(JSON.parse(readFileSync(graphPath, "utf8"))).toEqual(sourceGraph);
+    });
+  });
+
+  it("reports malformed graph files as ambiguous observe failures", () => {
+    withTempWorkspace((workspaceRoot) => {
+      const graphPath = path.join(workspaceRoot, TASK_GRAPH_SOURCE_RELATIVE_PATH, "task-graph-bad.json");
+      mkdirSync(path.dirname(graphPath), { recursive: true });
+      writeFileSync(graphPath, "{ not json", "utf8");
+
+      const report = validateTaskGraphFile(graphPath, timestamp);
+      expect(report.graphId).toBeNull();
+      expect(report.status).toBe("FAIL");
+      expect(report.severity).toBe("error");
+      expect(report.valid).toBe(false);
+      expect(report.mode).toBe("observe-only");
+      expect(report.wouldDispatch).toBe(false);
+      expect(report.applied).toBe(false);
+      expect(report.errors.map((error) => error.check)).toEqual(["json_parse"]);
+    });
+  });
+
+  it("can write a single validation report path for HUD consumption", () => {
+    withTempWorkspace((workspaceRoot) => {
+      const graphPath = path.join(workspaceRoot, TASK_GRAPH_SOURCE_RELATIVE_PATH, "task-graph-a.json");
+      writeJson(graphPath, graph());
+
+      const report = validateTaskGraphFile(graphPath, timestamp);
+      const reportPath = writeTaskGraphValidationReport(workspaceRoot, report);
+
+      expect(reportPath).toBe(path.join(
+        workspaceRoot,
+        "runtime/main/tmp/task-graph-validation-graph-a-2026-05-20T00-00-00.000Z.json",
+      ));
+      const persisted = JSON.parse(readFileSync(reportPath, "utf8")) as Record<string, unknown>;
+      expect(persisted.graphId).toBe("graph-a");
+      expect(persisted.checkedAt).toBe(timestamp);
+      expect(persisted.severity).toBe("pass");
+    });
   });
 });
