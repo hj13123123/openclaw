@@ -21,13 +21,18 @@ import {
   summarizeAutoEvolutionObserve,
   type AutoEvolutionObserveReport,
 } from "./evolution/auto-evolution-observe.js";
+import {
+  TASK_GRAPH_SOURCE_RELATIVE_PATH,
+  TASK_GRAPH_VALIDATION_REPORT_DIR_RELATIVE_PATH,
+  runTaskGraphValidationObserve,
+} from "./task-graph.js";
 
 export const HUD_STATE_RELATIVE_PATH = "runtime/main/tmp/task-hud-state.json";
 const POSITIONS_STATE_REL = "system/positions/state";
 const RETURNS_INBOX_REL = "system/returns/inbox";
 const CASE_LIBRARY_REL = "system/case-library";
-const TASK_GRAPH_SOURCE_REL = "runtime/main/tmp/v2-task-graph-01";
-const TASK_GRAPH_VALIDATION_REL = "runtime/main/tmp";
+const TASK_GRAPH_SOURCE_REL = TASK_GRAPH_SOURCE_RELATIVE_PATH;
+const TASK_GRAPH_VALIDATION_REL = TASK_GRAPH_VALIDATION_REPORT_DIR_RELATIVE_PATH;
 const REPORT_FILE_SUFFIX = ".json";
 
 export interface HudStateRefreshResult {
@@ -244,6 +249,15 @@ function readTaskGraphs(workspaceRoot: string, warnings: string[]): HudTaskGraph
     .filter((item): item is HudTaskGraphItem => item !== null);
 }
 
+function refreshTaskGraphValidationReports(workspaceRoot: string, checkedAt: string, warnings: string[]): void {
+  try {
+    runTaskGraphValidationObserve(workspaceRoot, { checkedAt, writeReports: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    warnings.push(`Failed to refresh task graph validation reports: ${message}`);
+  }
+}
+
 function readLatestMirrorObserve(workspaceRoot: string, warnings: string[]): HudMirrorObserveSummary {
   const reportDir = path.join(workspaceRoot, MIRROR_REPORT_DIR_RELATIVE_PATH);
   if (!existsSync(reportDir)) {
@@ -360,6 +374,7 @@ function readLatestAutoEvolutionObserve(workspaceRoot: string, warnings: string[
 
 export function generateHudStateFromWorkspace(workspaceRoot: string, generatedAt = new Date().toISOString()): HudState {
   const warnings: string[] = [];
+  refreshTaskGraphValidationReports(workspaceRoot, generatedAt, warnings);
   const { totalCaseFiles, lastCaseAt } = readCaseLibraryState(workspaceRoot, warnings);
   return generateHudState({
     generatedAt,

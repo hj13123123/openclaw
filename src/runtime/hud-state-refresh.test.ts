@@ -51,19 +51,45 @@ describe("HUD state refresh", () => {
     });
     writeJson(workspaceRoot, "runtime/main/tmp/v2-task-graph-01/task-graph-a.json", {
       graphId: "graph-a",
+      parentTaskId: "TASK-PARENT",
       title: "Graph A",
+      status: "blocked",
       aggregateStatus: "blocked",
       nodes: [
-        { nodeId: "a", status: "completed" },
-        { nodeId: "b", status: "blocked" },
+        {
+          nodeId: "a",
+          role: "engineering-executive",
+          taskId: "TASK-A",
+          description: "Task A",
+          dependsOn: [],
+          status: "completed",
+          runId: null,
+          sessionKey: null,
+          returnId: null,
+          humanGateRequired: false,
+          createdAt: "2026-05-20T00:00:00.000Z",
+          updatedAt: "2026-05-20T00:00:00.000Z",
+        },
+        {
+          nodeId: "b",
+          role: "engineering-executive",
+          taskId: "TASK-B",
+          description: "Task B",
+          dependsOn: [],
+          status: "blocked",
+          runId: null,
+          sessionKey: null,
+          returnId: null,
+          humanGateRequired: false,
+          createdAt: "2026-05-20T00:00:00.000Z",
+          updatedAt: "2026-05-20T00:00:00.000Z",
+        },
       ],
+      edges: [],
       blockers: [{ nodeId: "b", reason: "unit test" }],
       nextRunnable: ["c"],
-    });
-    writeJson(workspaceRoot, "runtime/main/tmp/task-graph-validation-a.json", {
-      graphId: "graph-a",
-      checkedAt: "2026-05-20T00:01:00.000Z",
-      severity: "warning",
+      createdAt: "2026-05-20T00:00:00.000Z",
+      updatedAt: "2026-05-20T00:00:00.000Z",
     });
     writeJson(workspaceRoot, "runtime/main/tmp/mirror-observe-2026-05-20T00-01-30-000Z.json", {
       taskId: "DOMAIN10-MIRROR-OBSERVE-ONLY-A",
@@ -157,7 +183,8 @@ describe("HUD state refresh", () => {
     });
     expect(written.taskGraphs.items[0]).toMatchObject({
       graphId: "graph-a",
-      validationSeverity: "warning",
+      lastValidatedAt: "2026-05-20T00:02:00.000Z",
+      validationSeverity: "pass",
       nodeSummary: {
         total: 2,
         completed: 1,
