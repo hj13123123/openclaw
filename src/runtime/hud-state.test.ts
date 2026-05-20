@@ -194,4 +194,89 @@ describe("HUD state core", () => {
       },
     });
   });
+
+  it("carries auto-evolution observe visibility and watchdog priorities", () => {
+    const state = generateHudState({
+      generatedAt,
+      autoEvolutionObserve: {
+        available: true,
+        reportPath: "runtime/main/tmp/auto-evolution-observe-a.json",
+        generatedAt,
+        mode: "observe-only",
+        stats: {
+          totalSuggestions: 3,
+          byPriority: {
+            P1: 2,
+            P2: 1,
+          },
+          bySource: {
+            mirror: 1,
+            promote_gate: 1,
+            hud: 1,
+          },
+        },
+        constraintsVerified: {
+          MEMORYWritten: "no",
+          ENGINEERING_RULESWritten: "no",
+          codeWritten: "no",
+          promoted: "none",
+          applyPerformed: "no",
+          autoEvolutionApplied: "no",
+          continuousAutoLoopTriggered: "no",
+        },
+        verdict: "PASS / AUTO-EVOLUTION OBSERVE COMPLETE / NO APPLY OR PROMOTE PERFORMED",
+      },
+    });
+
+    expect(state.autoEvolutionObserve).toMatchObject({
+      available: true,
+      reportPath: "runtime/main/tmp/auto-evolution-observe-a.json",
+      mode: "observe-only",
+      stats: {
+        totalSuggestions: 3,
+      },
+    });
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 2,
+      byCondition: {
+        autoEvolutionObserveP1: 2,
+      },
+    });
+  });
+
+  it("flags auto-evolution constraint deviations in watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      autoEvolutionObserve: {
+        available: true,
+        reportPath: "runtime/main/tmp/auto-evolution-observe-a.json",
+        generatedAt,
+        mode: "observe-only",
+        stats: {
+          totalSuggestions: 1,
+          byPriority: {
+            P0: 1,
+          },
+          bySource: {
+            runtime_loop: 1,
+          },
+        },
+        constraintsVerified: {
+          codeWritten: "yes",
+          promoted: "candidate-a",
+          autoEvolutionApplied: "yes",
+          continuousAutoLoopTriggered: "yes",
+        },
+        verdict: "unexpected",
+      },
+    });
+
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 5,
+      byCondition: {
+        autoEvolutionObserveP0: 1,
+        autoEvolutionObserveConstraintViolation: 4,
+      },
+    });
+  });
 });

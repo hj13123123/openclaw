@@ -90,6 +90,20 @@ export interface HudMirrorObserveSummary {
   verdict: string | null;
 }
 
+export interface HudAutoEvolutionObserveSummary {
+  available: boolean;
+  reportPath: string | null;
+  generatedAt: string | null;
+  mode: string | null;
+  stats: {
+    totalSuggestions: number;
+    byPriority: Record<string, number>;
+    bySource: Record<string, number>;
+  } | null;
+  constraintsVerified: Record<string, string> | null;
+  verdict: string | null;
+}
+
 export interface HudStateInput {
   generatedAt: string;
   positionStatesByAgentId?: Record<string, HudPositionState>;
@@ -99,6 +113,7 @@ export interface HudStateInput {
   taskGraphItems?: HudTaskGraphItem[];
   taskGraphSourcePath?: string;
   mirrorObserve?: HudMirrorObserveSummary;
+  autoEvolutionObserve?: HudAutoEvolutionObserveSummary;
   warnings?: string[];
   agentDefaults?: HudAgentDefault[];
 }
@@ -143,6 +158,7 @@ export interface HudState {
     items: HudTaskGraphItem[];
   };
   mirrorObserve: HudMirrorObserveSummary;
+  autoEvolutionObserve: HudAutoEvolutionObserveSummary;
   warnings: string[];
 }
 
@@ -238,7 +254,35 @@ function numberFromRecord(record: Record<string, number> | undefined, key: strin
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
-function buildWatchdogConditions(mirrorObserve: HudMirrorObserveSummary): Record<string, number> {
+function defaultMirrorObserveSummary(): HudMirrorObserveSummary {
+  return {
+    available: false,
+    reportPath: null,
+    mirrorId: null,
+    generatedAt: null,
+    mode: null,
+    stats: null,
+    constraintsVerified: null,
+    verdict: null,
+  };
+}
+
+function defaultAutoEvolutionObserveSummary(): HudAutoEvolutionObserveSummary {
+  return {
+    available: false,
+    reportPath: null,
+    generatedAt: null,
+    mode: null,
+    stats: null,
+    constraintsVerified: null,
+    verdict: null,
+  };
+}
+
+function buildWatchdogConditions(
+  mirrorObserve: HudMirrorObserveSummary,
+  autoEvolutionObserve: HudAutoEvolutionObserveSummary,
+): Record<string, number> {
   const byCondition: Record<string, number> = {};
   const bySeverity = mirrorObserve.stats?.bySeverity;
   const attentionCount = numberFromRecord(bySeverity, "attention");
@@ -260,6 +304,31 @@ function buildWatchdogConditions(mirrorObserve: HudMirrorObserveSummary): Record
     .filter(([key, expected]) => constraints[key] !== undefined && constraints[key] !== expected)
     .length;
   if (violationCount > 0) byCondition.mirrorObserveConstraintViolation = violationCount;
+
+  const byPriority = autoEvolutionObserve.stats?.byPriority;
+  const p0Count = numberFromRecord(byPriority, "P0");
+  const p1Count = numberFromRecord(byPriority, "P1");
+  if (p0Count > 0) byCondition.autoEvolutionObserveP0 = p0Count;
+  if (p1Count > 0) byCondition.autoEvolutionObserveP1 = p1Count;
+
+  const evolutionConstraints = autoEvolutionObserve.constraintsVerified ?? {};
+  const expectedEvolutionConstraints: Record<string, string> = {
+    MEMORYWritten: "no",
+    ENGINEERING_RULESWritten: "no",
+    codeWritten: "no",
+    skillLibraryWritten: "no",
+    caseLibraryWritten: "no",
+    promoted: "none",
+    applyPerformed: "no",
+    autoEvolutionApplied: "no",
+    continuousAutoLoopTriggered: "no",
+  };
+  const evolutionViolationCount = Object.entries(expectedEvolutionConstraints)
+    .filter(([key, expected]) => evolutionConstraints[key] !== undefined && evolutionConstraints[key] !== expected)
+    .length;
+  if (evolutionViolationCount > 0) {
+    byCondition.autoEvolutionObserveConstraintViolation = evolutionViolationCount;
+  }
   return byCondition;
 }
 
@@ -272,17 +341,9 @@ export function generateHudState(input: HudStateInput): HudState {
   const completedCount = agentGroups.filter((agent) => agent.status === "completed").length;
   const failedCount = agentGroups.filter((agent) => agent.status === "failed").length;
   const alertCount = agentGroups.filter((agent) => agent.hasAlerts).length;
-  const mirrorObserve = input.mirrorObserve ?? {
-    available: false,
-    reportPath: null,
-    mirrorId: null,
-    generatedAt: null,
-    mode: null,
-    stats: null,
-    constraintsVerified: null,
-    verdict: null,
-  };
-  const watchdogConditions = buildWatchdogConditions(mirrorObserve);
+  const mirrorObserve = input.mirrorObserve ?? defaultMirrorObserveSummary();
+  const autoEvolutionObserve = input.autoEvolutionObserve ?? defaultAutoEvolutionObserveSummary();
+  const watchdogConditions = buildWatchdogConditions(mirrorObserve, autoEvolutionObserve);
   const watchdogConditionAlertCount = Object.values(watchdogConditions).reduce((sum, count) => sum + count, 0);
 
   let globalStatus: HudState["globalStatus"]["status"] = "healthy";
@@ -332,6 +393,7 @@ export function generateHudState(input: HudStateInput): HudState {
       items: taskGraphItems,
     },
     mirrorObserve,
+    autoEvolutionObserve,
     warnings,
   };
 }

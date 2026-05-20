@@ -93,6 +93,46 @@ describe("HUD state refresh", () => {
       },
       verdict: "PASS / MIRROR OBSERVE COMPLETE / NO APPLY OR PROMOTE PERFORMED",
     });
+    writeJson(workspaceRoot, "runtime/main/tmp/auto-evolution-observe-2026-05-20T00-01-40-000Z.json", {
+      taskId: "DOMAIN11-AUTO-EVOLUTION-OBSERVE-ONLY-A",
+      generatedAt: "2026-05-20T00:01:40.000Z",
+      status: "PASS",
+      mode: "observe-only",
+      workspaceRoot,
+      outputFile: path.join(workspaceRoot, "runtime/main/tmp/auto-evolution-observe-2026-05-20T00-01-40-000Z.json"),
+      stats: {
+        totalSuggestions: 3,
+        byPriority: {
+          P1: 2,
+          P2: 1,
+        },
+        bySource: {
+          mirror: 1,
+          promote_gate: 1,
+          hud: 1,
+        },
+      },
+      inputs: {
+        mirrorReportPath: "runtime/main/tmp/mirror-observe-2026-05-20T00-01-30-000Z.json",
+        promoteGateReportPath: null,
+        hudStatePath: "runtime/main/tmp/task-hud-state.json",
+        kbIndexPath: null,
+        runtimeLoopStatePath: null,
+      },
+      suggestions: [],
+      constraintsVerified: {
+        MEMORYWritten: "no",
+        ENGINEERING_RULESWritten: "no",
+        codeWritten: "no",
+        skillLibraryWritten: "no",
+        caseLibraryWritten: "no",
+        promoted: "none",
+        applyPerformed: "no",
+        autoEvolutionApplied: "no",
+        continuousAutoLoopTriggered: "no",
+      },
+      verdict: "PASS / AUTO-EVOLUTION OBSERVE COMPLETE / NO APPLY OR PROMOTE PERFORMED",
+    });
 
     const result = writeHudStateSnapshot(workspaceRoot, "2026-05-20T00:02:00.000Z");
     const statePath = path.join(workspaceRoot, HUD_STATE_RELATIVE_PATH);
@@ -138,8 +178,31 @@ describe("HUD state refresh", () => {
         applyPerformed: "no",
       },
     });
+    expect(written.autoEvolutionObserve).toMatchObject({
+      available: true,
+      reportPath: "runtime/main/tmp/auto-evolution-observe-2026-05-20T00-01-40-000Z.json",
+      generatedAt: "2026-05-20T00:01:40.000Z",
+      mode: "observe-only",
+      stats: {
+        totalSuggestions: 3,
+        byPriority: {
+          P1: 2,
+          P2: 1,
+        },
+      },
+      constraintsVerified: {
+        MEMORYWritten: "no",
+        ENGINEERING_RULESWritten: "no",
+        codeWritten: "no",
+        promoted: "none",
+        applyPerformed: "no",
+        autoEvolutionApplied: "no",
+        continuousAutoLoopTriggered: "no",
+      },
+    });
     expect(written.watchdogSnapshot.byCondition).toMatchObject({
       mirrorObserveAttention: 2,
+      autoEvolutionObserveP1: 2,
     });
   }));
 

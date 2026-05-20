@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import path from "node:path";
 import {
   generateHudState,
+  type HudAutoEvolutionObserveSummary,
   type HudPendingReturnItem,
   type HudMirrorObserveSummary,
   type HudPositionState,
@@ -14,6 +15,12 @@ import {
   summarizeMirrorObserve,
   type MirrorObserveReport,
 } from "./mirror/mirror-observe.js";
+import {
+  AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH,
+  AUTO_EVOLUTION_REPORT_PREFIX,
+  summarizeAutoEvolutionObserve,
+  type AutoEvolutionObserveReport,
+} from "./evolution/auto-evolution-observe.js";
 
 export const HUD_STATE_RELATIVE_PATH = "runtime/main/tmp/task-hud-state.json";
 const POSITIONS_STATE_REL = "system/positions/state";
@@ -296,6 +303,61 @@ function readLatestMirrorObserve(workspaceRoot: string, warnings: string[]): Hud
   }
 }
 
+function readLatestAutoEvolutionObserve(workspaceRoot: string, warnings: string[]): HudAutoEvolutionObserveSummary {
+  const reportDir = path.join(workspaceRoot, AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH);
+  if (!existsSync(reportDir)) {
+    return {
+      available: false,
+      reportPath: null,
+      generatedAt: null,
+      mode: null,
+      stats: null,
+      constraintsVerified: null,
+      verdict: null,
+    };
+  }
+
+  const latestReport = listFiles(reportDir, (name) => name.startsWith(AUTO_EVOLUTION_REPORT_PREFIX) && name.endsWith(REPORT_FILE_SUFFIX))
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+  if (!latestReport) {
+    return {
+      available: false,
+      reportPath: null,
+      generatedAt: null,
+      mode: null,
+      stats: null,
+      constraintsVerified: null,
+      verdict: null,
+    };
+  }
+
+  const reportPath = path.relative(workspaceRoot, latestReport).replace(/\\/gu, "/");
+  try {
+    const report = JSON.parse(readFileSync(latestReport, "utf8")) as AutoEvolutionObserveReport;
+    const summary = summarizeAutoEvolutionObserve(report);
+    return {
+      available: true,
+      reportPath,
+      generatedAt: summary.generatedAt,
+      mode: summary.mode,
+      stats: summary.stats,
+      constraintsVerified: summary.constraintsVerified,
+      verdict: summary.verdict,
+    };
+  } catch {
+    warnings.push(`Failed to parse auto-evolution observe report: ${path.basename(latestReport)}`);
+    return {
+      available: false,
+      reportPath,
+      generatedAt: null,
+      mode: null,
+      stats: null,
+      constraintsVerified: null,
+      verdict: null,
+    };
+  }
+}
+
 export function generateHudStateFromWorkspace(workspaceRoot: string, generatedAt = new Date().toISOString()): HudState {
   const warnings: string[] = [];
   const { totalCaseFiles, lastCaseAt } = readCaseLibraryState(workspaceRoot, warnings);
@@ -308,6 +370,7 @@ export function generateHudStateFromWorkspace(workspaceRoot: string, generatedAt
     taskGraphItems: readTaskGraphs(workspaceRoot, warnings),
     taskGraphSourcePath: `${TASK_GRAPH_SOURCE_REL}/`,
     mirrorObserve: readLatestMirrorObserve(workspaceRoot, warnings),
+    autoEvolutionObserve: readLatestAutoEvolutionObserve(workspaceRoot, warnings),
     warnings,
   });
 }
