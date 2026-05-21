@@ -118,6 +118,26 @@ describe("HUD state core", () => {
     expect(state.taskGraphs.items.map((item) => item.graphId)).toEqual(["graph-a", "graph-b", "graph-c", "graph-d", "graph-e"]);
   });
 
+  it("aggregates task graph validation severity into watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      taskGraphItems: [
+        taskGraph({ graphId: "graph-a", validationSeverity: "pass" }),
+        taskGraph({ graphId: "graph-b", validationSeverity: "warning" }),
+        taskGraph({ graphId: "graph-c", validationSeverity: "error" }),
+        taskGraph({ graphId: "graph-d", validationSeverity: "error" }),
+      ],
+    });
+
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 3,
+      byCondition: {
+        taskGraphValidationWarning: 1,
+        taskGraphValidationError: 2,
+      },
+    });
+  });
+
   it("carries mirror observe visibility without changing global health", () => {
     const state = generateHudState({
       generatedAt,

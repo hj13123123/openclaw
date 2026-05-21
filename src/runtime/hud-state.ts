@@ -282,8 +282,14 @@ function defaultAutoEvolutionObserveSummary(): HudAutoEvolutionObserveSummary {
 function buildWatchdogConditions(
   mirrorObserve: HudMirrorObserveSummary,
   autoEvolutionObserve: HudAutoEvolutionObserveSummary,
+  taskGraphItems: readonly HudTaskGraphItem[],
 ): Record<string, number> {
   const byCondition: Record<string, number> = {};
+  const taskGraphValidationErrorCount = taskGraphItems.filter((item) => item.validationSeverity === "error").length;
+  const taskGraphValidationWarningCount = taskGraphItems.filter((item) => item.validationSeverity === "warning").length;
+  if (taskGraphValidationErrorCount > 0) byCondition.taskGraphValidationError = taskGraphValidationErrorCount;
+  if (taskGraphValidationWarningCount > 0) byCondition.taskGraphValidationWarning = taskGraphValidationWarningCount;
+
   const bySeverity = mirrorObserve.stats?.bySeverity;
   const attentionCount = numberFromRecord(bySeverity, "attention");
   const warningCount = numberFromRecord(bySeverity, "warning");
@@ -343,7 +349,7 @@ export function generateHudState(input: HudStateInput): HudState {
   const alertCount = agentGroups.filter((agent) => agent.hasAlerts).length;
   const mirrorObserve = input.mirrorObserve ?? defaultMirrorObserveSummary();
   const autoEvolutionObserve = input.autoEvolutionObserve ?? defaultAutoEvolutionObserveSummary();
-  const watchdogConditions = buildWatchdogConditions(mirrorObserve, autoEvolutionObserve);
+  const watchdogConditions = buildWatchdogConditions(mirrorObserve, autoEvolutionObserve, taskGraphItems);
   const watchdogConditionAlertCount = Object.values(watchdogConditions).reduce((sum, count) => sum + count, 0);
 
   let globalStatus: HudState["globalStatus"]["status"] = "healthy";
