@@ -54,6 +54,31 @@ type TaskGraphItem = {
   };
   blockers?: Array<{ nodeId?: string; reason?: string }>;
   nextRunnable?: string[];
+  lastValidatedAt?: string | null;
+  validationSeverity?: string | null;
+};
+
+type TaskGraphValidationIssue = {
+  check?: string;
+  field?: string;
+  message?: string;
+};
+
+type TaskGraphValidationReport = {
+  graphId?: string | null;
+  checkedAt?: string | null;
+  status?: string;
+  severity?: string;
+  errors?: TaskGraphValidationIssue[];
+  warnings?: TaskGraphValidationIssue[];
+};
+
+type TaskGraphValidationState = {
+  available?: boolean;
+  total?: number;
+  valid?: boolean;
+  bySeverity?: Record<string, number>;
+  reports?: TaskGraphValidationReport[];
 };
 
 type RecentCompletionItem = {
@@ -234,6 +259,7 @@ export class TaskHUD extends LitElement {
   @state() private scheduler: SchedulerState | null = null;
   @state() private events: RuntimeEvent[] = [];
   @state() private taskState: TaskStateData | null = null;
+  @state() private taskGraphValidation: TaskGraphValidationState | null = null;
   @state() private policy: PolicyStateData | null = null;
   @state() private refreshing = false;
 
@@ -526,6 +552,7 @@ export class TaskHUD extends LitElement {
         this.fetchHudState(),
         this.fetchSchedulerState(),
         this.fetchTaskState(),
+        this.fetchTaskGraphValidation(),
         this.fetchPolicyState(),
       ]);
     } finally {
@@ -565,6 +592,15 @@ export class TaskHUD extends LitElement {
       this.taskState = response.ok ? ((await response.json()) as TaskStateData) : null;
     } catch {
       this.taskState = null;
+    }
+  }
+
+  private async fetchTaskGraphValidation() {
+    try {
+      const response = await fetch("/api/task-graph/validation");
+      this.taskGraphValidation = response.ok ? ((await response.json()) as TaskGraphValidationState) : null;
+    } catch {
+      this.taskGraphValidation = null;
     }
   }
 
@@ -733,14 +769,35 @@ export class TaskHUD extends LitElement {
     `;
   }
 
+  private findTaskGraphValidation(graphId: string | null | undefined): TaskGraphValidationReport | null {
+    if (!graphId) return null;
+    return this.taskGraphValidation?.reports?.find((report) => report.graphId === graphId) ?? null;
+  }
+
   private renderTaskGraphs(graphs: TaskGraphItem[]) {
+    const validationSummary = this.taskGraphValidation;
     return html`
       <section class="section">
         <h4 class="section-title">任务图</h4>
+        ${validationSummary?.available
+          ? html`
+              <div class="row">
+                <div>
+                  <div class="primary">任务图验真</div>
+                  <div class="secondary">总数 ${validationSummary.total ?? 0} · 错误 ${validationSummary.bySeverity?.error ?? 0} · 警告 ${validationSummary.bySeverity?.warning ?? 0}</div>
+                </div>
+                <span class="badge">${validationSummary.valid ? "通过" : "需关注"}</span>
+              </div>
+            `
+          : nothing}
         ${graphs.length === 0
           ? html`<div class="empty">暂无任务图</div>`
-          : graphs.slice(0, 4).map(
-              (graph) => html`
+          : graphs.slice(0, 4).map((graph) => {
+              const validation = this.findTaskGraphValidation(graph.graphId);
+              const severity = validation?.severity ?? graph.validationSeverity ?? null;
+              const issueCount = (validation?.errors?.length ?? 0) + (validation?.warnings?.length ?? 0);
+              const validatedAt = validation?.checkedAt ?? graph.lastValidatedAt;
+              return html`
                 <div class="row">
                   <div>
                     <div class="primary">${truncate(graph.title ?? graph.graphId)}</div>
@@ -748,11 +805,14 @@ export class TaskHUD extends LitElement {
                       总数 ${graph.nodeSummary?.total ?? 0} · 完成 ${graph.nodeSummary?.completed ?? 0} · 阻塞
                       ${graph.nodeSummary?.blocked ?? 0}
                     </div>
+                    <div class="secondary">
+                      验真 ${severity ? labelStatus(severity) : "暂无"} · 问题 ${issueCount} · ${formatRelative(validatedAt)}
+                    </div>
                   </div>
                   <span class="badge">${labelStatus(graph.aggregateStatus)}</span>
                 </div>
-              `,
-            )}
+              `;
+            })}
       </section>
     `;
   }
