@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { loadConfig, type OpenClawConfig, type MemorySearchConfig } from "../config/config.js";
 import {
+  buildKnowledgeIndexFromWorkspace,
   KB_INDEX_FILE_RELATIVE_PATH,
   writeKnowledgeIndexSnapshot,
 } from "../runtime/kb-index-refresh.js";
@@ -10,6 +11,7 @@ import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 
 const KB_STATE_ROUTE = "/api/kb/state";
 const KB_REFRESH_ROUTE = "/api/kb/refresh";
+const KB_SEMANTIC_REBUILD_PLAN_ROUTE = "/api/kb/semantic-rebuild-plan";
 
 type KnowledgeIndexSummary = {
   generatedAt: string | null;
@@ -36,6 +38,33 @@ type KnowledgeSemanticState = {
 type KbHttpOptions = {
   config?: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
+};
+
+type KnowledgeSemanticRebuildPlan = {
+  status: "ready" | "blocked";
+  mode: "dry-run";
+  dryRun: true;
+  action: "PLAN_ONLY_NO_EMBEDDING_NO_WRITE";
+  generatedAt: string;
+  semantic: KnowledgeSemanticState;
+  source: {
+    totalItems: number;
+    sourceCaseCount: number;
+    sourceSkillCount: number;
+    keywordCount: number;
+    warnings: string[];
+  };
+  plannedBatches: number;
+  plannedOutputs: string[];
+  plannedSteps: string[];
+  blockedReasons: string[];
+  constraintsVerified: {
+    embeddingCalls: "no";
+    fileWrites: "no";
+    keywordIndexWritten: "no";
+    vectorIndexWritten: "no";
+    applied: "no";
+  };
 };
 
 function resolveRequestPath(req: IncomingMessage): string {
@@ -137,8 +166,60 @@ function resolveSemanticBoundary(options?: KbHttpOptions): KnowledgeSemanticStat
   }
 }
 
+export function buildSemanticRebuildPlan(
+  workspaceRoot: string,
+  semantic: KnowledgeSemanticState,
+  generatedAt = new Date().toISOString(),
+): KnowledgeSemanticRebuildPlan {
+  const { index, sources } = buildKnowledgeIndexFromWorkspace(workspaceRoot, generatedAt);
+  const blockedReasons = [
+    ...(semantic.status === "disabled" ? ["semantic memorySearch is disabled"] : []),
+    ...(semantic.status === "config_error" ? ["semantic memorySearch config could not be resolved"] : []),
+    ...(semantic.vectorEnabled === false ? ["vector store is disabled"] : []),
+    ...(index.totalItems === 0 ? ["no KB items available for semantic rebuild"] : []),
+  ];
+  return {
+    status: blockedReasons.length > 0 ? "blocked" : "ready",
+    mode: "dry-run",
+    dryRun: true,
+    action: "PLAN_ONLY_NO_EMBEDDING_NO_WRITE",
+    generatedAt,
+    semantic,
+    source: {
+      totalItems: index.totalItems,
+      sourceCaseCount: index.sourceCaseCount,
+      sourceSkillCount: index.sourceSkillCount,
+      keywordCount: Object.keys(index.keywords).length,
+      warnings: sources.warnings,
+    },
+    plannedBatches: index.totalItems === 0 ? 0 : Math.ceil(index.totalItems / 100),
+    plannedOutputs: [
+      "system/kb-index/semantic-index.json",
+      "system/kb-index/vector-index.sqlite",
+      "system/kb-index/semantic-rebuild-report.json",
+    ],
+    plannedSteps: [
+      "read case-library and skill-library sources",
+      "normalize KB items using keyword index schema",
+      "plan embedding batches",
+      "plan semantic index and vector index output paths",
+      "stop before embedding calls or file writes",
+    ],
+    blockedReasons,
+    constraintsVerified: {
+      embeddingCalls: "no",
+      fileWrites: "no",
+      keywordIndexWritten: "no",
+      vectorIndexWritten: "no",
+      applied: "no",
+    },
+  };
+}
+
 export function isKbApiPath(pathname: string): boolean {
-  return pathname === KB_STATE_ROUTE || pathname === KB_REFRESH_ROUTE;
+  return pathname === KB_STATE_ROUTE
+    || pathname === KB_REFRESH_ROUTE
+    || pathname === KB_SEMANTIC_REBUILD_PLAN_ROUTE;
 }
 
 export async function handleKbHttpRequest(
@@ -171,6 +252,34 @@ export async function handleKbHttpRequest(
         available: false,
         indexPath: KB_INDEX_FILE_RELATIVE_PATH,
         semantic: resolveSemanticBoundary(options),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_SEMANTIC_REBUILD_PLAN_ROUTE) {
+    if (req.method !== "POST") {
+      sendMethodNotAllowed(res, "POST");
+      return true;
+    }
+
+    try {
+      const semantic = resolveSemanticBoundary(options);
+      sendJson(res, 200, buildSemanticRebuildPlan(workspaceRoot, semantic));
+    } catch (error) {
+      sendJson(res, 500, {
+        status: "blocked",
+        mode: "dry-run",
+        dryRun: true,
+        action: "PLAN_ONLY_NO_EMBEDDING_NO_WRITE",
+        error: `知识库语义重建计划生成失败：${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: {
+          embeddingCalls: "no",
+          fileWrites: "no",
+          keywordIndexWritten: "no",
+          vectorIndexWritten: "no",
+          applied: "no",
+        },
       });
     }
     return true;
