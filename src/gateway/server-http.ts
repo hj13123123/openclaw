@@ -90,6 +90,7 @@ let mirrorApiModulePromise: Promise<typeof import("./server-mirror-api.js")> | u
 let autoEvolutionApiModulePromise:
   | Promise<typeof import("./server-auto-evolution-api.js")>
   | undefined;
+let taskGraphApiModulePromise: Promise<typeof import("./server-task-graph-api.js")> | undefined;
 let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefined;
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
 let hudApiModulePromise: Promise<typeof import("./server-hud-api.js")> | undefined;
@@ -134,6 +135,11 @@ function getMirrorApiModule() {
 function getAutoEvolutionApiModule() {
   autoEvolutionApiModulePromise ??= import("./server-auto-evolution-api.js");
   return autoEvolutionApiModulePromise;
+}
+
+function getTaskGraphApiModule() {
+  taskGraphApiModulePromise ??= import("./server-task-graph-api.js");
+  return taskGraphApiModulePromise;
 }
 
 function getOpenAiHttpModule() {
@@ -288,6 +294,10 @@ function isMirrorStatePath(pathname: string): boolean {
 
 function isAutoEvolutionStatePath(pathname: string): boolean {
   return pathname === "/api/auto-evolution/state" || pathname === "/api/auto-evolution/observe";
+}
+
+function isTaskGraphStatePath(pathname: string): boolean {
+  return pathname === "/api/task-graph/validation";
 }
 
 function isSessionKillPath(pathname: string): boolean {
@@ -1036,6 +1046,16 @@ export function createGatewayHttpServer(opts: {
       }
       if (isAutoEvolutionStatePath(requestPath)) {
         const handled = await (await getAutoEvolutionApiModule()).handleAutoEvolutionHttpRequest(
+          req,
+          res,
+          hudWorkspaceRoot,
+        );
+        if (handled) {
+          return;
+        }
+      }
+      if (isTaskGraphStatePath(requestPath)) {
+        const handled = await (await getTaskGraphApiModule()).handleTaskGraphHttpRequest(
           req,
           res,
           hudWorkspaceRoot,
