@@ -99,6 +99,17 @@ describe("TaskHUD task graph validation", () => {
           },
         }));
       }
+      if (url === "/api/kb/state") {
+        return Promise.resolve(jsonResponse({
+          available: true,
+          indexPath: "system/kb-index/index.json",
+          generatedAt: "2026-05-21T00:00:00.000Z",
+          totalItems: 5,
+          sourceCaseCount: 2,
+          sourceSkillCount: 3,
+          keywordCount: 9,
+        }));
+      }
       if (url === "/api/hud/scheduler-events?limit=8") return Promise.resolve(jsonResponse([]));
       return Promise.resolve(jsonResponse({}));
     });
@@ -146,5 +157,12 @@ describe("TaskHUD task graph validation", () => {
     expect(text).toContain("判定 BLOCKED · 1");
     expect(text).toContain("类型 skill · 2");
     expect(text).toContain("类型 memory · 1");
+    expect(fetchMock).toHaveBeenCalledWith("/api/kb/state");
+    expect(text).toContain("知识库");
+    expect(text).toContain("索引可用");
+    expect(text).toContain("条目 5");
+    expect(text).toContain("案例 2");
+    expect(text).toContain("技能 3");
+    expect(text).toContain("关键词 9");
   });
 });

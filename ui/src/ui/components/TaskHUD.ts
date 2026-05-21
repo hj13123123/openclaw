@@ -158,6 +158,16 @@ type PromoteGateStateData = {
   constraintsVerified?: Record<string, string> | null;
 };
 
+type KbStateData = {
+  available?: boolean;
+  indexPath?: string;
+  generatedAt?: string | null;
+  totalItems?: number;
+  sourceCaseCount?: number;
+  sourceSkillCount?: number;
+  keywordCount?: number;
+};
+
 type PolicyStateData = {
   policyVersion?: string | null;
   rulesCount?: number;
@@ -291,6 +301,7 @@ export class TaskHUD extends LitElement {
   @state() private taskGraphValidation: TaskGraphValidationState | null = null;
   @state() private runtimeLoop: RuntimeLoopStateData | null = null;
   @state() private promoteGate: PromoteGateStateData | null = null;
+  @state() private kbState: KbStateData | null = null;
   @state() private policy: PolicyStateData | null = null;
   @state() private refreshing = false;
 
@@ -603,6 +614,7 @@ export class TaskHUD extends LitElement {
         this.fetchTaskGraphValidation(),
         this.fetchRuntimeLoopState(),
         this.fetchPromoteGateState(),
+        this.fetchKbState(),
         this.fetchPolicyState(),
       ]);
     } finally {
@@ -669,6 +681,15 @@ export class TaskHUD extends LitElement {
       this.promoteGate = response.ok ? ((await response.json()) as PromoteGateStateData) : null;
     } catch {
       this.promoteGate = null;
+    }
+  }
+
+  private async fetchKbState() {
+    try {
+      const response = await fetch("/api/kb/state");
+      this.kbState = response.ok ? ((await response.json()) as KbStateData) : null;
+    } catch {
+      this.kbState = null;
     }
   }
 
@@ -761,6 +782,7 @@ export class TaskHUD extends LitElement {
       ${this.renderRuntimeLoop()}
       ${this.renderTaskState()}
       ${this.renderPromoteGate()}
+      ${this.renderKnowledgeBase()}
       ${this.renderPolicy()}
       ${this.renderWarnings()}
     `;
@@ -1081,6 +1103,24 @@ export class TaskHUD extends LitElement {
               : nothing}
           </div>
           <span class="badge">${state?.frozenActive ? "冻结" : "只读"}</span>
+        </div>
+      </section>
+    `;
+  }
+
+  private renderKnowledgeBase() {
+    const state = this.kbState;
+    return html`
+      <section class="section">
+        <h4 class="section-title">知识库</h4>
+        <div class="row">
+          <div>
+            <div class="primary">${state?.available ? "索引可用" : "暂无索引"} · keyword</div>
+            <div class="secondary">
+              条目 ${state?.totalItems ?? 0} · 案例 ${state?.sourceCaseCount ?? 0} · 技能 ${state?.sourceSkillCount ?? 0} · 关键词 ${state?.keywordCount ?? 0}
+            </div>
+          </div>
+          <span class="badge">${formatRelative(state?.generatedAt)}</span>
         </div>
       </section>
     `;
