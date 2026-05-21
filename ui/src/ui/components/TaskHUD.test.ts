@@ -101,5 +101,7 @@ describe("TaskHUD task graph validation", () => {
     expect(text).toContain("快照可用");
     expect(text).toContain("dispatch 2");
     expect(text).toContain("inbox 1");
+    expect(text).toContain("查看总线警告");
+    expect(text).toContain("observe only");
   });
 });

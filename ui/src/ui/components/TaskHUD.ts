@@ -934,6 +934,7 @@ export class TaskHUD extends LitElement {
 
   private renderRuntimeLoop() {
     const data = this.runtimeLoop?.data ?? null;
+    const warnings = data?.warnings ?? [];
     return html`
       <section class="section">
         <h4 class="section-title">运行态总线</h4>
@@ -942,8 +943,22 @@ export class TaskHUD extends LitElement {
             <div class="primary">${data ? "快照可用" : "暂无快照"} · ${text(data?.mode, "observe")}</div>
             <div class="secondary">
               dispatch ${data?.dispatch_plan_count ?? 0} · inbox ${data?.inbox_count ?? 0} · 警告
-              ${data?.warnings?.length ?? 0}
+              ${warnings.length}
             </div>
+            ${warnings.length > 0
+              ? html`
+                  <details class="details">
+                    <summary>查看总线警告</summary>
+                    ${warnings.slice(0, 4).map(
+                      (warning) => html`
+                        <div class="issue">
+                          <div class="secondary">${text(warning, "未知警告")}</div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                `
+              : nothing}
           </div>
           <span class="badge">${formatRelative(data?.latest_tick_at)}</span>
         </div>
