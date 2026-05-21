@@ -141,6 +141,23 @@ type RuntimeLoopStateData = {
   } | null;
 };
 
+type PromoteGateStateData = {
+  available?: boolean;
+  status?: string;
+  mode?: string;
+  generatedAt?: string | null;
+  frozenActive?: boolean;
+  reportPath?: string | null;
+  reportDir?: string;
+  error?: string;
+  stats?: {
+    total?: number;
+    byVerdict?: Record<string, number>;
+    byType?: Record<string, number>;
+  } | null;
+  constraintsVerified?: Record<string, string> | null;
+};
+
 type PolicyStateData = {
   policyVersion?: string | null;
   rulesCount?: number;
@@ -273,6 +290,7 @@ export class TaskHUD extends LitElement {
   @state() private taskState: TaskStateData | null = null;
   @state() private taskGraphValidation: TaskGraphValidationState | null = null;
   @state() private runtimeLoop: RuntimeLoopStateData | null = null;
+  @state() private promoteGate: PromoteGateStateData | null = null;
   @state() private policy: PolicyStateData | null = null;
   @state() private refreshing = false;
 
@@ -584,6 +602,7 @@ export class TaskHUD extends LitElement {
         this.fetchTaskState(),
         this.fetchTaskGraphValidation(),
         this.fetchRuntimeLoopState(),
+        this.fetchPromoteGateState(),
         this.fetchPolicyState(),
       ]);
     } finally {
@@ -641,6 +660,15 @@ export class TaskHUD extends LitElement {
       this.runtimeLoop = response.ok ? ((await response.json()) as RuntimeLoopStateData) : null;
     } catch {
       this.runtimeLoop = null;
+    }
+  }
+
+  private async fetchPromoteGateState() {
+    try {
+      const response = await fetch("/api/promote-gate/state");
+      this.promoteGate = response.ok ? ((await response.json()) as PromoteGateStateData) : null;
+    } catch {
+      this.promoteGate = null;
     }
   }
 
@@ -732,6 +760,7 @@ export class TaskHUD extends LitElement {
       ${this.renderScheduler()}
       ${this.renderRuntimeLoop()}
       ${this.renderTaskState()}
+      ${this.renderPromoteGate()}
       ${this.renderPolicy()}
       ${this.renderWarnings()}
     `;
@@ -987,6 +1016,51 @@ export class TaskHUD extends LitElement {
               </div>
             `,
           )}
+        </div>
+      </section>
+    `;
+  }
+
+  private renderPromoteGate() {
+    const state = this.promoteGate;
+    const stats = state?.stats;
+    const byVerdict = stats?.byVerdict ?? {};
+    const constraints = state?.constraintsVerified ?? {};
+    const readyCount = byVerdict.READY_FOR_PROMOTE_GATE ?? 0;
+    const waitingCount = (byVerdict.WAITING_REVIEW ?? 0)
+      + (byVerdict.NEEDS_EVIDENCE ?? 0)
+      + (byVerdict.WAITING_SEPARATE_ENGINEERING_RULE_APPROVAL ?? 0);
+    const blockedCount = (byVerdict.BLOCKED ?? 0) + (byVerdict.FROZEN_BLOCKED ?? 0);
+    return html`
+      <section class="section">
+        <h4 class="section-title">蒸馏闸口</h4>
+        <div class="row">
+          <div>
+            <div class="primary">${state?.available ? "报告可用" : "暂无报告"} · ${text(state?.mode, "dry-run")}</div>
+            <div class="secondary">
+              候选 ${stats?.total ?? 0} · 就绪 ${readyCount} · 待审 ${waitingCount} · 阻塞 ${blockedCount}
+            </div>
+            ${state?.available
+              ? html`
+                  <details class="details">
+                    <summary>查看闸口约束</summary>
+                    ${[
+                      ["MEMORY", constraints.MEMORYWritten],
+                      ["ENGINEERING_RULES", constraints.ENGINEERING_RULESWritten],
+                      ["promoted", constraints.promoted],
+                      ["autoPromote", constraints.autoPromote],
+                    ].map(
+                      ([label, value]) => html`
+                        <div class="issue">
+                          <div class="secondary">${label} · ${text(value, "未知")}</div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                `
+              : nothing}
+          </div>
+          <span class="badge">${state?.frozenActive ? "冻结" : "只读"}</span>
         </div>
       </section>
     `;

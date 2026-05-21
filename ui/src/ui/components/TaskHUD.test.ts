@@ -74,6 +74,31 @@ describe("TaskHUD task graph validation", () => {
           },
         }));
       }
+      if (url === "/api/promote-gate/state") {
+        return Promise.resolve(jsonResponse({
+          available: true,
+          status: "PASS",
+          mode: "dry-run",
+          generatedAt: "2026-05-21T00:00:00.000Z",
+          frozenActive: false,
+          reportPath: "runtime/main/tmp/d9-promote-gate-dryrun.json",
+          stats: {
+            total: 3,
+            byVerdict: {
+              READY_FOR_PROMOTE_GATE: 1,
+              WAITING_REVIEW: 1,
+              BLOCKED: 1,
+            },
+            byType: { skill: 2, memory: 1 },
+          },
+          constraintsVerified: {
+            MEMORYWritten: "no",
+            ENGINEERING_RULESWritten: "no",
+            promoted: "none",
+            autoPromote: "disabled",
+          },
+        }));
+      }
       if (url === "/api/hud/scheduler-events?limit=8") return Promise.resolve(jsonResponse([]));
       return Promise.resolve(jsonResponse({}));
     });
@@ -103,5 +128,17 @@ describe("TaskHUD task graph validation", () => {
     expect(text).toContain("inbox 1");
     expect(text).toContain("查看总线警告");
     expect(text).toContain("observe only");
+    expect(fetchMock).toHaveBeenCalledWith("/api/promote-gate/state");
+    expect(text).toContain("蒸馏闸口");
+    expect(text).toContain("报告可用");
+    expect(text).toContain("候选 3");
+    expect(text).toContain("就绪 1");
+    expect(text).toContain("待审 1");
+    expect(text).toContain("阻塞 1");
+    expect(text).toContain("查看闸口约束");
+    expect(text).toContain("MEMORY");
+    expect(text).toContain("ENGINEERING_RULES");
+    expect(text).toContain("promoted");
+    expect(text).toContain("autoPromote");
   });
 });
