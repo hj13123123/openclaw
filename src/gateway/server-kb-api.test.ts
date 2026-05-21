@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleKbHttpRequest, isKbApiPath } from "./server-kb-api.js";
+import { handleKbHttpRequest, isKbApiPath, summarizeSemanticBoundary } from "./server-kb-api.js";
 
 function makeResponse() {
   const chunks: string[] = [];
@@ -61,7 +61,70 @@ describe("server KB API", () => {
     expect(response.json()).toEqual({
       available: false,
       indexPath: "system/kb-index/index.json",
+      semantic: {
+        status: "default",
+        mode: "observe-only",
+        source: "agents.memorySearch",
+        rebuild: "disabled",
+        reason: "semantic_vector_refresh_deferred",
+        provider: "auto",
+        model: null,
+        vectorEnabled: true,
+        hybridEnabled: true,
+        configuredScopes: [],
+      },
     });
+  });
+
+  it("summarizes semantic vector boundary without starting a rebuild", () => {
+    expect(summarizeSemanticBoundary({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "volcengine",
+            model: "doubao-embedding",
+            store: { vector: { enabled: true } },
+            query: { hybrid: { enabled: true } },
+          },
+        },
+        list: [
+          { id: "curator", memorySearch: { model: "curator-embedding" } },
+          { id: "disabled-agent", memorySearch: { enabled: false } },
+        ],
+      },
+    })).toEqual({
+      status: "configured",
+      mode: "observe-only",
+      source: "agents.memorySearch",
+      rebuild: "disabled",
+      reason: "semantic_vector_refresh_deferred",
+      provider: "volcengine",
+      model: "doubao-embedding",
+      vectorEnabled: true,
+      hybridEnabled: true,
+      configuredScopes: [
+        "agents.defaults",
+        "agents.list.curator",
+        "agents.list.disabled-agent",
+      ],
+    });
+
+    expect(summarizeSemanticBoundary({
+      agents: {
+        defaults: {
+          memorySearch: { enabled: false },
+        },
+        list: [
+          { id: "curator", memorySearch: { model: "curator-embedding" } },
+        ],
+      },
+    })).toEqual(expect.objectContaining({
+      status: "disabled",
+      provider: null,
+      model: null,
+      vectorEnabled: false,
+      hybridEnabled: false,
+    }));
   });
 
   it("refreshes the keyword index and returns state summaries", async () => {
@@ -106,6 +169,11 @@ describe("server KB API", () => {
     expect(stateResponse.json()).toEqual(expect.objectContaining({
       available: true,
       indexPath: "system/kb-index/index.json",
+      semantic: expect.objectContaining({
+        status: "default",
+        mode: "observe-only",
+        rebuild: "disabled",
+      }),
       totalItems: 2,
       sourceCaseCount: 1,
       sourceSkillCount: 1,

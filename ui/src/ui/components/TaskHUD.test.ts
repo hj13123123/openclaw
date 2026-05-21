@@ -108,6 +108,15 @@ describe("TaskHUD task graph validation", () => {
           sourceCaseCount: 2,
           sourceSkillCount: 3,
           keywordCount: 9,
+          semantic: {
+            status: "configured",
+            mode: "observe-only",
+            rebuild: "disabled",
+            provider: "volcengine",
+            model: "doubao-embedding",
+            vectorEnabled: true,
+            hybridEnabled: true,
+          },
         }));
       }
       if (url === "/api/hud/scheduler-events?limit=8") return Promise.resolve(jsonResponse([]));
@@ -164,5 +173,9 @@ describe("TaskHUD task graph validation", () => {
     expect(text).toContain("案例 2");
     expect(text).toContain("技能 3");
     expect(text).toContain("关键词 9");
+    expect(text).toContain("语义 configured");
+    expect(text).toContain("observe-only");
+    expect(text).toContain("向量重建 disabled");
+    expect(text).toContain("volcengine");
   });
 });

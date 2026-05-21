@@ -166,6 +166,15 @@ type KbStateData = {
   sourceCaseCount?: number;
   sourceSkillCount?: number;
   keywordCount?: number;
+  semantic?: {
+    status?: string;
+    mode?: string;
+    rebuild?: string;
+    provider?: string | null;
+    model?: string | null;
+    vectorEnabled?: boolean | null;
+    hybridEnabled?: boolean | null;
+  };
 };
 
 type PolicyStateData = {
@@ -1110,6 +1119,7 @@ export class TaskHUD extends LitElement {
 
   private renderKnowledgeBase() {
     const state = this.kbState;
+    const semantic = state?.semantic;
     return html`
       <section class="section">
         <h4 class="section-title">知识库</h4>
@@ -1119,8 +1129,11 @@ export class TaskHUD extends LitElement {
             <div class="secondary">
               条目 ${state?.totalItems ?? 0} · 案例 ${state?.sourceCaseCount ?? 0} · 技能 ${state?.sourceSkillCount ?? 0} · 关键词 ${state?.keywordCount ?? 0}
             </div>
+            <div class="secondary">
+              语义 ${text(semantic?.status, "default")} · ${text(semantic?.mode, "observe-only")} · 向量重建 ${text(semantic?.rebuild, "disabled")}
+            </div>
           </div>
-          <span class="badge">${formatRelative(state?.generatedAt)}</span>
+          <span class="badge">${text(semantic?.provider, formatRelative(state?.generatedAt))}</span>
         </div>
       </section>
     `;
