@@ -79,5 +79,9 @@ describe("TaskHUD task graph validation", () => {
     expect(text).toContain("警告 1");
     expect(text).toContain("验真 警告");
     expect(text).toContain("问题 1");
+    expect(text).toContain("查看验真明细");
+    expect(text).toContain("role_enum");
+    expect(text).toContain("nodes[0].role");
+    expect(text).toContain("unknown role");
   });
 });

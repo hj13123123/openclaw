@@ -480,6 +480,23 @@ export class TaskHUD extends LitElement {
       white-space: nowrap;
     }
 
+    .details {
+      margin-top: 6px;
+      color: #cbd5e1;
+      font-size: 10px;
+    }
+
+    .details summary {
+      color: #bfdbfe;
+      cursor: pointer;
+    }
+
+    .issue {
+      margin-top: 5px;
+      padding-left: 8px;
+      border-left: 2px solid rgba(148, 163, 184, 0.24);
+    }
+
     .progress-track {
       height: 4px;
       margin-top: 8px;
@@ -774,6 +791,29 @@ export class TaskHUD extends LitElement {
     return this.taskGraphValidation?.reports?.find((report) => report.graphId === graphId) ?? null;
   }
 
+  private renderTaskGraphValidationIssues(validation: TaskGraphValidationReport | null) {
+    const issues = [
+      ...(validation?.errors ?? []).map((issue) => ({ ...issue, kind: "错误" })),
+      ...(validation?.warnings ?? []).map((issue) => ({ ...issue, kind: "警告" })),
+    ].slice(0, 4);
+
+    if (issues.length === 0) return nothing;
+
+    return html`
+      <details class="details">
+        <summary>查看验真明细</summary>
+        ${issues.map(
+          (issue) => html`
+            <div class="issue">
+              <div class="secondary">${issue.kind} · ${text(issue.check, "未知检查")} · ${text(issue.field, "未知字段")}</div>
+              <div class="secondary">${text(issue.message, "暂无说明")}</div>
+            </div>
+          `,
+        )}
+      </details>
+    `;
+  }
+
   private renderTaskGraphs(graphs: TaskGraphItem[]) {
     const validationSummary = this.taskGraphValidation;
     return html`
@@ -808,6 +848,7 @@ export class TaskHUD extends LitElement {
                     <div class="secondary">
                       验真 ${severity ? labelStatus(severity) : "暂无"} · 问题 ${issueCount} · ${formatRelative(validatedAt)}
                     </div>
+                    ${this.renderTaskGraphValidationIssues(validation)}
                   </div>
                   <span class="badge">${labelStatus(graph.aggregateStatus)}</span>
                 </div>
