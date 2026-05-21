@@ -61,6 +61,19 @@ describe("TaskHUD task graph validation", () => {
           ],
         }));
       }
+      if (url === "/api/hud/runtime-loop") {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          data: {
+            latest_tick_id: "tick-a",
+            latest_tick_at: "2026-05-21T00:00:00.000Z",
+            mode: "observe",
+            dispatch_plan_count: 2,
+            inbox_count: 1,
+            warnings: ["observe only"],
+          },
+        }));
+      }
       if (url === "/api/hud/scheduler-events?limit=8") return Promise.resolve(jsonResponse([]));
       return Promise.resolve(jsonResponse({}));
     });
@@ -83,5 +96,10 @@ describe("TaskHUD task graph validation", () => {
     expect(text).toContain("role_enum");
     expect(text).toContain("nodes[0].role");
     expect(text).toContain("unknown role");
+    expect(fetchMock).toHaveBeenCalledWith("/api/hud/runtime-loop");
+    expect(text).toContain("运行态总线");
+    expect(text).toContain("快照可用");
+    expect(text).toContain("dispatch 2");
+    expect(text).toContain("inbox 1");
   });
 });

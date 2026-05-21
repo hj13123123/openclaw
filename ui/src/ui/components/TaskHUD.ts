@@ -129,6 +129,18 @@ type TaskStateData = {
   }>;
 };
 
+type RuntimeLoopStateData = {
+  ok?: boolean;
+  data?: {
+    latest_tick_id?: string | null;
+    latest_tick_at?: string | null;
+    mode?: string;
+    dispatch_plan_count?: number;
+    inbox_count?: number;
+    warnings?: string[];
+  } | null;
+};
+
 type PolicyStateData = {
   policyVersion?: string | null;
   rulesCount?: number;
@@ -260,6 +272,7 @@ export class TaskHUD extends LitElement {
   @state() private events: RuntimeEvent[] = [];
   @state() private taskState: TaskStateData | null = null;
   @state() private taskGraphValidation: TaskGraphValidationState | null = null;
+  @state() private runtimeLoop: RuntimeLoopStateData | null = null;
   @state() private policy: PolicyStateData | null = null;
   @state() private refreshing = false;
 
@@ -570,6 +583,7 @@ export class TaskHUD extends LitElement {
         this.fetchSchedulerState(),
         this.fetchTaskState(),
         this.fetchTaskGraphValidation(),
+        this.fetchRuntimeLoopState(),
         this.fetchPolicyState(),
       ]);
     } finally {
@@ -618,6 +632,15 @@ export class TaskHUD extends LitElement {
       this.taskGraphValidation = response.ok ? ((await response.json()) as TaskGraphValidationState) : null;
     } catch {
       this.taskGraphValidation = null;
+    }
+  }
+
+  private async fetchRuntimeLoopState() {
+    try {
+      const response = await fetch("/api/hud/runtime-loop");
+      this.runtimeLoop = response.ok ? ((await response.json()) as RuntimeLoopStateData) : null;
+    } catch {
+      this.runtimeLoop = null;
     }
   }
 
@@ -707,6 +730,7 @@ export class TaskHUD extends LitElement {
       ${this.renderTaskGraphs(this.hud?.taskGraphs?.items ?? [])}
       ${this.renderRecentCompletions(this.hud?.recentCompletions?.items ?? [])}
       ${this.renderScheduler()}
+      ${this.renderRuntimeLoop()}
       ${this.renderTaskState()}
       ${this.renderPolicy()}
       ${this.renderWarnings()}
@@ -904,6 +928,25 @@ export class TaskHUD extends LitElement {
             </div>
           `,
         )}
+      </section>
+    `;
+  }
+
+  private renderRuntimeLoop() {
+    const data = this.runtimeLoop?.data ?? null;
+    return html`
+      <section class="section">
+        <h4 class="section-title">运行态总线</h4>
+        <div class="row">
+          <div>
+            <div class="primary">${data ? "快照可用" : "暂无快照"} · ${text(data?.mode, "observe")}</div>
+            <div class="secondary">
+              dispatch ${data?.dispatch_plan_count ?? 0} · inbox ${data?.inbox_count ?? 0} · 警告
+              ${data?.warnings?.length ?? 0}
+            </div>
+          </div>
+          <span class="badge">${formatRelative(data?.latest_tick_at)}</span>
+        </div>
       </section>
     `;
   }
