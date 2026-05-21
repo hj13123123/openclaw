@@ -140,5 +140,11 @@ describe("TaskHUD task graph validation", () => {
     expect(text).toContain("ENGINEERING_RULES");
     expect(text).toContain("promoted");
     expect(text).toContain("autoPromote");
+    expect(text).toContain("查看判定明细");
+    expect(text).toContain("判定 READY_FOR_PROMOTE_GATE · 1");
+    expect(text).toContain("判定 WAITING_REVIEW · 1");
+    expect(text).toContain("判定 BLOCKED · 1");
+    expect(text).toContain("类型 skill · 2");
+    expect(text).toContain("类型 memory · 1");
   });
 });

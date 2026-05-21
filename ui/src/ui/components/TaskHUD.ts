@@ -1025,7 +1025,10 @@ export class TaskHUD extends LitElement {
     const state = this.promoteGate;
     const stats = state?.stats;
     const byVerdict = stats?.byVerdict ?? {};
+    const byType = stats?.byType ?? {};
     const constraints = state?.constraintsVerified ?? {};
+    const verdictEntries = Object.entries(byVerdict).filter(([, value]) => value > 0).slice(0, 5);
+    const typeEntries = Object.entries(byType).filter(([, value]) => value > 0).slice(0, 5);
     const readyCount = byVerdict.READY_FOR_PROMOTE_GATE ?? 0;
     const waitingCount = (byVerdict.WAITING_REVIEW ?? 0)
       + (byVerdict.NEEDS_EVIDENCE ?? 0)
@@ -1053,6 +1056,23 @@ export class TaskHUD extends LitElement {
                       ([label, value]) => html`
                         <div class="issue">
                           <div class="secondary">${label} · ${text(value, "未知")}</div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                  <details class="details">
+                    <summary>查看判定明细</summary>
+                    ${verdictEntries.map(
+                      ([label, value]) => html`
+                        <div class="issue">
+                          <div class="secondary">判定 ${label} · ${value}</div>
+                        </div>
+                      `,
+                    )}
+                    ${typeEntries.map(
+                      ([label, value]) => html`
+                        <div class="issue">
+                          <div class="secondary">类型 ${label} · ${value}</div>
                         </div>
                       `,
                     )}
