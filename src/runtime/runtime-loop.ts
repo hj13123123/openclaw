@@ -1,19 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { AGENT_LANE_NESTED } from "../agents/lanes.js";
 import { callGateway } from "../gateway/call.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { createRuntimeEvent, emitEvent, type RuntimeEvent } from "./event-bus.js";
 import { evaluatePolicyForTask, loadPolicyRules, type RiskLevel } from "./policy-engine.js";
+import { scanReturnInbox } from "./returns/return-inbox.js";
 import { getTaskState, type TaskRecord, type TaskStatus, type TaskSummary } from "./task-state-machine.js";
 
 const RUNTIME_LOOP_STATE_REL = "runtime/main/tmp/runtime-loop-state.json";
 const SCHEDULER_STATE_REL = "runtime/main/tmp/task-scheduler-state.json";
 const SCHEDULER_POLICY_REL = "runtime/scheduler/scheduler-policy.json";
 const POLICY_RULES_REL = "runtime/policy/policy-rules.json";
-const RETURNS_INBOX_REL = "system/returns/inbox";
-
 type SchedulerSnapshot = {
   enabled: boolean;
   mode: "observe" | "apply" | string;
@@ -136,16 +135,13 @@ function buildDispatchPlan(workspaceRoot: string, tasks: TaskRecord[], maxDispat
 }
 
 function buildReturnProcessorState(workspaceRoot: string): ReturnProcessorState {
-  const inboxDir = path.join(workspaceRoot, RETURNS_INBOX_REL);
-  const files = existsSync(inboxDir)
-    ? readdirSync(inboxDir, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(".json")).map((entry) => entry.name).sort()
-    : [];
+  const scan = scanReturnInbox(workspaceRoot, { limit: 50 });
   return {
-    inbox_count: files.length,
+    inbox_count: scan.pendingCount,
     would_process: 0,
     would_auto_close_L0: 0,
-    entries: files.slice(0, 50).map((file) => ({
-      file,
+    entries: scan.pendingItems.map((item) => ({
+      file: item.returnId,
       would_process: false,
       blocked_reason: "observe_only_runtime_loop",
     })),

@@ -134,6 +134,11 @@ describe("runtime bus observe-only validation", () => {
     const returnPath = path.join(workspaceRoot, "system", "returns", "inbox", "return-a.json");
     ensureDir(returnPath);
     writeFileSync(returnPath, "{\"returnId\":\"return-a\"}\n", "utf8");
+    writeFileSync(
+      path.join(workspaceRoot, "system", "returns", "inbox", "return.mock.skip.json"),
+      "{\"returnId\":\"mock\"}\n",
+      "utf8",
+    );
     appendTask(workspaceRoot, task("RUNTIME-A", "queued", {
       metadata: { dispatchTarget: "/main" },
       policyDecision: autoCloseDecision,
