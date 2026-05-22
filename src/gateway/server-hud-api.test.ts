@@ -120,4 +120,50 @@ describe("server HUD API runtime loop freshness", () => {
       },
     });
   });
+
+  it("runs a manual observe-only runtime loop refresh", async () => {
+    const workspaceRoot = makeWorkspace();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-22T08:30:00.000Z"));
+
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq("/api/hud/runtime-loop/refresh", "POST"),
+      response.res,
+      workspaceRoot,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual(expect.objectContaining({
+      refreshed: true,
+      refreshMode: "observe-only",
+      wouldDispatch: false,
+      applied: false,
+      data: expect.objectContaining({
+        latest_tick_at: "2026-05-22T08:30:00.000Z",
+        freshness: {
+          status: "fresh",
+          ageMs: 0,
+          staleAfterMs: 900_000,
+        },
+        mode: "observe",
+        dispatch_plan_count: 0,
+      }),
+    }));
+  });
+
+  it("rejects runtime loop refresh reads", async () => {
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq("/api/hud/runtime-loop/refresh", "GET"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "POST");
+  });
 });

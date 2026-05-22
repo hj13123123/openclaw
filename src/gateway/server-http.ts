@@ -277,7 +277,8 @@ function isHudStatePath(pathname: string): boolean {
     || pathname === "/api/hud/task-state"
     || pathname === "/api/hud/policy-state"
     || pathname === "/api/hud/policy-actions"
-    || pathname === "/api/hud/runtime-loop";
+    || pathname === "/api/hud/runtime-loop"
+    || pathname === "/api/hud/runtime-loop/refresh";
 }
 
 function isKbStatePath(pathname: string): boolean {

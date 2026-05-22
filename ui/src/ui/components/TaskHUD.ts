@@ -646,7 +646,10 @@ export class TaskHUD extends LitElement {
     this.refreshing = true;
     try {
       if (triggerGenerator) {
-        await fetch("/api/hud/refresh", { method: "POST" });
+        await Promise.all([
+          fetch("/api/hud/refresh", { method: "POST" }),
+          fetch("/api/hud/runtime-loop/refresh", { method: "POST" }),
+        ]);
       }
       await Promise.all([
         this.fetchHudState(),

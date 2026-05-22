@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { getRecentEvents } from "../runtime/event-bus.js";
 import { writeHudStateSnapshot } from "../runtime/hud-state-refresh.js";
+import { tick as tickRuntimeLoop } from "../runtime/runtime-loop.js";
 import { getTaskState } from "../runtime/task-state-machine.js";
 import { sendJson } from "./http-common.js";
 
@@ -19,6 +20,7 @@ const TASK_STATE_ROUTE = "/api/hud/task-state";
 const POLICY_STATE_ROUTE = "/api/hud/policy-state";
 const POLICY_ACTIONS_ROUTE = "/api/hud/policy-actions";
 const RUNTIME_LOOP_ROUTE = "/api/hud/runtime-loop";
+const RUNTIME_LOOP_REFRESH_ROUTE = "/api/hud/runtime-loop/refresh";
 const RUNTIME_LOOP_STATE_RELATIVE_PATH = "runtime/main/tmp/runtime-loop-state.json";
 const POLICY_RULES_RELATIVE_PATH = "runtime/policy/policy-rules.json";
 const POLICY_ACTION_AUDIT_RELATIVE_PATH = "runtime/policy/action-audit.jsonl";
@@ -46,6 +48,17 @@ type RuntimeLoopFreshness = {
   status: "fresh" | "stale" | "missing" | "invalid";
   ageMs: number | null;
   staleAfterMs: number;
+};
+
+type RuntimeLoopHttpState = {
+  tickId?: unknown;
+  tick_at?: unknown;
+  mode?: unknown;
+  scheduler?: unknown;
+  tasks?: unknown;
+  dispatch_plan?: unknown;
+  return_processor?: unknown;
+  warnings?: unknown;
 };
 
 function resolveRuntimeLoopStaleAfterMs(state: {
@@ -79,6 +92,28 @@ export function summarizeRuntimeLoopFreshness(
     status: ageMs > staleAfterMs ? "stale" : "fresh",
     ageMs,
     staleAfterMs,
+  };
+}
+
+function buildRuntimeLoopHttpPayload(state: RuntimeLoopHttpState): Record<string, unknown> {
+  const tasks = state.tasks && typeof state.tasks === "object" && !Array.isArray(state.tasks) ? state.tasks as Record<string, unknown> : {};
+  const returnProcessor = state.return_processor && typeof state.return_processor === "object" && !Array.isArray(state.return_processor) ? state.return_processor as Record<string, unknown> : {};
+  const freshness = summarizeRuntimeLoopFreshness(state);
+  const warnings = Array.isArray(state.warnings) ? state.warnings.filter((item): item is string => typeof item === "string") : [];
+  const freshnessWarnings = freshness.status === "stale"
+    ? [`runtime loop snapshot is stale (${Math.floor((freshness.ageMs ?? 0) / 60_000)} minutes old)`]
+    : freshness.status === "missing" || freshness.status === "invalid"
+      ? [`runtime loop snapshot timestamp is ${freshness.status}`]
+      : [];
+  return {
+    latest_tick_id: typeof state.tickId === "string" ? state.tickId : null,
+    latest_tick_at: typeof state.tick_at === "string" ? state.tick_at : null,
+    freshness,
+    mode: state.mode === "observe" ? "observe" : "observe",
+    task_summary: tasks,
+    dispatch_plan_count: Array.isArray(state.dispatch_plan) ? state.dispatch_plan.length : 0,
+    inbox_count: typeof returnProcessor.inbox_count === "number" ? returnProcessor.inbox_count : 0,
+    warnings: [...warnings, ...freshnessWarnings],
   };
 }
 
@@ -156,7 +191,8 @@ export async function handleHudStateHttpRequest(
     requestPath !== TASK_STATE_ROUTE &&
     requestPath !== POLICY_STATE_ROUTE &&
     requestPath !== POLICY_ACTIONS_ROUTE &&
-    requestPath !== RUNTIME_LOOP_ROUTE
+    requestPath !== RUNTIME_LOOP_ROUTE &&
+    requestPath !== RUNTIME_LOOP_REFRESH_ROUTE
   ) {
     return false;
   }
@@ -172,36 +208,10 @@ export async function handleHudStateHttpRequest(
     }
 
     try {
-      const state = JSON.parse(await readFile(path.join(workspaceRoot, RUNTIME_LOOP_STATE_RELATIVE_PATH), "utf8")) as {
-        tickId?: unknown;
-        tick_at?: unknown;
-        mode?: unknown;
-        tasks?: unknown;
-        dispatch_plan?: unknown;
-        return_processor?: unknown;
-        warnings?: unknown;
-      };
-      const tasks = state.tasks && typeof state.tasks === "object" && !Array.isArray(state.tasks) ? state.tasks as Record<string, unknown> : {};
-      const returnProcessor = state.return_processor && typeof state.return_processor === "object" && !Array.isArray(state.return_processor) ? state.return_processor as Record<string, unknown> : {};
-      const freshness = summarizeRuntimeLoopFreshness(state);
-      const warnings = Array.isArray(state.warnings) ? state.warnings.filter((item): item is string => typeof item === "string") : [];
-      const freshnessWarnings = freshness.status === "stale"
-        ? [`runtime loop snapshot is stale (${Math.floor((freshness.ageMs ?? 0) / 60_000)} minutes old)`]
-        : freshness.status === "missing" || freshness.status === "invalid"
-          ? [`runtime loop snapshot timestamp is ${freshness.status}`]
-          : [];
+      const state = JSON.parse(await readFile(path.join(workspaceRoot, RUNTIME_LOOP_STATE_RELATIVE_PATH), "utf8")) as RuntimeLoopHttpState;
       sendJson(res, 200, {
         ok: true,
-        data: {
-          latest_tick_id: typeof state.tickId === "string" ? state.tickId : null,
-          latest_tick_at: typeof state.tick_at === "string" ? state.tick_at : null,
-          freshness,
-          mode: state.mode === "observe" ? "observe" : "observe",
-          task_summary: tasks,
-          dispatch_plan_count: Array.isArray(state.dispatch_plan) ? state.dispatch_plan.length : 0,
-          inbox_count: typeof returnProcessor.inbox_count === "number" ? returnProcessor.inbox_count : 0,
-          warnings: [...warnings, ...freshnessWarnings],
-        },
+        data: buildRuntimeLoopHttpPayload(state),
       });
     } catch {
       sendJson(res, 200, { ok: true, data: null });
@@ -355,6 +365,36 @@ export async function handleHudStateHttpRequest(
     }
 
     sendJson(res, 200, getTaskState(workspaceRoot));
+    return true;
+  }
+
+  if (requestPath === RUNTIME_LOOP_REFRESH_ROUTE) {
+    if (req.method !== "POST") {
+      res.setHeader("Allow", "POST");
+      res.statusCode = 405;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Method Not Allowed");
+      return true;
+    }
+
+    try {
+      const state = tickRuntimeLoop(workspaceRoot);
+      sendJson(res, 200, {
+        refreshed: true,
+        refreshMode: "observe-only",
+        wouldDispatch: false,
+        applied: false,
+        data: buildRuntimeLoopHttpPayload(state),
+      });
+    } catch (error) {
+      sendJson(res, 500, {
+        refreshed: false,
+        refreshMode: "observe-only",
+        wouldDispatch: false,
+        applied: false,
+        error: `runtime loop observe refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
     return true;
   }
 
