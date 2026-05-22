@@ -22,6 +22,8 @@ const RUNTIME_LOOP_ROUTE = "/api/hud/runtime-loop";
 const RUNTIME_LOOP_STATE_RELATIVE_PATH = "runtime/main/tmp/runtime-loop-state.json";
 const POLICY_RULES_RELATIVE_PATH = "runtime/policy/policy-rules.json";
 const POLICY_ACTION_AUDIT_RELATIVE_PATH = "runtime/policy/action-audit.jsonl";
+const RUNTIME_LOOP_DEFAULT_STALE_AFTER_MS = 15 * 60 * 1000;
+const RUNTIME_LOOP_STALE_INTERVAL_MULTIPLIER = 3;
 
 function resolveRequestPath(req: IncomingMessage): string {
   return new URL(req.url ?? "/", "http://localhost").pathname;
@@ -39,6 +41,46 @@ type RecentCompletions = {
   lastCompletedAt: string | null;
   items: RecentCompletionItem[];
 };
+
+type RuntimeLoopFreshness = {
+  status: "fresh" | "stale" | "missing" | "invalid";
+  ageMs: number | null;
+  staleAfterMs: number;
+};
+
+function resolveRuntimeLoopStaleAfterMs(state: {
+  scheduler?: unknown;
+}): number {
+  const scheduler = state.scheduler && typeof state.scheduler === "object" && !Array.isArray(state.scheduler)
+    ? state.scheduler as Record<string, unknown>
+    : {};
+  const intervalMs = typeof scheduler.intervalMs === "number" && Number.isFinite(scheduler.intervalMs) && scheduler.intervalMs > 0
+    ? scheduler.intervalMs
+    : null;
+  return intervalMs
+    ? Math.max(RUNTIME_LOOP_DEFAULT_STALE_AFTER_MS, intervalMs * RUNTIME_LOOP_STALE_INTERVAL_MULTIPLIER)
+    : RUNTIME_LOOP_DEFAULT_STALE_AFTER_MS;
+}
+
+export function summarizeRuntimeLoopFreshness(
+  state: { tick_at?: unknown; scheduler?: unknown },
+  nowMs = Date.now(),
+): RuntimeLoopFreshness {
+  const staleAfterMs = resolveRuntimeLoopStaleAfterMs(state);
+  if (typeof state.tick_at !== "string" || !state.tick_at.trim()) {
+    return { status: "missing", ageMs: null, staleAfterMs };
+  }
+  const tickMs = Date.parse(state.tick_at);
+  if (!Number.isFinite(tickMs)) {
+    return { status: "invalid", ageMs: null, staleAfterMs };
+  }
+  const ageMs = Math.max(0, nowMs - tickMs);
+  return {
+    status: ageMs > staleAfterMs ? "stale" : "fresh",
+    ageMs,
+    staleAfterMs,
+  };
+}
 
 function getLocalDateKey(value: string | Date): string {
   const date = value instanceof Date ? value : new Date(value);
@@ -141,16 +183,24 @@ export async function handleHudStateHttpRequest(
       };
       const tasks = state.tasks && typeof state.tasks === "object" && !Array.isArray(state.tasks) ? state.tasks as Record<string, unknown> : {};
       const returnProcessor = state.return_processor && typeof state.return_processor === "object" && !Array.isArray(state.return_processor) ? state.return_processor as Record<string, unknown> : {};
+      const freshness = summarizeRuntimeLoopFreshness(state);
+      const warnings = Array.isArray(state.warnings) ? state.warnings.filter((item): item is string => typeof item === "string") : [];
+      const freshnessWarnings = freshness.status === "stale"
+        ? [`runtime loop snapshot is stale (${Math.floor((freshness.ageMs ?? 0) / 60_000)} minutes old)`]
+        : freshness.status === "missing" || freshness.status === "invalid"
+          ? [`runtime loop snapshot timestamp is ${freshness.status}`]
+          : [];
       sendJson(res, 200, {
         ok: true,
         data: {
           latest_tick_id: typeof state.tickId === "string" ? state.tickId : null,
           latest_tick_at: typeof state.tick_at === "string" ? state.tick_at : null,
+          freshness,
           mode: state.mode === "observe" ? "observe" : "observe",
           task_summary: tasks,
           dispatch_plan_count: Array.isArray(state.dispatch_plan) ? state.dispatch_plan.length : 0,
           inbox_count: typeof returnProcessor.inbox_count === "number" ? returnProcessor.inbox_count : 0,
-          warnings: Array.isArray(state.warnings) ? state.warnings : [],
+          warnings: [...warnings, ...freshnessWarnings],
         },
       });
     } catch {

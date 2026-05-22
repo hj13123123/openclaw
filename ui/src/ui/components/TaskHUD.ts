@@ -134,6 +134,11 @@ type RuntimeLoopStateData = {
   data?: {
     latest_tick_id?: string | null;
     latest_tick_at?: string | null;
+    freshness?: {
+      status?: string;
+      ageMs?: number | null;
+      staleAfterMs?: number;
+    };
     mode?: string;
     dispatch_plan_count?: number;
     inbox_count?: number;
@@ -1041,6 +1046,9 @@ export class TaskHUD extends LitElement {
             <div class="secondary">
               dispatch ${data?.dispatch_plan_count ?? 0} · inbox ${data?.inbox_count ?? 0} · 警告
               ${warnings.length}
+            </div>
+            <div class="secondary">
+              freshness ${text(data?.freshness?.status, "unknown")} · age ${Math.floor(Number(data?.freshness?.ageMs ?? 0) / 60_000)}m
             </div>
             ${warnings.length > 0
               ? html`

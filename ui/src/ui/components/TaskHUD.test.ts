@@ -67,6 +67,7 @@ describe("TaskHUD task graph validation", () => {
           data: {
             latest_tick_id: "tick-a",
             latest_tick_at: "2026-05-21T00:00:00.000Z",
+            freshness: { status: "stale", ageMs: 1_200_000, staleAfterMs: 900_000 },
             mode: "observe",
             dispatch_plan_count: 2,
             inbox_count: 1,
@@ -165,6 +166,8 @@ describe("TaskHUD task graph validation", () => {
     expect(text).toContain("快照可用");
     expect(text).toContain("dispatch 2");
     expect(text).toContain("inbox 1");
+    expect(text).toContain("freshness stale");
+    expect(text).toContain("age 20m");
     expect(text).toContain("查看总线警告");
     expect(text).toContain("observe only");
     expect(fetchMock).toHaveBeenCalledWith("/api/promote-gate/state");
