@@ -1,12 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  handleHudStateHttpRequest,
-  summarizeRuntimeLoopFreshness,
-} from "./server-hud-api.js";
+import { handleHudStateHttpRequest, summarizeRuntimeLoopFreshness } from "./server-hud-api.js";
 
 function makeResponse() {
   const chunks: string[] = [];
@@ -50,29 +47,39 @@ describe("server HUD API runtime loop freshness", () => {
   }
 
   it("classifies runtime loop freshness from tick timestamps", () => {
-    expect(summarizeRuntimeLoopFreshness(
-      { tick_at: "2026-05-22T08:00:00.000Z" },
-      Date.parse("2026-05-22T08:05:00.000Z"),
-    )).toEqual({
+    expect(
+      summarizeRuntimeLoopFreshness(
+        { tick_at: "2026-05-22T08:00:00.000Z" },
+        Date.parse("2026-05-22T08:05:00.000Z"),
+      ),
+    ).toEqual({
       status: "fresh",
       ageMs: 300_000,
       staleAfterMs: 900_000,
     });
-    expect(summarizeRuntimeLoopFreshness(
-      { tick_at: "2026-05-22T08:00:00.000Z" },
-      Date.parse("2026-05-22T08:16:00.000Z"),
-    )).toEqual(expect.objectContaining({
-      status: "stale",
-      ageMs: 960_000,
-    }));
-    expect(summarizeRuntimeLoopFreshness({})).toEqual(expect.objectContaining({
-      status: "missing",
-      ageMs: null,
-    }));
-    expect(summarizeRuntimeLoopFreshness({ tick_at: "not-a-date" })).toEqual(expect.objectContaining({
-      status: "invalid",
-      ageMs: null,
-    }));
+    expect(
+      summarizeRuntimeLoopFreshness(
+        { tick_at: "2026-05-22T08:00:00.000Z" },
+        Date.parse("2026-05-22T08:16:00.000Z"),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        status: "stale",
+        ageMs: 960_000,
+      }),
+    );
+    expect(summarizeRuntimeLoopFreshness({})).toEqual(
+      expect.objectContaining({
+        status: "missing",
+        ageMs: null,
+      }),
+    );
+    expect(summarizeRuntimeLoopFreshness({ tick_at: "not-a-date" })).toEqual(
+      expect.objectContaining({
+        status: "invalid",
+        ageMs: null,
+      }),
+    );
   });
 
   it("surfaces stale runtime loop snapshots without modifying state", async () => {
@@ -113,10 +120,7 @@ describe("server HUD API runtime loop freshness", () => {
         task_summary: { total: 1, queued: 0 },
         dispatch_plan_count: 0,
         inbox_count: 2,
-        warnings: [
-          "observe only",
-          "runtime loop snapshot is stale (20 minutes old)",
-        ],
+        warnings: ["observe only", "runtime loop snapshot is stale (20 minutes old)"],
       },
     });
   });
@@ -135,22 +139,24 @@ describe("server HUD API runtime loop freshness", () => {
 
     expect(handled).toBe(true);
     expect(response.res.statusCode).toBe(200);
-    expect(response.json()).toEqual(expect.objectContaining({
-      refreshed: true,
-      refreshMode: "observe-only",
-      wouldDispatch: false,
-      applied: false,
-      data: expect.objectContaining({
-        latest_tick_at: "2026-05-22T08:30:00.000Z",
-        freshness: {
-          status: "fresh",
-          ageMs: 0,
-          staleAfterMs: 900_000,
-        },
-        mode: "observe",
-        dispatch_plan_count: 0,
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        refreshed: true,
+        refreshMode: "observe-only",
+        wouldDispatch: false,
+        applied: false,
+        data: expect.objectContaining({
+          latest_tick_at: "2026-05-22T08:30:00.000Z",
+          freshness: {
+            status: "fresh",
+            ageMs: 0,
+            staleAfterMs: 900_000,
+          },
+          mode: "observe",
+          dispatch_plan_count: 0,
+        }),
       }),
-    }));
+    );
   });
 
   it("rejects runtime loop refresh reads", async () => {
@@ -165,5 +171,78 @@ describe("server HUD API runtime loop freshness", () => {
     expect(response.res.statusCode).toBe(405);
     expect(response.text()).toBe("Method Not Allowed");
     expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "POST");
+  });
+
+  it("returns typed return inbox summaries without consuming files", async () => {
+    const workspaceRoot = makeWorkspace();
+    const returnPath = path.join(workspaceRoot, "system", "returns", "inbox", "return-a.json");
+    writeJson(returnPath, {
+      routing: {
+        taskId: "TASK-A",
+        sourceRole: "engineering-executive",
+        action: "complete",
+      },
+      outcome: {
+        summary: "return summary",
+      },
+    });
+    writeJson(path.join(workspaceRoot, "system", "returns", "inbox", "return.mock.skip.json"), {
+      taskId: "MOCK",
+    });
+
+    const before = readFileSync(returnPath, "utf8");
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq("/api/hud/return-inbox", "GET"),
+      response.res,
+      workspaceRoot,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      data: expect.objectContaining({
+        mode: "observe-only",
+        inboxPath: "system/returns/inbox",
+        pendingCount: 1,
+        completeCount: 1,
+        incompleteCount: 0,
+        malformedCount: 0,
+        skippedMockCount: 1,
+        pendingItems: [
+          expect.objectContaining({
+            returnId: "return-a.json",
+            relativePath: "system/returns/inbox/return-a.json",
+            taskId: "TASK-A",
+            sourceRole: "engineering-executive",
+            action: "complete",
+            summary: "return summary",
+          }),
+        ],
+        constraintsVerified: {
+          consumed: "no",
+          archived: "no",
+          receiptWritten: "no",
+          taskGraphMutated: "no",
+          applied: "no",
+        },
+      }),
+    });
+    expect(readFileSync(returnPath, "utf8")).toBe(before);
+  });
+
+  it("rejects return inbox writes", async () => {
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq("/api/hud/return-inbox", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
   });
 });

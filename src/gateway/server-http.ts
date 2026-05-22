@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import os from "node:os";
-import path from "node:path";
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -8,6 +6,8 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
+import os from "node:os";
+import path from "node:path";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
 import { A2UI_PATH, CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
@@ -271,21 +271,27 @@ function isToolsInvokePath(pathname: string): boolean {
 }
 
 function isHudStatePath(pathname: string): boolean {
-  return pathname === "/api/hud/state" || pathname === "/api/hud/refresh"
-    || pathname === "/api/hud/scheduler-state"
-    || pathname === "/api/hud/scheduler-events"
-    || pathname === "/api/hud/task-state"
-    || pathname === "/api/hud/policy-state"
-    || pathname === "/api/hud/policy-actions"
-    || pathname === "/api/hud/runtime-loop"
-    || pathname === "/api/hud/runtime-loop/refresh";
+  return (
+    pathname === "/api/hud/state" ||
+    pathname === "/api/hud/refresh" ||
+    pathname === "/api/hud/scheduler-state" ||
+    pathname === "/api/hud/scheduler-events" ||
+    pathname === "/api/hud/task-state" ||
+    pathname === "/api/hud/policy-state" ||
+    pathname === "/api/hud/policy-actions" ||
+    pathname === "/api/hud/runtime-loop" ||
+    pathname === "/api/hud/runtime-loop/refresh" ||
+    pathname === "/api/hud/return-inbox"
+  );
 }
 
 function isKbStatePath(pathname: string): boolean {
-  return pathname === "/api/kb/state"
-    || pathname === "/api/kb/refresh"
-    || pathname === "/api/kb/semantic-rebuild-plan"
-    || pathname === "/api/kb/semantic-rebuild-plan/state";
+  return (
+    pathname === "/api/kb/state" ||
+    pathname === "/api/kb/refresh" ||
+    pathname === "/api/kb/semantic-rebuild-plan" ||
+    pathname === "/api/kb/semantic-rebuild-plan/state"
+  );
 }
 
 function isPromoteGateStatePath(pathname: string): boolean {
@@ -963,7 +969,7 @@ export function createGatewayHttpServer(opts: {
       const initialRequestPath = new URL(req.url ?? "/", "http://localhost").pathname;
       if (
         isLiveGatewayProbePath(initialRequestPath) &&
-        await handleGatewayProbeRequest(
+        (await handleGatewayProbeRequest(
           req,
           res,
           initialRequestPath,
@@ -971,7 +977,7 @@ export function createGatewayHttpServer(opts: {
           [],
           false,
           getReadiness,
-        )
+        ))
       ) {
         return;
       }
@@ -1009,61 +1015,49 @@ export function createGatewayHttpServer(opts: {
         return;
       }
       if (isHudStatePath(requestPath)) {
-        const handled = await (await getHudApiModule()).handleHudStateHttpRequest(
-          req,
-          res,
-          hudWorkspaceRoot,
-        );
+        const handled = await (
+          await getHudApiModule()
+        ).handleHudStateHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }
       }
       if (isKbStatePath(requestPath)) {
-        const handled = await (await getKbApiModule()).handleKbHttpRequest(
-          req,
-          res,
-          hudWorkspaceRoot,
-        );
+        const handled = await (
+          await getKbApiModule()
+        ).handleKbHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }
       }
       if (isPromoteGateStatePath(requestPath)) {
-        const handled = await (await getPromoteGateApiModule()).handlePromoteGateHttpRequest(
-          req,
-          res,
-          hudWorkspaceRoot,
-        );
+        const handled = await (
+          await getPromoteGateApiModule()
+        ).handlePromoteGateHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }
       }
       if (isMirrorStatePath(requestPath)) {
-        const handled = await (await getMirrorApiModule()).handleMirrorHttpRequest(
-          req,
-          res,
-          hudWorkspaceRoot,
-        );
+        const handled = await (
+          await getMirrorApiModule()
+        ).handleMirrorHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }
       }
       if (isAutoEvolutionStatePath(requestPath)) {
-        const handled = await (await getAutoEvolutionApiModule()).handleAutoEvolutionHttpRequest(
-          req,
-          res,
-          hudWorkspaceRoot,
-        );
+        const handled = await (
+          await getAutoEvolutionApiModule()
+        ).handleAutoEvolutionHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }
       }
       if (isTaskGraphStatePath(requestPath)) {
-        const handled = await (await getTaskGraphApiModule()).handleTaskGraphHttpRequest(
-          req,
-          res,
-          hudWorkspaceRoot,
-        );
+        const handled = await (
+          await getTaskGraphApiModule()
+        ).handleTaskGraphHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }

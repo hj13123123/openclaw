@@ -1,6 +1,12 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
+  AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH,
+  AUTO_EVOLUTION_REPORT_PREFIX,
+  summarizeAutoEvolutionObserve,
+  type AutoEvolutionObserveReport,
+} from "./evolution/auto-evolution-observe.js";
+import {
   generateHudState,
   type HudAutoEvolutionObserveSummary,
   type HudPendingReturnItem,
@@ -15,12 +21,7 @@ import {
   summarizeMirrorObserve,
   type MirrorObserveReport,
 } from "./mirror/mirror-observe.js";
-import {
-  AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH,
-  AUTO_EVOLUTION_REPORT_PREFIX,
-  summarizeAutoEvolutionObserve,
-  type AutoEvolutionObserveReport,
-} from "./evolution/auto-evolution-observe.js";
+import { scanReturnInbox } from "./returns/return-inbox.js";
 import {
   TASK_GRAPH_SOURCE_RELATIVE_PATH,
   TASK_GRAPH_VALIDATION_REPORT_DIR_RELATIVE_PATH,
@@ -29,7 +30,6 @@ import {
 
 export const HUD_STATE_RELATIVE_PATH = "runtime/main/tmp/task-hud-state.json";
 const POSITIONS_STATE_REL = "system/positions/state";
-const RETURNS_INBOX_REL = "system/returns/inbox";
 const CASE_LIBRARY_REL = "system/case-library";
 const TASK_GRAPH_SOURCE_REL = TASK_GRAPH_SOURCE_RELATIVE_PATH;
 const TASK_GRAPH_VALIDATION_REL = TASK_GRAPH_VALIDATION_REPORT_DIR_RELATIVE_PATH;
@@ -69,25 +69,6 @@ function firstString(record: Record<string, unknown> | null, names: string[]): s
   return null;
 }
 
-function nestedString(record: Record<string, unknown> | null, dottedPath: string): string | null {
-  if (!record) return null;
-  let current: unknown = record;
-  for (const segment of dottedPath.split(".")) {
-    if (!isRecord(current)) return null;
-    current = current[segment];
-  }
-  return stringValue(current);
-}
-
-function returnField(record: Record<string, unknown> | null, nestedPath: string, flatName: string): string | null {
-  return nestedString(record, nestedPath) ?? firstString(record, [flatName]);
-}
-
-function truncateText(value: string | null, maxLength = 120): string | null {
-  if (!value) return value;
-  return value.length <= maxLength ? value : value.slice(0, maxLength);
-}
-
 function listFiles(dirPath: string, predicate: (name: string) => boolean): string[] {
   try {
     if (!existsSync(dirPath)) return [];
@@ -112,7 +93,10 @@ function listFilesRecursive(dirPath: string, predicate: (name: string) => boolea
   }
 }
 
-function readPositionStates(workspaceRoot: string, warnings: string[]): Record<string, HudPositionState> {
+function readPositionStates(
+  workspaceRoot: string,
+  warnings: string[],
+): Record<string, HudPositionState> {
   const positionsDir = path.join(workspaceRoot, POSITIONS_STATE_REL);
   if (!existsSync(positionsDir)) {
     warnings.push("positions state directory missing");
@@ -134,40 +118,24 @@ function readPositionStates(workspaceRoot: string, warnings: string[]): Record<s
 }
 
 function readPendingReturns(workspaceRoot: string, warnings: string[]): HudPendingReturnItem[] {
-  const returnInboxDir = path.join(workspaceRoot, RETURNS_INBOX_REL);
-  if (!existsSync(returnInboxDir)) {
-    warnings.push("return inbox directory missing");
-    return [];
-  }
-
-  const files = listFiles(returnInboxDir, (name) => (
-    name.endsWith(".json") && !name.toLowerCase().startsWith("return.mock.")
-  ));
-
-  return files
-    .map((filePath) => {
-      const record = readJsonFile(filePath);
-      if (!record) warnings.push(`Failed to parse return: ${path.basename(filePath)}`);
-      const taskId = returnField(record, "routing.taskId", "taskId");
-      const sourceRole = returnField(record, "routing.sourceRole", "sourceRole");
-      const action = returnField(record, "routing.action", "action");
-      const rawSummary = returnField(record, "outcome.summary", "summary");
-      return {
-        returnId: path.basename(filePath),
-        taskId,
-        sourceRole,
-        action,
-        status: "pending" as const,
-        createdAt: statSync(filePath).mtime.toISOString(),
-        needsReview: true,
-        summary: taskId && sourceRole && action && rawSummary ? truncateText(rawSummary) : "[incomplete return]",
-      };
-    })
-    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
-    .slice(0, 10);
+  const scan = scanReturnInbox(workspaceRoot, { limit: 10 });
+  warnings.push(...scan.warnings);
+  return scan.pendingItems.map((item) => ({
+    returnId: item.returnId,
+    taskId: item.taskId,
+    sourceRole: item.sourceRole,
+    action: item.action,
+    status: item.status,
+    createdAt: item.createdAt,
+    needsReview: item.needsReview,
+    summary: item.summary,
+  }));
 }
 
-function readCaseLibraryState(workspaceRoot: string, warnings: string[]): { totalCaseFiles: number; lastCaseAt: string | null } {
+function readCaseLibraryState(
+  workspaceRoot: string,
+  warnings: string[],
+): { totalCaseFiles: number; lastCaseAt: string | null } {
   const caseLibraryDir = path.join(workspaceRoot, CASE_LIBRARY_REL);
   if (!existsSync(caseLibraryDir)) {
     warnings.push("case library directory missing");
@@ -175,16 +143,25 @@ function readCaseLibraryState(workspaceRoot: string, warnings: string[]): { tota
   }
 
   const files = listFilesRecursive(caseLibraryDir, (name) => name.endsWith(".json"));
-  const lastCaseAt = files.length > 0
-    ? files.map((filePath) => statSync(filePath).mtime).sort((a, b) => b.getTime() - a.getTime())[0]?.toISOString() ?? null
-    : null;
+  const lastCaseAt =
+    files.length > 0
+      ? (files
+          .map((filePath) => statSync(filePath).mtime)
+          .sort((a, b) => b.getTime() - a.getTime())[0]
+          ?.toISOString() ?? null)
+      : null;
   return { totalCaseFiles: files.length, lastCaseAt };
 }
 
-function readValidationReports(workspaceRoot: string, warnings: string[]): Map<string, { checkedAt: string; severity: string | null }> {
+function readValidationReports(
+  workspaceRoot: string,
+  warnings: string[],
+): Map<string, { checkedAt: string; severity: string | null }> {
   const validationDir = path.join(workspaceRoot, TASK_GRAPH_VALIDATION_REL);
   const reports = new Map<string, { checkedAt: string; severity: string | null }>();
-  for (const filePath of listFiles(validationDir, (name) => /^task-graph-validation-.*\.json$/u.test(name))) {
+  for (const filePath of listFiles(validationDir, (name) =>
+    /^task-graph-validation-.*\.json$/u.test(name),
+  )) {
     const report = readJsonFile(filePath);
     const graphId = firstString(report, ["graphId"]);
     const checkedAt = firstString(report, ["checkedAt"]);
@@ -213,7 +190,8 @@ function nodeStatusSummary(nodes: unknown[]): HudTaskGraphItem["nodeSummary"] {
   for (const node of nodes) {
     if (!isRecord(node)) continue;
     const status = stringValue(node.status);
-    if (status && status in summary && status !== "total") summary[status as keyof Omit<typeof summary, "total">] += 1;
+    if (status && status in summary && status !== "total")
+      summary[status as keyof Omit<typeof summary, "total">] += 1;
   }
   return summary;
 }
@@ -249,7 +227,11 @@ function readTaskGraphs(workspaceRoot: string, warnings: string[]): HudTaskGraph
     .filter((item): item is HudTaskGraphItem => item !== null);
 }
 
-function refreshTaskGraphValidationReports(workspaceRoot: string, checkedAt: string, warnings: string[]): void {
+function refreshTaskGraphValidationReports(
+  workspaceRoot: string,
+  checkedAt: string,
+  warnings: string[],
+): void {
   try {
     runTaskGraphValidationObserve(workspaceRoot, { checkedAt, writeReports: true });
   } catch (error) {
@@ -258,7 +240,10 @@ function refreshTaskGraphValidationReports(workspaceRoot: string, checkedAt: str
   }
 }
 
-function readLatestMirrorObserve(workspaceRoot: string, warnings: string[]): HudMirrorObserveSummary {
+function readLatestMirrorObserve(
+  workspaceRoot: string,
+  warnings: string[],
+): HudMirrorObserveSummary {
   const reportDir = path.join(workspaceRoot, MIRROR_REPORT_DIR_RELATIVE_PATH);
   if (!existsSync(reportDir)) {
     return {
@@ -273,8 +258,10 @@ function readLatestMirrorObserve(workspaceRoot: string, warnings: string[]): Hud
     };
   }
 
-  const latestReport = listFiles(reportDir, (name) => name.startsWith(MIRROR_REPORT_PREFIX) && name.endsWith(REPORT_FILE_SUFFIX))
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+  const latestReport = listFiles(
+    reportDir,
+    (name) => name.startsWith(MIRROR_REPORT_PREFIX) && name.endsWith(REPORT_FILE_SUFFIX),
+  ).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
   if (!latestReport) {
     return {
       available: false,
@@ -317,7 +304,10 @@ function readLatestMirrorObserve(workspaceRoot: string, warnings: string[]): Hud
   }
 }
 
-function readLatestAutoEvolutionObserve(workspaceRoot: string, warnings: string[]): HudAutoEvolutionObserveSummary {
+function readLatestAutoEvolutionObserve(
+  workspaceRoot: string,
+  warnings: string[],
+): HudAutoEvolutionObserveSummary {
   const reportDir = path.join(workspaceRoot, AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH);
   if (!existsSync(reportDir)) {
     return {
@@ -331,8 +321,10 @@ function readLatestAutoEvolutionObserve(workspaceRoot: string, warnings: string[
     };
   }
 
-  const latestReport = listFiles(reportDir, (name) => name.startsWith(AUTO_EVOLUTION_REPORT_PREFIX) && name.endsWith(REPORT_FILE_SUFFIX))
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+  const latestReport = listFiles(
+    reportDir,
+    (name) => name.startsWith(AUTO_EVOLUTION_REPORT_PREFIX) && name.endsWith(REPORT_FILE_SUFFIX),
+  ).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
   if (!latestReport) {
     return {
       available: false,
@@ -372,7 +364,10 @@ function readLatestAutoEvolutionObserve(workspaceRoot: string, warnings: string[
   }
 }
 
-export function generateHudStateFromWorkspace(workspaceRoot: string, generatedAt = new Date().toISOString()): HudState {
+export function generateHudStateFromWorkspace(
+  workspaceRoot: string,
+  generatedAt = new Date().toISOString(),
+): HudState {
   const warnings: string[] = [];
   refreshTaskGraphValidationReports(workspaceRoot, generatedAt, warnings);
   const { totalCaseFiles, lastCaseAt } = readCaseLibraryState(workspaceRoot, warnings);
@@ -390,7 +385,10 @@ export function generateHudStateFromWorkspace(workspaceRoot: string, generatedAt
   });
 }
 
-export function writeHudStateSnapshot(workspaceRoot: string, generatedAt = new Date().toISOString()): HudStateRefreshResult {
+export function writeHudStateSnapshot(
+  workspaceRoot: string,
+  generatedAt = new Date().toISOString(),
+): HudStateRefreshResult {
   const state = generateHudStateFromWorkspace(workspaceRoot, generatedAt);
   const statePath = path.join(workspaceRoot, HUD_STATE_RELATIVE_PATH);
   mkdirSync(path.dirname(statePath), { recursive: true });

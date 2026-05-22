@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { getRecentEvents } from "../runtime/event-bus.js";
 import { writeHudStateSnapshot } from "../runtime/hud-state-refresh.js";
+import { scanReturnInbox } from "../runtime/returns/return-inbox.js";
 import { tick as tickRuntimeLoop } from "../runtime/runtime-loop.js";
 import { getTaskState } from "../runtime/task-state-machine.js";
 import { sendJson } from "./http-common.js";
@@ -21,6 +22,7 @@ const POLICY_STATE_ROUTE = "/api/hud/policy-state";
 const POLICY_ACTIONS_ROUTE = "/api/hud/policy-actions";
 const RUNTIME_LOOP_ROUTE = "/api/hud/runtime-loop";
 const RUNTIME_LOOP_REFRESH_ROUTE = "/api/hud/runtime-loop/refresh";
+const RETURN_INBOX_ROUTE = "/api/hud/return-inbox";
 const RUNTIME_LOOP_STATE_RELATIVE_PATH = "runtime/main/tmp/runtime-loop-state.json";
 const POLICY_RULES_RELATIVE_PATH = "runtime/policy/policy-rules.json";
 const POLICY_ACTION_AUDIT_RELATIVE_PATH = "runtime/policy/action-audit.jsonl";
@@ -61,17 +63,22 @@ type RuntimeLoopHttpState = {
   warnings?: unknown;
 };
 
-function resolveRuntimeLoopStaleAfterMs(state: {
-  scheduler?: unknown;
-}): number {
-  const scheduler = state.scheduler && typeof state.scheduler === "object" && !Array.isArray(state.scheduler)
-    ? state.scheduler as Record<string, unknown>
-    : {};
-  const intervalMs = typeof scheduler.intervalMs === "number" && Number.isFinite(scheduler.intervalMs) && scheduler.intervalMs > 0
-    ? scheduler.intervalMs
-    : null;
+function resolveRuntimeLoopStaleAfterMs(state: { scheduler?: unknown }): number {
+  const scheduler =
+    state.scheduler && typeof state.scheduler === "object" && !Array.isArray(state.scheduler)
+      ? (state.scheduler as Record<string, unknown>)
+      : {};
+  const intervalMs =
+    typeof scheduler.intervalMs === "number" &&
+    Number.isFinite(scheduler.intervalMs) &&
+    scheduler.intervalMs > 0
+      ? scheduler.intervalMs
+      : null;
   return intervalMs
-    ? Math.max(RUNTIME_LOOP_DEFAULT_STALE_AFTER_MS, intervalMs * RUNTIME_LOOP_STALE_INTERVAL_MULTIPLIER)
+    ? Math.max(
+        RUNTIME_LOOP_DEFAULT_STALE_AFTER_MS,
+        intervalMs * RUNTIME_LOOP_STALE_INTERVAL_MULTIPLIER,
+      )
     : RUNTIME_LOOP_DEFAULT_STALE_AFTER_MS;
 }
 
@@ -96,15 +103,28 @@ export function summarizeRuntimeLoopFreshness(
 }
 
 function buildRuntimeLoopHttpPayload(state: RuntimeLoopHttpState): Record<string, unknown> {
-  const tasks = state.tasks && typeof state.tasks === "object" && !Array.isArray(state.tasks) ? state.tasks as Record<string, unknown> : {};
-  const returnProcessor = state.return_processor && typeof state.return_processor === "object" && !Array.isArray(state.return_processor) ? state.return_processor as Record<string, unknown> : {};
+  const tasks =
+    state.tasks && typeof state.tasks === "object" && !Array.isArray(state.tasks)
+      ? (state.tasks as Record<string, unknown>)
+      : {};
+  const returnProcessor =
+    state.return_processor &&
+    typeof state.return_processor === "object" &&
+    !Array.isArray(state.return_processor)
+      ? (state.return_processor as Record<string, unknown>)
+      : {};
   const freshness = summarizeRuntimeLoopFreshness(state);
-  const warnings = Array.isArray(state.warnings) ? state.warnings.filter((item): item is string => typeof item === "string") : [];
-  const freshnessWarnings = freshness.status === "stale"
-    ? [`runtime loop snapshot is stale (${Math.floor((freshness.ageMs ?? 0) / 60_000)} minutes old)`]
-    : freshness.status === "missing" || freshness.status === "invalid"
-      ? [`runtime loop snapshot timestamp is ${freshness.status}`]
-      : [];
+  const warnings = Array.isArray(state.warnings)
+    ? state.warnings.filter((item): item is string => typeof item === "string")
+    : [];
+  const freshnessWarnings =
+    freshness.status === "stale"
+      ? [
+          `runtime loop snapshot is stale (${Math.floor((freshness.ageMs ?? 0) / 60_000)} minutes old)`,
+        ]
+      : freshness.status === "missing" || freshness.status === "invalid"
+        ? [`runtime loop snapshot timestamp is ${freshness.status}`]
+        : [];
   return {
     latest_tick_id: typeof state.tickId === "string" ? state.tickId : null,
     latest_tick_at: typeof state.tick_at === "string" ? state.tick_at : null,
@@ -139,8 +159,12 @@ function parseCompletionNotice(filePath: string): RecentCompletionItem | null {
     const statusMatch2 = summary.match(/\b(completed(?:_with_warn)?|PASS|failed)\b/u);
     const status = statusMatch2?.[1] ?? "unknown";
     const taskIdFromSummary = summary.trim().split(/\s+/u)[0] ?? "";
-    const taskId = typeof notice.taskId === "string" && notice.taskId.trim() ? notice.taskId : taskIdFromSummary;
-    const completedAt = typeof notice.createdAt === "string" && notice.createdAt.trim() ? notice.createdAt : statSync(filePath).mtime.toISOString();
+    const taskId =
+      typeof notice.taskId === "string" && notice.taskId.trim() ? notice.taskId : taskIdFromSummary;
+    const completedAt =
+      typeof notice.createdAt === "string" && notice.createdAt.trim()
+        ? notice.createdAt
+        : statSync(filePath).mtime.toISOString();
     return {
       taskId,
       level: levelMatch[1] as "L0" | "L1" | "L2",
@@ -162,7 +186,9 @@ export function scanRecentCompletions(workspaceRoot: string): RecentCompletions 
     .filter((name) => /^notice-task_completed-.*\.json$/u.test(name))
     .map((name) => path.join(inboxDir, name))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
-  const parsed = files.map(parseCompletionNotice).filter((item): item is RecentCompletionItem => item !== null);
+  const parsed = files
+    .map(parseCompletionNotice)
+    .filter((item): item is RecentCompletionItem => item !== null);
   const todayKey = getLocalDateKey(new Date());
   const totalToday = parsed.filter((item) => getLocalDateKey(item.completedAt) === todayKey).length;
   const items = parsed.slice(0, 5);
@@ -192,11 +218,27 @@ export async function handleHudStateHttpRequest(
     requestPath !== POLICY_STATE_ROUTE &&
     requestPath !== POLICY_ACTIONS_ROUTE &&
     requestPath !== RUNTIME_LOOP_ROUTE &&
-    requestPath !== RUNTIME_LOOP_REFRESH_ROUTE
+    requestPath !== RUNTIME_LOOP_REFRESH_ROUTE &&
+    requestPath !== RETURN_INBOX_ROUTE
   ) {
     return false;
   }
 
+  if (requestPath === RETURN_INBOX_ROUTE) {
+    if (req.method !== "GET") {
+      res.setHeader("Allow", "GET");
+      res.statusCode = 405;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Method Not Allowed");
+      return true;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      data: scanReturnInbox(workspaceRoot),
+    });
+    return true;
+  }
 
   if (requestPath === RUNTIME_LOOP_ROUTE) {
     if (req.method !== "GET") {
@@ -208,7 +250,9 @@ export async function handleHudStateHttpRequest(
     }
 
     try {
-      const state = JSON.parse(await readFile(path.join(workspaceRoot, RUNTIME_LOOP_STATE_RELATIVE_PATH), "utf8")) as RuntimeLoopHttpState;
+      const state = JSON.parse(
+        await readFile(path.join(workspaceRoot, RUNTIME_LOOP_STATE_RELATIVE_PATH), "utf8"),
+      ) as RuntimeLoopHttpState;
       sendJson(res, 200, {
         ok: true,
         data: buildRuntimeLoopHttpPayload(state),
@@ -228,7 +272,10 @@ export async function handleHudStateHttpRequest(
     }
 
     try {
-      const state = JSON.parse(await readFile(schedulerStatePath, "utf8")) as Record<string, unknown>;
+      const state = JSON.parse(await readFile(schedulerStatePath, "utf8")) as Record<
+        string,
+        unknown
+      >;
       sendJson(res, 200, {
         enabled: state.enabled ?? false,
         mode: state.mode ?? "observe",
@@ -294,14 +341,19 @@ export async function handleHudStateHttpRequest(
     let rulesCount = 0;
     let enabledCount = 0;
     try {
-      const rulesFile = JSON.parse(await readFile(path.join(workspaceRoot, POLICY_RULES_RELATIVE_PATH), "utf8")) as {
+      const rulesFile = JSON.parse(
+        await readFile(path.join(workspaceRoot, POLICY_RULES_RELATIVE_PATH), "utf8"),
+      ) as {
         policyVersion?: unknown;
         rules?: unknown;
       };
       policyVersion = typeof rulesFile.policyVersion === "string" ? rulesFile.policyVersion : null;
       const rules = Array.isArray(rulesFile.rules) ? rulesFile.rules : [];
       rulesCount = rules.length;
-      enabledCount = rules.filter((rule) => !!(rule && typeof rule === "object" && (rule as { enabled?: unknown }).enabled === true)).length;
+      enabledCount = rules.filter(
+        (rule) =>
+          !!(rule && typeof rule === "object" && (rule as { enabled?: unknown }).enabled === true),
+      ).length;
     } catch {
       policyVersion = null;
       rulesCount = 0;
@@ -309,14 +361,26 @@ export async function handleHudStateHttpRequest(
     }
 
     const events = getRecentEvents(workspaceRoot, 5000);
-    const policyDecisionEvents = events.filter((event) => event.source === "gateway-policy-engine" && event.eventType === "policy_decision");
-    const lastEvaluation = [...events].reverse().find((event) => event.source === "gateway-policy-engine" && event.eventType === "policy_evaluation_completed")?.timestamp ?? null;
+    const policyDecisionEvents = events.filter(
+      (event) => event.source === "gateway-policy-engine" && event.eventType === "policy_decision",
+    );
+    const lastEvaluation =
+      [...events]
+        .reverse()
+        .find(
+          (event) =>
+            event.source === "gateway-policy-engine" &&
+            event.eventType === "policy_evaluation_completed",
+        )?.timestamp ?? null;
     sendJson(res, 200, {
       policyVersion,
       rulesCount,
       enabledCount,
       lastEvaluation,
-      recentDecisions: policyDecisionEvents.slice(-20).reverse().map((event) => event.payload),
+      recentDecisions: policyDecisionEvents
+        .slice(-20)
+        .reverse()
+        .map((event) => event.payload),
     });
     return true;
   }
@@ -335,13 +399,16 @@ export async function handleHudStateHttpRequest(
       const lines = (await readFile(auditPath, "utf8"))
         .split(/\r?\n/u)
         .filter((line) => line.trim().length > 0);
-      const recentItems = lines.slice(-50).map((line) => {
-        try {
-          return JSON.parse(line) as Record<string, unknown>;
-        } catch {
-          return { malformed: true, raw: line };
-        }
-      }).reverse();
+      const recentItems = lines
+        .slice(-50)
+        .map((line) => {
+          try {
+            return JSON.parse(line) as Record<string, unknown>;
+          } catch {
+            return { malformed: true, raw: line };
+          }
+        })
+        .reverse();
       sendJson(res, 200, {
         totalRecords: lines.length,
         recentItems,
@@ -450,14 +517,11 @@ export async function handleHudStateHttpRequest(
     }
 
     try {
-      execSync(
-        `powershell -NoProfile -ExecutionPolicy Bypass -File "${hudRefreshScriptPath}"`,
-        {
-          cwd: workspaceRoot,
-          encoding: "utf8",
-          stdio: "pipe",
-        },
-      );
+      execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${hudRefreshScriptPath}"`, {
+        cwd: workspaceRoot,
+        encoding: "utf8",
+        stdio: "pipe",
+      });
       const state = JSON.parse(await readFile(hudStatePath, "utf8")) as {
         generatedAt?: string;
         warnings?: unknown;
