@@ -173,6 +173,94 @@ describe("server HUD API runtime loop freshness", () => {
     expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "POST");
   });
 
+  it("returns runtime loop preflight without writing runtime loop state", async () => {
+    const workspaceRoot = makeWorkspace();
+    const tasksPath = path.join(workspaceRoot, "runtime", "tasks", "tasks.jsonl");
+    mkdirSync(path.dirname(tasksPath), { recursive: true });
+    writeFileSync(
+      tasksPath,
+      `${JSON.stringify({
+        taskId: "PREFLIGHT-API-A",
+        status: "queued",
+        createdAt: "2026-05-22T08:00:00.000Z",
+        updatedAt: "2026-05-22T08:00:00.000Z",
+        metadata: { dispatchTarget: "/main" },
+        policyDecision: {
+          decisionId: "decision-1",
+          ruleId: "R001",
+          riskLevel: "L0",
+          action: "auto_close",
+          reason: "unit test",
+          timestamp: "2026-05-22T08:00:00.000Z",
+        },
+      })}\n`,
+      "utf8",
+    );
+    writeJson(path.join(workspaceRoot, "runtime", "policy", "policy-rules.json"), {
+      $schema: "policy-rules-v1",
+      schedulerPolicy: {
+        runtimeLoopMode: "observe",
+        maxDispatchesPerTick: 1,
+        disableOldTrigger: true,
+        enableContinuousApply: false,
+      },
+      rules: [],
+    });
+
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq("/api/hud/runtime-loop/preflight", "GET"),
+      response.res,
+      workspaceRoot,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      data: expect.objectContaining({
+        mode: "observe-only",
+        tasks: expect.objectContaining({
+          queued_candidates: 1,
+          policy_eligible_candidates: 1,
+          would_dispatch_if_apply_enabled: 0,
+          would_dispatch: 0,
+        }),
+        dispatch_plan: [
+          expect.objectContaining({
+            taskId: "PREFLIGHT-API-A",
+            would_dispatch: false,
+            blocked_reasons: expect.arrayContaining([
+              "observe_only_preflight",
+              "scheduler_disabled",
+              "continuous_apply_disabled",
+            ]),
+          }),
+        ],
+        constraintsVerified: expect.objectContaining({
+          stateWritten: "no",
+          dispatchTriggered: "no",
+          sessionsSpawnCalled: "no",
+          applied: "no",
+        }),
+      }),
+    });
+  });
+
+  it("rejects runtime loop preflight writes", async () => {
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq("/api/hud/runtime-loop/preflight", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
+  });
+
   it("returns typed return inbox summaries without consuming files", async () => {
     const workspaceRoot = makeWorkspace();
     const returnPath = path.join(workspaceRoot, "system", "returns", "inbox", "return-a.json");

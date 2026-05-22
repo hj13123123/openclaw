@@ -5,9 +5,20 @@ import { AGENT_LANE_NESTED } from "../agents/lanes.js";
 import { callGateway } from "../gateway/call.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { createRuntimeEvent, emitEvent, type RuntimeEvent } from "./event-bus.js";
-import { evaluatePolicyForTask, loadPolicyRules, type RiskLevel } from "./policy-engine.js";
+import {
+  evaluatePolicyForTask,
+  loadPolicyRules,
+  type PolicyAction,
+  type RiskLevel,
+} from "./policy-engine.js";
 import { scanReturnInbox } from "./returns/return-inbox.js";
-import { getTaskState, type TaskRecord, type TaskStatus, type TaskSummary } from "./task-state-machine.js";
+import { buildTaskGraphReturnPreview } from "./task-graph.js";
+import {
+  getTaskState,
+  type TaskRecord,
+  type TaskStatus,
+  type TaskSummary,
+} from "./task-state-machine.js";
 
 const RUNTIME_LOOP_STATE_REL = "runtime/main/tmp/runtime-loop-state.json";
 const SCHEDULER_STATE_REL = "runtime/main/tmp/task-scheduler-state.json";
@@ -73,6 +84,57 @@ export type RuntimeLoopState = {
   warnings: string[];
 };
 
+type RuntimeLoopPreflightBlockedReason =
+  | "observe_only_preflight"
+  | "scheduler_disabled"
+  | "continuous_apply_disabled"
+  | "max_dispatches_zero"
+  | "no_queued_tasks"
+  | `scheduler_mode_${string}`
+  | `policy_action_${PolicyAction}`
+  | `risk_level_${RiskLevel}`;
+
+export type RuntimeLoopPreflightDispatchPlanEntry = DispatchPlanEntry & {
+  policy_eligible: boolean;
+  would_dispatch_if_apply_enabled: boolean;
+  blocked_reasons: RuntimeLoopPreflightBlockedReason[];
+};
+
+export type RuntimeLoopPreflightState = {
+  mode: "observe-only";
+  preflight_at: string;
+  scheduler: SchedulerSnapshot;
+  tasks: TaskSummary & {
+    queued_candidates: number;
+    policy_eligible_candidates: number;
+    would_dispatch_if_apply_enabled: number;
+    would_dispatch: 0;
+  };
+  dispatch_plan: RuntimeLoopPreflightDispatchPlanEntry[];
+  return_processor: ReturnProcessorState;
+  task_graph_return_preview: {
+    graphCount: number;
+    nodeCount: number;
+    pendingReturnCount: number;
+    matchedNodeCount: number;
+    missingNodeCount: number;
+    ambiguousNodeCount: number;
+    unmatchedReturnCount: number;
+  };
+  blocked_reasons: RuntimeLoopPreflightBlockedReason[];
+  human_gate_required: boolean;
+  constraintsVerified: {
+    stateWritten: "no";
+    eventEmitted: "no";
+    dispatchTriggered: "no";
+    sessionsSpawnCalled: "no";
+    taskGraphMutated: "no";
+    returnConsumed: "no";
+    receiptWritten: "no";
+    applied: "no";
+  };
+};
+
 function statePath(workspaceRoot: string): string {
   return path.join(workspaceRoot, RUNTIME_LOOP_STATE_REL);
 }
@@ -81,7 +143,9 @@ function readJsonObject(filePath: string): Record<string, unknown> | null {
   try {
     if (!existsSync(filePath)) return null;
     const parsed = JSON.parse(readFileSync(filePath, "utf8")) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
@@ -90,18 +154,28 @@ function readJsonObject(filePath: string): Record<string, unknown> | null {
 function readSchedulerPolicy(workspaceRoot: string): SchedulerPolicyLite {
   const policyRules = readJsonObject(path.join(workspaceRoot, POLICY_RULES_REL));
   const embedded = policyRules?.schedulerPolicy;
-  const policy = embedded && typeof embedded === "object" && !Array.isArray(embedded) ? embedded as Record<string, unknown> : readJsonObject(path.join(workspaceRoot, SCHEDULER_POLICY_REL));
+  const policy =
+    embedded && typeof embedded === "object" && !Array.isArray(embedded)
+      ? (embedded as Record<string, unknown>)
+      : readJsonObject(path.join(workspaceRoot, SCHEDULER_POLICY_REL));
   return {
     runtimeLoopMode: "observe",
-    maxDispatchesPerTick: typeof policy?.maxDispatchesPerTick === "number" ? Math.max(0, Math.floor(policy.maxDispatchesPerTick)) : 0,
-    disableOldTrigger: typeof policy?.disableOldTrigger === "boolean" ? policy.disableOldTrigger : true,
-    enableContinuousApply: typeof policy?.enableContinuousApply === "boolean" ? policy.enableContinuousApply : false,
+    maxDispatchesPerTick:
+      typeof policy?.maxDispatchesPerTick === "number"
+        ? Math.max(0, Math.floor(policy.maxDispatchesPerTick))
+        : 0,
+    disableOldTrigger:
+      typeof policy?.disableOldTrigger === "boolean" ? policy.disableOldTrigger : true,
+    enableContinuousApply:
+      typeof policy?.enableContinuousApply === "boolean" ? policy.enableContinuousApply : false,
   };
 }
 
 function readSchedulerSnapshot(workspaceRoot: string): SchedulerSnapshot {
   const state = readJsonObject(path.join(workspaceRoot, SCHEDULER_STATE_REL));
-  const policyWarnings = Array.isArray(state?.policyWarnings) ? state.policyWarnings.filter((item): item is string => typeof item === "string") : [];
+  const policyWarnings = Array.isArray(state?.policyWarnings)
+    ? state.policyWarnings.filter((item): item is string => typeof item === "string")
+    : [];
   return {
     enabled: state?.enabled === true,
     mode: typeof state?.mode === "string" ? state.mode : "observe",
@@ -114,7 +188,11 @@ function readSchedulerSnapshot(workspaceRoot: string): SchedulerSnapshot {
   };
 }
 
-function buildDispatchPlan(workspaceRoot: string, tasks: TaskRecord[], maxDispatchesPerTick: number): DispatchPlanEntry[] {
+function buildDispatchPlan(
+  workspaceRoot: string,
+  tasks: TaskRecord[],
+  maxDispatchesPerTick: number,
+): DispatchPlanEntry[] {
   const rules = loadPolicyRules(workspaceRoot);
   return tasks
     .filter((task) => task.status === "queued")
@@ -122,10 +200,12 @@ function buildDispatchPlan(workspaceRoot: string, tasks: TaskRecord[], maxDispat
     .map((task) => {
       const decision = task.policyDecision ?? evaluatePolicyForTask(task, rules);
       const riskLevel = decision.riskLevel as RiskLevel;
-      const eligible = decision.action === "auto_close" && riskLevel === "L0" && maxDispatchesPerTick > 0;
+      const eligible =
+        decision.action === "auto_close" && riskLevel === "L0" && maxDispatchesPerTick > 0;
       return {
         taskId: task.taskId,
-        dispatchTarget: typeof task.metadata.dispatchTarget === "string" ? task.metadata.dispatchTarget : "/main",
+        dispatchTarget:
+          typeof task.metadata.dispatchTarget === "string" ? task.metadata.dispatchTarget : "/main",
         policyDecision: decision.action,
         riskLevel,
         would_dispatch: false,
@@ -148,7 +228,117 @@ function buildReturnProcessorState(workspaceRoot: string): ReturnProcessorState 
   };
 }
 
-function emitRuntimeLoopEvent(workspaceRoot: string, eventType: string, payload: Record<string, unknown>): RuntimeEvent {
+function buildPreflightDispatchPlan(
+  workspaceRoot: string,
+  tasks: TaskRecord[],
+  scheduler: SchedulerSnapshot,
+): RuntimeLoopPreflightDispatchPlanEntry[] {
+  const rules = loadPolicyRules(workspaceRoot);
+  const maxDispatchesPerTick = scheduler.schedulerPolicy.maxDispatchesPerTick;
+  let remainingDispatchSlots = maxDispatchesPerTick;
+  return tasks
+    .filter((task) => task.status === "queued")
+    .slice(0, 50)
+    .map((task) => {
+      const decision = task.policyDecision ?? evaluatePolicyForTask(task, rules);
+      const riskLevel = decision.riskLevel as RiskLevel;
+      const policyEligible = decision.action === "auto_close" && riskLevel === "L0";
+      const blockedReasons: RuntimeLoopPreflightBlockedReason[] = ["observe_only_preflight"];
+      if (!scheduler.enabled) blockedReasons.push("scheduler_disabled");
+      if (scheduler.mode !== "observe") blockedReasons.push(`scheduler_mode_${scheduler.mode}`);
+      if (!scheduler.schedulerPolicy.enableContinuousApply) {
+        blockedReasons.push("continuous_apply_disabled");
+      }
+      if (maxDispatchesPerTick <= 0) blockedReasons.push("max_dispatches_zero");
+      if (decision.action !== "auto_close") blockedReasons.push(`policy_action_${decision.action}`);
+      if (riskLevel !== "L0") blockedReasons.push(`risk_level_${riskLevel}`);
+
+      const wouldDispatchIfApplyEnabled =
+        policyEligible &&
+        scheduler.enabled &&
+        scheduler.mode === "observe" &&
+        remainingDispatchSlots > 0;
+      if (wouldDispatchIfApplyEnabled) remainingDispatchSlots -= 1;
+      return {
+        taskId: task.taskId,
+        dispatchTarget:
+          typeof task.metadata.dispatchTarget === "string" ? task.metadata.dispatchTarget : "/main",
+        policyDecision: decision.action,
+        riskLevel,
+        would_dispatch: false,
+        blocked_reason: blockedReasons[0],
+        policy_eligible: policyEligible,
+        would_dispatch_if_apply_enabled: wouldDispatchIfApplyEnabled,
+        blocked_reasons: blockedReasons,
+      };
+    });
+}
+
+function uniqueBlockedReasons(
+  entries: RuntimeLoopPreflightDispatchPlanEntry[],
+): RuntimeLoopPreflightBlockedReason[] {
+  const reasons = new Set<RuntimeLoopPreflightBlockedReason>();
+  if (entries.length === 0) reasons.add("no_queued_tasks");
+  for (const entry of entries) {
+    for (const reason of entry.blocked_reasons) reasons.add(reason);
+  }
+  return [...reasons];
+}
+
+export function buildRuntimeLoopPreflight(workspaceRoot: string): RuntimeLoopPreflightState {
+  const preflightAt = new Date().toISOString();
+  const scheduler = readSchedulerSnapshot(workspaceRoot);
+  const taskState = getTaskState(workspaceRoot);
+  const dispatchPlan = buildPreflightDispatchPlan(workspaceRoot, taskState.tasks, scheduler);
+  const returnProcessor = buildReturnProcessorState(workspaceRoot);
+  const taskGraphReturnPreview = buildTaskGraphReturnPreview(workspaceRoot, {
+    observedAt: preflightAt,
+  });
+
+  return {
+    mode: "observe-only",
+    preflight_at: preflightAt,
+    scheduler,
+    tasks: {
+      ...taskState.summary,
+      queued_candidates: dispatchPlan.length,
+      policy_eligible_candidates: dispatchPlan.filter((entry) => entry.policy_eligible).length,
+      would_dispatch_if_apply_enabled: dispatchPlan.filter(
+        (entry) => entry.would_dispatch_if_apply_enabled,
+      ).length,
+      would_dispatch: 0,
+    },
+    dispatch_plan: dispatchPlan,
+    return_processor: returnProcessor,
+    task_graph_return_preview: {
+      graphCount: taskGraphReturnPreview.graphCount,
+      nodeCount: taskGraphReturnPreview.nodeCount,
+      pendingReturnCount: taskGraphReturnPreview.pendingReturnCount,
+      matchedNodeCount: taskGraphReturnPreview.matchedNodeCount,
+      missingNodeCount: taskGraphReturnPreview.missingNodeCount,
+      ambiguousNodeCount: taskGraphReturnPreview.ambiguousNodeCount,
+      unmatchedReturnCount: taskGraphReturnPreview.unmatchedReturnCount,
+    },
+    blocked_reasons: uniqueBlockedReasons(dispatchPlan),
+    human_gate_required: dispatchPlan.some((entry) => !entry.policy_eligible),
+    constraintsVerified: {
+      stateWritten: "no",
+      eventEmitted: "no",
+      dispatchTriggered: "no",
+      sessionsSpawnCalled: "no",
+      taskGraphMutated: "no",
+      returnConsumed: "no",
+      receiptWritten: "no",
+      applied: "no",
+    },
+  };
+}
+
+function emitRuntimeLoopEvent(
+  workspaceRoot: string,
+  eventType: string,
+  payload: Record<string, unknown>,
+): RuntimeEvent {
   const event = createRuntimeEvent(eventType, payload, "gateway-runtime-loop");
   emitEvent(workspaceRoot, event);
   return event;
@@ -158,17 +348,28 @@ export function tick(workspaceRoot: string): RuntimeLoopState {
   const tickAt = new Date().toISOString();
   const tickId = `tick-${tickAt.replace(/[-:.]/gu, "").replace(/\d{3}Z$/u, "Z")}`;
   const events: EventEmitPlan[] = [];
-  const started = emitRuntimeLoopEvent(workspaceRoot, "runtime_loop_tick_started", { tickId, mode: "observe" });
+  const started = emitRuntimeLoopEvent(workspaceRoot, "runtime_loop_tick_started", {
+    tickId,
+    mode: "observe",
+  });
   events.push({ eventType: started.eventType, source: started.source, payload: started.payload });
 
   try {
     const scheduler = readSchedulerSnapshot(workspaceRoot);
     const taskState = getTaskState(workspaceRoot);
-    const dispatchPlan = buildDispatchPlan(workspaceRoot, taskState.tasks, scheduler.schedulerPolicy.maxDispatchesPerTick);
+    const dispatchPlan = buildDispatchPlan(
+      workspaceRoot,
+      taskState.tasks,
+      scheduler.schedulerPolicy.maxDispatchesPerTick,
+    );
     const returnProcessor = buildReturnProcessorState(workspaceRoot);
     const warnings: string[] = [];
-    if (scheduler.enabled) warnings.push("scheduler marker is enabled, runtime loop remains observe-only");
-    if (scheduler.schedulerPolicy.maxDispatchesPerTick !== 0) warnings.push("schedulerPolicy.maxDispatchesPerTick is non-zero, dispatch still suppressed by observe-only loop");
+    if (scheduler.enabled)
+      warnings.push("scheduler marker is enabled, runtime loop remains observe-only");
+    if (scheduler.schedulerPolicy.maxDispatchesPerTick !== 0)
+      warnings.push(
+        "schedulerPolicy.maxDispatchesPerTick is non-zero, dispatch still suppressed by observe-only loop",
+      );
     const state: RuntimeLoopState = {
       tickId,
       tick_at: tickAt,
@@ -187,8 +388,12 @@ export function tick(workspaceRoot: string): RuntimeLoopState {
     const outputPath = statePath(workspaceRoot);
     const outputDir = path.dirname(outputPath);
     if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
-    writeFileSync(outputPath, `${JSON.stringify(state, null, 2)}
-`, "utf8");
+    writeFileSync(
+      outputPath,
+      `${JSON.stringify(state, null, 2)}
+`,
+      "utf8",
+    );
 
     const completed = emitRuntimeLoopEvent(workspaceRoot, "runtime_loop_tick_completed", {
       tickId,
@@ -198,9 +403,17 @@ export function tick(workspaceRoot: string): RuntimeLoopState {
       inboxCount: state.return_processor.inbox_count,
       warnings: state.warnings,
     });
-    state.events.push({ eventType: completed.eventType, source: completed.source, payload: completed.payload });
-    writeFileSync(outputPath, `${JSON.stringify(state, null, 2)}
-`, "utf8");
+    state.events.push({
+      eventType: completed.eventType,
+      source: completed.source,
+      payload: completed.payload,
+    });
+    writeFileSync(
+      outputPath,
+      `${JSON.stringify(state, null, 2)}
+`,
+      "utf8",
+    );
     return state;
   } catch (error) {
     const failed = emitRuntimeLoopEvent(workspaceRoot, "runtime_loop_tick_failed", {
@@ -286,11 +499,14 @@ const DISPATCH_REQUEST_DIR_REL = "runtime/dispatch";
 const GATEWAY_UNAVAILABLE = "GATEWAY_UNAVAILABLE";
 const CALL_GATEWAY_FAILED = "CALL_GATEWAY_FAILED";
 const CALL_GATEWAY_TIMEOUT = "CALL_GATEWAY_TIMEOUT";
-const configuredGatewayRpcTimeoutMs = Number.parseInt(process.env.OPENCLAW_GATEWAY_RPC_TIMEOUT_MS ?? "15000", 10);
-const GATEWAY_RPC_TIMEOUT_MS = Number.isFinite(configuredGatewayRpcTimeoutMs) && configuredGatewayRpcTimeoutMs > 0
-  ? configuredGatewayRpcTimeoutMs
-  : 15_000;
-
+const configuredGatewayRpcTimeoutMs = Number.parseInt(
+  process.env.OPENCLAW_GATEWAY_RPC_TIMEOUT_MS ?? "15000",
+  10,
+);
+const GATEWAY_RPC_TIMEOUT_MS =
+  Number.isFinite(configuredGatewayRpcTimeoutMs) && configuredGatewayRpcTimeoutMs > 0
+    ? configuredGatewayRpcTimeoutMs
+    : 15_000;
 
 function readApplySmokeMarker(workspaceRoot: string): {
   phase: string;
@@ -306,11 +522,17 @@ function readApplySmokeMarker(workspaceRoot: string): {
     const m = JSON.parse(readFileSync(markerPath, "utf8")) as Record<string, unknown>;
     // Already consumed → no-op
     if (m.consumed === true) return null;
-    const idempotencyKey = typeof m.idempotencyKey === "string" && m.idempotencyKey.trim().length > 0 ? m.idempotencyKey : randomUUID();
+    const idempotencyKey =
+      typeof m.idempotencyKey === "string" && m.idempotencyKey.trim().length > 0
+        ? m.idempotencyKey
+        : randomUUID();
     const runId = typeof m.runId === "string" && m.runId.trim().length > 0 ? m.runId : randomUUID();
     return {
       phase: typeof m.phase === "string" ? m.phase : "P1-BATCH10-PhaseC",
-      maxDispatches: typeof m.maxDispatches === "number" ? Math.min(1, Math.max(0, Math.floor(m.maxDispatches))) : 1,
+      maxDispatches:
+        typeof m.maxDispatches === "number"
+          ? Math.min(1, Math.max(0, Math.floor(m.maxDispatches)))
+          : 1,
       spawnEnabled: m.spawnEnabled === true,
       mockTask: m.mockTask !== false,
       idempotencyKey,
@@ -326,11 +548,19 @@ function consumeApplySmokeMarker(workspaceRoot: string): void {
   try {
     const dir = path.dirname(markerPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(markerPath, JSON.stringify({
-      consumed: true,
-      consumedAt: new Date().toISOString(),
-      note: "apply smoke marker consumed after successful smoke run",
-    }, null, 2) + "\n", "utf8");
+    writeFileSync(
+      markerPath,
+      JSON.stringify(
+        {
+          consumed: true,
+          consumedAt: new Date().toISOString(),
+          note: "apply smoke marker consumed after successful smoke run",
+        },
+        null,
+        2,
+      ) + "\n",
+      "utf8",
+    );
   } catch {
     // fail soft — marker consumption is best-effort
   }
@@ -349,9 +579,7 @@ function findSmokeTask(workspaceRoot: string): {
   // Find a real queued task that's not EP-8/EP-9/A1
   const taskState = getTaskState(workspaceRoot);
   const candidate = taskState.tasks.find(
-    (task) =>
-      task.status === "queued" &&
-      !/^(EP-8|EP-9|A1.*)$/u.test(task.taskId),
+    (task) => task.status === "queued" && !/^(EP-8|EP-9|A1.*)$/u.test(task.taskId),
   );
 
   if (candidate) {
@@ -375,7 +603,8 @@ function findSmokeTask(workspaceRoot: string): {
         typeof candidate.summary === "string" && candidate.summary.trim()
           ? candidate.summary
           : `Apply smoke validation task: ${candidate.taskId}`,
-      targetRole: typeof candidate.sourceRole === "string" ? candidate.sourceRole : "engineering-executive",
+      targetRole:
+        typeof candidate.sourceRole === "string" ? candidate.sourceRole : "engineering-executive",
       riskLevel: "L0",
       policyAction: "auto_close",
       dispatchTarget,
@@ -427,7 +656,11 @@ function appendSmokeTaskRecord(
   appendFileSync(tasksPath, `${JSON.stringify(record)}\n`, "utf8");
 }
 
-function registerSmokeTask(workspaceRoot: string, task: ReturnType<typeof findSmokeTask>, marker: { phase: string; spawnEnabled: boolean; idempotencyKey: string; runId: string }): boolean {
+function registerSmokeTask(
+  workspaceRoot: string,
+  task: ReturnType<typeof findSmokeTask>,
+  marker: { phase: string; spawnEnabled: boolean; idempotencyKey: string; runId: string },
+): boolean {
   const tasksPath = path.join(workspaceRoot, "runtime/tasks/tasks.jsonl");
   const tasksDir = path.dirname(tasksPath);
   if (!existsSync(tasksDir)) mkdirSync(tasksDir, { recursive: true });
@@ -436,8 +669,16 @@ function registerSmokeTask(workspaceRoot: string, task: ReturnType<typeof findSm
   const existingTask = existing.tasks.find((candidate) => candidate.taskId === task.taskId);
 
   if (existingTask) {
-    const nonTerminal: TaskStatus[] = ["queued", "dispatched", "running", "return_received", "processing_return"];
-    const sameRun = existingTask.metadata?.idempotencyKey === marker.idempotencyKey || existingTask.metadata?.runId === marker.runId;
+    const nonTerminal: TaskStatus[] = [
+      "queued",
+      "dispatched",
+      "running",
+      "return_received",
+      "processing_return",
+    ];
+    const sameRun =
+      existingTask.metadata?.idempotencyKey === marker.idempotencyKey ||
+      existingTask.metadata?.runId === marker.runId;
     if (sameRun && nonTerminal.includes(existingTask.status)) {
       emitRuntimeLoopEvent(workspaceRoot, "smoke_task_registration_skipped", {
         taskId: task.taskId,
@@ -575,12 +816,15 @@ export async function tickApplySmoke(workspaceRoot: string): Promise<ApplySmokeS
     const registeredTask = registerSmokeTask(workspaceRoot, task, marker);
 
     // Generate dispatch request dry-run
-    const { requestId, requestPath, request: dispatchRequest } = generateDispatchRequestDryRun(
-      workspaceRoot,
-      task,
-      marker.phase,
-      { spawnEnabled: marker.spawnEnabled, idempotencyKey: marker.idempotencyKey, runId: marker.runId },
-    );
+    const {
+      requestId,
+      requestPath,
+      request: dispatchRequest,
+    } = generateDispatchRequestDryRun(workspaceRoot, task, marker.phase, {
+      spawnEnabled: marker.spawnEnabled,
+      idempotencyKey: marker.idempotencyKey,
+      runId: marker.runId,
+    });
     if (registeredTask) {
       appendSmokeTaskRecord(workspaceRoot, task, "queued", {
         phase: marker.phase,
@@ -667,9 +911,10 @@ This return will be saved to system/returns/inbox/ by the system for automatic p
           } as Record<string, unknown>,
           timeoutMs: GATEWAY_RPC_TIMEOUT_MS,
         });
-        const dispatchedRunId = response && typeof response === "object" && "runId" in response
-          ? String(response.runId)
-          : null;
+        const dispatchedRunId =
+          response && typeof response === "object" && "runId" in response
+            ? String(response.runId)
+            : null;
 
         if (registeredTask) {
           appendSmokeTaskRecord(workspaceRoot, task, "dispatched", {
@@ -703,25 +948,37 @@ This return will be saved to system/returns/inbox/ by the system for automatic p
           idempotencyKey: dispatchRequest.idempotencyKey,
           sessionKey: targetSessionKey,
         });
-        events.push({ eventType: executed.eventType, source: executed.source, payload: executed.payload });
-
-        const dispatched = emitRuntimeLoopEvent(workspaceRoot, "runtime_loop_apply_smoke_dispatched", {
-          tickId,
-          phase: marker.phase,
-          selectedTask: task.taskId,
-          requestId,
-          dispatchRequestPath: requestPath,
-          spawnEnabled: true,
-          spawnSuppressed: false,
-          sessionsSpawnAccepted: true,
-          sessionKey: targetSessionKey,
-          runId: dispatchRequest.runId,
-          gatewayRunId: dispatchedRunId,
-          idempotencyKey: dispatchRequest.idempotencyKey,
-          targetRole: task.targetRole,
-          dispatchTarget: task.dispatchTarget,
+        events.push({
+          eventType: executed.eventType,
+          source: executed.source,
+          payload: executed.payload,
         });
-        events.push({ eventType: dispatched.eventType, source: dispatched.source, payload: dispatched.payload });
+
+        const dispatched = emitRuntimeLoopEvent(
+          workspaceRoot,
+          "runtime_loop_apply_smoke_dispatched",
+          {
+            tickId,
+            phase: marker.phase,
+            selectedTask: task.taskId,
+            requestId,
+            dispatchRequestPath: requestPath,
+            spawnEnabled: true,
+            spawnSuppressed: false,
+            sessionsSpawnAccepted: true,
+            sessionKey: targetSessionKey,
+            runId: dispatchRequest.runId,
+            gatewayRunId: dispatchedRunId,
+            idempotencyKey: dispatchRequest.idempotencyKey,
+            targetRole: task.targetRole,
+            dispatchTarget: task.dispatchTarget,
+          },
+        );
+        events.push({
+          eventType: dispatched.eventType,
+          source: dispatched.source,
+          payload: dispatched.payload,
+        });
 
         const state: ApplySmokeState = {
           tickId,
@@ -752,41 +1009,59 @@ This return will be saved to system/returns/inbox/ by the system for automatic p
           warnings,
         };
 
-        writeFileSync(outputPath, `${JSON.stringify(state, null, 2)}
-`, "utf8");
+        writeFileSync(
+          outputPath,
+          `${JSON.stringify(state, null, 2)}
+`,
+          "utf8",
+        );
 
-        const completed = emitRuntimeLoopEvent(workspaceRoot, "runtime_loop_apply_smoke_completed", {
-          tickId,
-          phase: marker.phase,
-          selectedTask: task.taskId,
-          wouldDispatch: true,
-          dispatchRequestPath: requestPath,
-          spawnEnabled: true,
-          spawnSuppressed: false,
-          sessionsSpawnAccepted: true,
-          spawnApiBoundaryBlocked: false,
-          blockReason: null,
-          sessionKey: targetSessionKey,
-          runId: dispatchRequest.runId,
-          gatewayRunId: dispatchedRunId,
-          idempotencyKey: dispatchRequest.idempotencyKey,
-          dispatchPlanCount: dispatchPlan.length,
-          inboxCount: returnProcessor.inbox_count,
-          warnings: state.warnings,
+        const completed = emitRuntimeLoopEvent(
+          workspaceRoot,
+          "runtime_loop_apply_smoke_completed",
+          {
+            tickId,
+            phase: marker.phase,
+            selectedTask: task.taskId,
+            wouldDispatch: true,
+            dispatchRequestPath: requestPath,
+            spawnEnabled: true,
+            spawnSuppressed: false,
+            sessionsSpawnAccepted: true,
+            spawnApiBoundaryBlocked: false,
+            blockReason: null,
+            sessionKey: targetSessionKey,
+            runId: dispatchRequest.runId,
+            gatewayRunId: dispatchedRunId,
+            idempotencyKey: dispatchRequest.idempotencyKey,
+            dispatchPlanCount: dispatchPlan.length,
+            inboxCount: returnProcessor.inbox_count,
+            warnings: state.warnings,
+          },
+        );
+        state.events.push({
+          eventType: completed.eventType,
+          source: completed.source,
+          payload: completed.payload,
         });
-        state.events.push({ eventType: completed.eventType, source: completed.source, payload: completed.payload });
-        writeFileSync(outputPath, `${JSON.stringify(state, null, 2)}
-`, "utf8");
+        writeFileSync(
+          outputPath,
+          `${JSON.stringify(state, null, 2)}
+`,
+          "utf8",
+        );
         consumeApplySmokeMarker(workspaceRoot);
         return state;
       } catch (gatewayError) {
-        const errorMessage = gatewayError instanceof Error ? gatewayError.message : String(gatewayError);
+        const errorMessage =
+          gatewayError instanceof Error ? gatewayError.message : String(gatewayError);
         const blockCode = /gateway timeout|timeout after|AbortError|ETIMEDOUT/iu.test(errorMessage)
           ? CALL_GATEWAY_TIMEOUT
           : /ECONNREFUSED|not connected|gateway unavailable/iu.test(errorMessage)
             ? GATEWAY_UNAVAILABLE
             : CALL_GATEWAY_FAILED;
-        const reason = blockCode === CALL_GATEWAY_TIMEOUT ? "rpc_timeout" : "gateway_dispatch_failed";
+        const reason =
+          blockCode === CALL_GATEWAY_TIMEOUT ? "rpc_timeout" : "gateway_dispatch_failed";
         const blockReason = `${blockCode}: ${errorMessage}`;
         warnings.push(`apply_smoke: gateway dispatch failed (${blockCode}): ${errorMessage}`);
 
@@ -817,7 +1092,11 @@ This return will be saved to system/returns/inbox/ by the system for automatic p
           idempotencyKey: dispatchRequest.idempotencyKey,
           gatewayRpcTimeoutMs: GATEWAY_RPC_TIMEOUT_MS,
         });
-        events.push({ eventType: dispatchFailed.eventType, source: dispatchFailed.source, payload: dispatchFailed.payload });
+        events.push({
+          eventType: dispatchFailed.eventType,
+          source: dispatchFailed.source,
+          payload: dispatchFailed.payload,
+        });
 
         const blocked = emitRuntimeLoopEvent(workspaceRoot, "runtime_loop_apply_smoke_blocked", {
           tickId,
@@ -834,7 +1113,11 @@ This return will be saved to system/returns/inbox/ by the system for automatic p
           idempotencyKey: dispatchRequest.idempotencyKey,
           gatewayRpcTimeoutMs: GATEWAY_RPC_TIMEOUT_MS,
         });
-        events.push({ eventType: blocked.eventType, source: blocked.source, payload: blocked.payload });
+        events.push({
+          eventType: blocked.eventType,
+          source: blocked.source,
+          payload: blocked.payload,
+        });
 
         const state: ApplySmokeState = {
           tickId,
@@ -865,29 +1148,45 @@ This return will be saved to system/returns/inbox/ by the system for automatic p
           warnings,
         };
 
-        writeFileSync(outputPath, `${JSON.stringify(state, null, 2)}
-`, "utf8");
+        writeFileSync(
+          outputPath,
+          `${JSON.stringify(state, null, 2)}
+`,
+          "utf8",
+        );
 
-        const completed = emitRuntimeLoopEvent(workspaceRoot, "runtime_loop_apply_smoke_completed", {
-          tickId,
-          phase: marker.phase,
-          selectedTask: task.taskId,
-          wouldDispatch: true,
-          dispatchRequestPath: requestPath,
-          spawnEnabled: true,
-          spawnSuppressed: false,
-          sessionsSpawnAccepted: false,
-          spawnApiBoundaryBlocked: true,
-          blockReason,
-          sessionKey: targetSessionKey,
-          runId: dispatchRequest.runId,
-          dispatchPlanCount: dispatchPlan.length,
-          inboxCount: returnProcessor.inbox_count,
-          warnings: state.warnings,
+        const completed = emitRuntimeLoopEvent(
+          workspaceRoot,
+          "runtime_loop_apply_smoke_completed",
+          {
+            tickId,
+            phase: marker.phase,
+            selectedTask: task.taskId,
+            wouldDispatch: true,
+            dispatchRequestPath: requestPath,
+            spawnEnabled: true,
+            spawnSuppressed: false,
+            sessionsSpawnAccepted: false,
+            spawnApiBoundaryBlocked: true,
+            blockReason,
+            sessionKey: targetSessionKey,
+            runId: dispatchRequest.runId,
+            dispatchPlanCount: dispatchPlan.length,
+            inboxCount: returnProcessor.inbox_count,
+            warnings: state.warnings,
+          },
+        );
+        state.events.push({
+          eventType: completed.eventType,
+          source: completed.source,
+          payload: completed.payload,
         });
-        state.events.push({ eventType: completed.eventType, source: completed.source, payload: completed.payload });
-        writeFileSync(outputPath, `${JSON.stringify(state, null, 2)}
-`, "utf8");
+        writeFileSync(
+          outputPath,
+          `${JSON.stringify(state, null, 2)}
+`,
+          "utf8",
+        );
         consumeApplySmokeMarker(workspaceRoot);
         return state;
       }
@@ -927,8 +1226,12 @@ This return will be saved to system/returns/inbox/ by the system for automatic p
     const outputPath = statePath(workspaceRoot);
     const outputDir = path.dirname(outputPath);
     if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
-    writeFileSync(outputPath, `${JSON.stringify(state, null, 2)}
-`, "utf8");
+    writeFileSync(
+      outputPath,
+      `${JSON.stringify(state, null, 2)}
+`,
+      "utf8",
+    );
 
     const completed = emitRuntimeLoopEvent(workspaceRoot, "runtime_loop_apply_smoke_completed", {
       tickId,
@@ -943,9 +1246,17 @@ This return will be saved to system/returns/inbox/ by the system for automatic p
       inboxCount: returnProcessor.inbox_count,
       warnings: state.warnings,
     });
-    state.events.push({ eventType: completed.eventType, source: completed.source, payload: completed.payload });
-    writeFileSync(outputPath, `${JSON.stringify(state, null, 2)}
-`, "utf8");
+    state.events.push({
+      eventType: completed.eventType,
+      source: completed.source,
+      payload: completed.payload,
+    });
+    writeFileSync(
+      outputPath,
+      `${JSON.stringify(state, null, 2)}
+`,
+      "utf8",
+    );
 
     consumeApplySmokeMarker(workspaceRoot);
 

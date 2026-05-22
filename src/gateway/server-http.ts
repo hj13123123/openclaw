@@ -280,6 +280,7 @@ function isHudStatePath(pathname: string): boolean {
     pathname === "/api/hud/policy-state" ||
     pathname === "/api/hud/policy-actions" ||
     pathname === "/api/hud/runtime-loop" ||
+    pathname === "/api/hud/runtime-loop/preflight" ||
     pathname === "/api/hud/runtime-loop/refresh" ||
     pathname === "/api/hud/return-inbox"
   );
