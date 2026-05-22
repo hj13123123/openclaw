@@ -307,7 +307,7 @@ function isAutoEvolutionStatePath(pathname: string): boolean {
 }
 
 function isTaskGraphStatePath(pathname: string): boolean {
-  return pathname === "/api/task-graph/validation";
+  return pathname === "/api/task-graph/validation" || pathname === "/api/task-graph/return-preview";
 }
 
 function isSessionKillPath(pathname: string): boolean {

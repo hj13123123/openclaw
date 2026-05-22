@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   TASK_GRAPH_SOURCE_RELATIVE_PATH,
+  buildTaskGraphReturnPreview,
   listTaskGraphFiles,
   reconcileTaskGraph,
   resolveTaskGraphNextRunnable,
@@ -19,7 +20,11 @@ import {
 
 const timestamp = "2026-05-20T00:00:00.000Z";
 
-function node(nodeId: string, status: TaskGraphStatus, overrides: Partial<TaskGraphNode> = {}): TaskGraphNode {
+function node(
+  nodeId: string,
+  status: TaskGraphStatus,
+  overrides: Partial<TaskGraphNode> = {},
+): TaskGraphNode {
   return {
     nodeId,
     role: "engineering-executive",
@@ -70,13 +75,15 @@ function writeJson(filePath: string, value: unknown): void {
 
 describe("task graph core", () => {
   it("validates a graph and calculates hard-dependency runnable nodes", () => {
-    const result = validateTaskGraph(graph({
-      nodes: [
-        node("a", "completed", { role: "main" }),
-        node("b", "planned", { role: "evolution-curator", dependsOn: ["a"] }),
-      ],
-      edges: [{ from: "a", to: "b", type: "hard" }],
-    }));
+    const result = validateTaskGraph(
+      graph({
+        nodes: [
+          node("a", "completed", { role: "main" }),
+          node("b", "planned", { role: "evolution-curator", dependsOn: ["a"] }),
+        ],
+        edges: [{ from: "a", to: "b", type: "hard" }],
+      }),
+    );
 
     expect(result.valid).toBe(true);
     expect(result.warnings).toEqual([]);
@@ -86,13 +93,13 @@ describe("task graph core", () => {
   });
 
   it("reconciles planned nodes to ready when hard dependencies are complete", () => {
-    const result = reconcileTaskGraph(graph({
-      nodes: [
-        node("a", "completed"),
-        node("b", "planned", { dependsOn: ["a"] }),
-      ],
-      edges: [{ from: "a", to: "b", type: "hard" }],
-    }), "2026-05-20T00:01:00.000Z");
+    const result = reconcileTaskGraph(
+      graph({
+        nodes: [node("a", "completed"), node("b", "planned", { dependsOn: ["a"] })],
+        edges: [{ from: "a", to: "b", type: "hard" }],
+      }),
+      "2026-05-20T00:01:00.000Z",
+    );
 
     expect(result.changedNodeIds).toEqual(["b"]);
     expect(result.blockedNodeIds).toEqual([]);
@@ -102,32 +109,29 @@ describe("task graph core", () => {
   });
 
   it("blocks dispatchable nodes when a hard dependency failed", () => {
-    const result = reconcileTaskGraph(graph({
-      nodes: [
-        node("a", "failed"),
-        node("b", "planned", { dependsOn: ["a"] }),
-      ],
-    }));
+    const result = reconcileTaskGraph(
+      graph({
+        nodes: [node("a", "failed"), node("b", "planned", { dependsOn: ["a"] })],
+      }),
+    );
 
     expect(result.changedNodeIds).toEqual(["b"]);
     expect(result.blockedNodeIds).toEqual(["b"]);
     expect(result.graph.nodes.find((item) => item.nodeId === "b")?.status).toBe("blocked");
     expect(result.graph.aggregateStatus).toBe("blocked");
     expect(result.graph.nextRunnable).toEqual([]);
-    expect(result.graph.blockers).toEqual(expect.arrayContaining([
-      { nodeId: "a", reason: "status=failed" },
-      { nodeId: "b", reason: "hard dependency a is failed" },
-      { nodeId: "b", reason: "status=blocked" },
-    ]));
+    expect(result.graph.blockers).toEqual(
+      expect.arrayContaining([
+        { nodeId: "a", reason: "status=failed" },
+        { nodeId: "b", reason: "hard dependency a is failed" },
+        { nodeId: "b", reason: "status=blocked" },
+      ]),
+    );
   });
 
   it("does not let soft or parallel edges block runnable nodes", () => {
     const sourceGraph = graph({
-      nodes: [
-        node("a", "planned"),
-        node("b", "planned"),
-        node("c", "ready"),
-      ],
+      nodes: [node("a", "planned"), node("b", "planned"), node("c", "ready")],
       edges: [
         { from: "a", to: "b", type: "soft" },
         { from: "a", to: "c", type: "parallel" },
@@ -138,34 +142,39 @@ describe("task graph core", () => {
   });
 
   it("reports duplicate ids, missing dependencies, invalid edge refs, and aggregate mismatch", () => {
-    const result = validateTaskGraph(graph({
-      nodes: [
-        node("a", "completed"),
-        node("a", "planned", { dependsOn: ["missing"] }),
-      ],
-      edges: [{ from: "missing-edge", to: "a", type: "hard" }],
-      aggregateStatus: "completed",
-    }));
+    const result = validateTaskGraph(
+      graph({
+        nodes: [node("a", "completed"), node("a", "planned", { dependsOn: ["missing"] })],
+        edges: [{ from: "missing-edge", to: "a", type: "hard" }],
+        aggregateStatus: "completed",
+      }),
+    );
 
     expect(result.valid).toBe(false);
-    expect(result.errors.map((error) => error.check)).toEqual(expect.arrayContaining([
-      "duplicate_node_id",
-      "depends_on_reference",
-      "edge_reference",
-      "aggregate_status",
-    ]));
+    expect(result.errors.map((error) => error.check)).toEqual(
+      expect.arrayContaining([
+        "duplicate_node_id",
+        "depends_on_reference",
+        "edge_reference",
+        "aggregate_status",
+      ]),
+    );
   });
 
   it("lists workspace task graph files and returns an observe-only pass report", () => {
     withTempWorkspace((workspaceRoot) => {
-      const graphPath = path.join(workspaceRoot, TASK_GRAPH_SOURCE_RELATIVE_PATH, "task-graph-a.json");
-      writeJson(graphPath, graph({
-        nodes: [
-          node("a", "completed"),
-          node("b", "planned", { dependsOn: ["a"] }),
-        ],
-        edges: [{ from: "a", to: "b", type: "hard" }],
-      }));
+      const graphPath = path.join(
+        workspaceRoot,
+        TASK_GRAPH_SOURCE_RELATIVE_PATH,
+        "task-graph-a.json",
+      );
+      writeJson(
+        graphPath,
+        graph({
+          nodes: [node("a", "completed"), node("b", "planned", { dependsOn: ["a"] })],
+          edges: [{ from: "a", to: "b", type: "hard" }],
+        }),
+      );
 
       expect(listTaskGraphFiles(workspaceRoot)).toEqual([graphPath]);
 
@@ -188,15 +197,26 @@ describe("task graph core", () => {
 
   it("writes validation reports without mutating the source graph", () => {
     withTempWorkspace((workspaceRoot) => {
-      const graphPath = path.join(workspaceRoot, TASK_GRAPH_SOURCE_RELATIVE_PATH, "task-graph-a.json");
+      const graphPath = path.join(
+        workspaceRoot,
+        TASK_GRAPH_SOURCE_RELATIVE_PATH,
+        "task-graph-a.json",
+      );
       const sourceGraph = graph();
       writeJson(graphPath, sourceGraph);
 
-      const result = runTaskGraphValidationObserve(workspaceRoot, { checkedAt: timestamp, writeReports: true });
+      const result = runTaskGraphValidationObserve(workspaceRoot, {
+        checkedAt: timestamp,
+        writeReports: true,
+      });
       expect(result.reports).toHaveLength(1);
-      expect(result.writtenReportPaths).toEqual([taskGraphValidationReportPath(workspaceRoot, result.reports[0])]);
+      expect(result.writtenReportPaths).toEqual([
+        taskGraphValidationReportPath(workspaceRoot, result.reports[0]),
+      ]);
 
-      const writtenReport = JSON.parse(readFileSync(result.writtenReportPaths[0], "utf8")) as Record<string, unknown>;
+      const writtenReport = JSON.parse(
+        readFileSync(result.writtenReportPaths[0], "utf8"),
+      ) as Record<string, unknown>;
       expect(writtenReport).toMatchObject({
         graphId: "graph-a",
         checkedAt: timestamp,
@@ -211,7 +231,11 @@ describe("task graph core", () => {
 
   it("reports malformed graph files as ambiguous observe failures", () => {
     withTempWorkspace((workspaceRoot) => {
-      const graphPath = path.join(workspaceRoot, TASK_GRAPH_SOURCE_RELATIVE_PATH, "task-graph-bad.json");
+      const graphPath = path.join(
+        workspaceRoot,
+        TASK_GRAPH_SOURCE_RELATIVE_PATH,
+        "task-graph-bad.json",
+      );
       mkdirSync(path.dirname(graphPath), { recursive: true });
       writeFileSync(graphPath, "{ not json", "utf8");
 
@@ -229,20 +253,118 @@ describe("task graph core", () => {
 
   it("can write a single validation report path for HUD consumption", () => {
     withTempWorkspace((workspaceRoot) => {
-      const graphPath = path.join(workspaceRoot, TASK_GRAPH_SOURCE_RELATIVE_PATH, "task-graph-a.json");
+      const graphPath = path.join(
+        workspaceRoot,
+        TASK_GRAPH_SOURCE_RELATIVE_PATH,
+        "task-graph-a.json",
+      );
       writeJson(graphPath, graph());
 
       const report = validateTaskGraphFile(graphPath, timestamp);
       const reportPath = writeTaskGraphValidationReport(workspaceRoot, report);
 
-      expect(reportPath).toBe(path.join(
-        workspaceRoot,
-        "runtime/main/tmp/task-graph-validation-graph-a-2026-05-20T00-00-00.000Z.json",
-      ));
+      expect(reportPath).toBe(
+        path.join(
+          workspaceRoot,
+          "runtime/main/tmp/task-graph-validation-graph-a-2026-05-20T00-00-00.000Z.json",
+        ),
+      );
       const persisted = JSON.parse(readFileSync(reportPath, "utf8")) as Record<string, unknown>;
       expect(persisted.graphId).toBe("graph-a");
       expect(persisted.checkedAt).toBe(timestamp);
       expect(persisted.severity).toBe("pass");
+    });
+  });
+
+  it("previews return-to-node matches without mutating graph or consuming returns", () => {
+    withTempWorkspace((workspaceRoot) => {
+      const graphPath = path.join(
+        workspaceRoot,
+        TASK_GRAPH_SOURCE_RELATIVE_PATH,
+        "task-graph-a.json",
+      );
+      const sourceGraph = graph({
+        status: "running",
+        nodes: [
+          node("a", "review_pending", { taskId: "TASK-A" }),
+          node("b", "planned", { taskId: "TASK-B" }),
+          node("c", "completed", { taskId: "TASK-C", returnId: "return-declared.json" }),
+        ],
+        aggregateStatus: "running",
+      });
+      writeJson(graphPath, sourceGraph);
+      writeJson(path.join(workspaceRoot, "system", "returns", "inbox", "return-a.json"), {
+        routing: { taskId: "TASK-A", sourceRole: "engineering-executive", action: "complete" },
+        outcome: { summary: "done" },
+      });
+      writeJson(path.join(workspaceRoot, "system", "returns", "inbox", "return-unmatched.json"), {
+        routing: { taskId: "TASK-X", sourceRole: "engineering-executive", action: "complete" },
+        outcome: { summary: "done" },
+      });
+      writeJson(
+        path.join(workspaceRoot, "system", "returns", "inbox", "return-missing-task.json"),
+        {
+          routing: { sourceRole: "engineering-executive", action: "complete" },
+          outcome: { summary: "done" },
+        },
+      );
+
+      const preview = buildTaskGraphReturnPreview(workspaceRoot, {
+        observedAt: "2026-05-22T12:00:00.000Z",
+      });
+
+      expect(preview).toEqual(
+        expect.objectContaining({
+          mode: "observe-only",
+          observedAt: "2026-05-22T12:00:00.000Z",
+          graphCount: 1,
+          nodeCount: 3,
+          pendingReturnCount: 3,
+          matchedNodeCount: 1,
+          missingNodeCount: 1,
+          ambiguousNodeCount: 0,
+          declaredReturnNodeCount: 1,
+          unmatchedReturnCount: 2,
+          constraintsVerified: {
+            graphMutated: "no",
+            returnConsumed: "no",
+            receiptWritten: "no",
+            dispatchTriggered: "no",
+            applied: "no",
+          },
+        }),
+      );
+      expect(preview.nodePreviews).toEqual([
+        expect.objectContaining({
+          nodeId: "a",
+          taskId: "TASK-A",
+          matchStatus: "matched",
+          matchedReturnIds: ["return-a.json"],
+        }),
+        expect.objectContaining({
+          nodeId: "b",
+          taskId: "TASK-B",
+          matchStatus: "missing",
+          matchedReturnIds: [],
+        }),
+        expect.objectContaining({
+          nodeId: "c",
+          taskId: "TASK-C",
+          matchStatus: "declared_return_id",
+          matchedReturnIds: ["return-declared.json"],
+        }),
+      ]);
+      expect(preview.unmatchedReturns).toEqual([
+        { returnId: "return-missing-task.json", taskId: null, reason: "missing_task_id" },
+        { returnId: "return-unmatched.json", taskId: "TASK-X", reason: "no_matching_task_node" },
+      ]);
+      expect(JSON.parse(readFileSync(graphPath, "utf8"))).toEqual(sourceGraph);
+      expect(
+        readFileSync(
+          path.join(workspaceRoot, "system", "returns", "inbox", "return-a.json"),
+          "utf8",
+        ),
+      ).toContain("TASK-A");
     });
   });
 });

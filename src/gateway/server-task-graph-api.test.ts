@@ -81,63 +81,82 @@ describe("server task graph API", () => {
 
   it("matches only task graph validation API paths", () => {
     expect(isTaskGraphApiPath("/api/task-graph/validation")).toBe(true);
+    expect(isTaskGraphApiPath("/api/task-graph/return-preview")).toBe(true);
     expect(isTaskGraphApiPath("/api/hud/state")).toBe(false);
     expect(isTaskGraphApiPath("/api/auto-evolution/state")).toBe(false);
   });
 
   it("returns an empty observe-only validation result when no graph files exist", async () => {
     const response = makeResponse();
-    const handled = await handleTaskGraphHttpRequest(makeReq("/api/task-graph/validation", "GET"), response.res, workspace());
+    const handled = await handleTaskGraphHttpRequest(
+      makeReq("/api/task-graph/validation", "GET"),
+      response.res,
+      workspace(),
+    );
 
     expect(handled).toBe(true);
     expect(response.res.statusCode).toBe(200);
-    expect(response.json()).toEqual(expect.objectContaining({
-      ok: true,
-      available: false,
-      mode: "observe-only",
-      observeOnly: true,
-      applied: false,
-      wouldDispatch: false,
-      sourcePath: "runtime/main/tmp/v2-task-graph-01/",
-      total: 0,
-      valid: true,
-      bySeverity: {
-        pass: 0,
-        warning: 0,
-        error: 0,
-      },
-      reports: [],
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        ok: true,
+        available: false,
+        mode: "observe-only",
+        observeOnly: true,
+        applied: false,
+        wouldDispatch: false,
+        sourcePath: "runtime/main/tmp/v2-task-graph-01/",
+        total: 0,
+        valid: true,
+        bySeverity: {
+          pass: 0,
+          warning: 0,
+          error: 0,
+        },
+        reports: [],
+      }),
+    );
   });
 
   it("returns detailed validation reports without writing or dispatching", async () => {
     const root = workspace();
-    writeJson(path.join(root, "runtime", "main", "tmp", "v2-task-graph-01", "task-graph-a.json"), graph());
-    writeJson(path.join(root, "runtime", "main", "tmp", "v2-task-graph-01", "task-graph-b.json"), graph({
-      graphId: "graph-b",
-      aggregateStatus: "completed",
-    }));
+    writeJson(
+      path.join(root, "runtime", "main", "tmp", "v2-task-graph-01", "task-graph-a.json"),
+      graph(),
+    );
+    writeJson(
+      path.join(root, "runtime", "main", "tmp", "v2-task-graph-01", "task-graph-b.json"),
+      graph({
+        graphId: "graph-b",
+        aggregateStatus: "completed",
+      }),
+    );
 
     const response = makeResponse();
-    const handled = await handleTaskGraphHttpRequest(makeReq("/api/task-graph/validation", "GET"), response.res, root);
+    const handled = await handleTaskGraphHttpRequest(
+      makeReq("/api/task-graph/validation", "GET"),
+      response.res,
+      root,
+    );
     const body = response.json();
 
     expect(handled).toBe(true);
     expect(response.res.statusCode).toBe(200);
-    expect(body).toEqual(expect.objectContaining({
-      ok: true,
-      available: true,
-      mode: "observe-only",
-      applied: false,
-      wouldDispatch: false,
-      total: 2,
-      valid: false,
-      bySeverity: {
-        pass: 1,
-        warning: 0,
-        error: 1,
-      },
-    }));
+    expect(body).toEqual(
+      expect.objectContaining({
+        ok: true,
+        available: true,
+        mode: "observe-only",
+        applied: false,
+        wouldDispatch: false,
+        total: 2,
+        valid: false,
+        bySeverity: {
+          pass: 1,
+          warning: 0,
+          error: 1,
+        },
+      }),
+    );
     expect(body.reports).toEqual([
       expect.objectContaining({
         graphId: "graph-a",
@@ -158,11 +177,92 @@ describe("server task graph API", () => {
 
   it("rejects wrong methods", async () => {
     const response = makeResponse();
-    const handled = await handleTaskGraphHttpRequest(makeReq("/api/task-graph/validation", "POST"), response.res, workspace());
+    const handled = await handleTaskGraphHttpRequest(
+      makeReq("/api/task-graph/validation", "POST"),
+      response.res,
+      workspace(),
+    );
 
     expect(handled).toBe(true);
     expect(response.res.statusCode).toBe(405);
     expect(response.text()).toBe("Method Not Allowed");
     expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
+  });
+
+  it("returns return-to-node preview without writing or dispatching", async () => {
+    const root = workspace();
+    const graphPath = path.join(
+      root,
+      "runtime",
+      "main",
+      "tmp",
+      "v2-task-graph-01",
+      "task-graph-a.json",
+    );
+    writeJson(
+      graphPath,
+      graph({
+        nodes: [
+          {
+            nodeId: "a",
+            role: "engineering-executive",
+            taskId: "TASK-A",
+            description: "Task A",
+            dependsOn: [],
+            status: "review_pending",
+            runId: null,
+            sessionKey: null,
+            returnId: null,
+            humanGateRequired: false,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          },
+        ],
+        aggregateStatus: "running",
+      }),
+    );
+    writeJson(path.join(root, "system", "returns", "inbox", "return-a.json"), {
+      routing: { taskId: "TASK-A", sourceRole: "engineering-executive", action: "complete" },
+      outcome: { summary: "done" },
+    });
+
+    const response = makeResponse();
+    const handled = await handleTaskGraphHttpRequest(
+      makeReq("/api/task-graph/return-preview", "GET"),
+      response.res,
+      root,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      data: expect.objectContaining({
+        mode: "observe-only",
+        sourcePath: "runtime/main/tmp/v2-task-graph-01/",
+        inboxPath: "system/returns/inbox",
+        graphCount: 1,
+        nodeCount: 1,
+        pendingReturnCount: 1,
+        matchedNodeCount: 1,
+        constraintsVerified: {
+          graphMutated: "no",
+          returnConsumed: "no",
+          receiptWritten: "no",
+          dispatchTriggered: "no",
+          applied: "no",
+        },
+        nodePreviews: [
+          expect.objectContaining({
+            graphId: "graph-a",
+            graphPath: "runtime/main/tmp/v2-task-graph-01/task-graph-a.json",
+            nodeId: "a",
+            taskId: "TASK-A",
+            matchStatus: "matched",
+            matchedReturnIds: ["return-a.json"],
+          }),
+        ],
+      }),
+    });
   });
 });
