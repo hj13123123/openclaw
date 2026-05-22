@@ -13,7 +13,12 @@ import { describe, expect, it } from "vitest";
 import { generateDispatchPlan, runAutoDispatcherDryRun } from "./auto-dispatcher.js";
 import { createRuntimeEvent, emitEvent, getRecentEvents } from "./event-bus.js";
 import { generateActionPlan, writeDryRunAudit } from "./policy-action-executor.js";
-import { buildRuntimeLoopPreflight, readLatestRuntimeLoopState, tick } from "./runtime-loop.js";
+import {
+  buildRuntimeLoopPreflight,
+  readLatestRuntimeLoopState,
+  tick,
+  writeRuntimeLoopDispatchProposal,
+} from "./runtime-loop.js";
 import { getTaskState, type TaskRecord } from "./task-state-machine.js";
 
 function withTempRoot<T>(fn: (workspaceRoot: string) => T): T {
@@ -351,6 +356,95 @@ describe("runtime bus observe-only validation", () => {
         existsSync(path.join(workspaceRoot, "runtime", "main", "tmp", "runtime-loop-state.json")),
       ).toBe(false);
       expect(existsSync(path.join(workspaceRoot, "runtime", "dispatch"))).toBe(false);
+      expect(getRecentEvents(workspaceRoot, 10)).toEqual([]);
+    }));
+
+  it("writes a controlled dispatch proposal artifact without dispatching", () =>
+    withTempRoot((workspaceRoot) => {
+      appendTask(
+        workspaceRoot,
+        task("PROPOSAL-A", "queued", {
+          metadata: { dispatchTarget: "/engineering-executive" },
+          policyDecision: autoCloseDecision,
+        }),
+      );
+      const schedulerStatePath = path.join(
+        workspaceRoot,
+        "runtime",
+        "main",
+        "tmp",
+        "task-scheduler-state.json",
+      );
+      ensureDir(schedulerStatePath);
+      writeFileSync(
+        schedulerStatePath,
+        `${JSON.stringify({
+          enabled: true,
+          mode: "observe",
+          status: "idle",
+          intervalMs: 60_000,
+          maxTicks: null,
+          policyWarnings: [],
+        })}\n`,
+        "utf8",
+      );
+      const policyPath = path.join(workspaceRoot, "runtime", "policy", "policy-rules.json");
+      ensureDir(policyPath);
+      writeFileSync(
+        policyPath,
+        `${JSON.stringify({
+          $schema: "policy-rules-v1",
+          schedulerPolicy: {
+            runtimeLoopMode: "observe",
+            maxDispatchesPerTick: 1,
+            disableOldTrigger: true,
+            enableContinuousApply: false,
+          },
+          rules: [],
+        })}\n`,
+        "utf8",
+      );
+
+      const proposal = writeRuntimeLoopDispatchProposal(workspaceRoot);
+      const proposalPath = path.join(workspaceRoot, proposal.proposalPath);
+      const persisted = JSON.parse(readFileSync(proposalPath, "utf8")) as typeof proposal;
+
+      expect(proposal).toEqual(
+        expect.objectContaining({
+          mode: "proposal-only",
+          proposalPath: expect.stringMatching(
+            /^runtime\/dispatch\/proposals\/runtime-loop-dispatch-proposal-.*\.json$/u,
+          ),
+          selectedCandidates: [
+            expect.objectContaining({
+              taskId: "PROPOSAL-A",
+              would_dispatch: false,
+              would_dispatch_if_apply_enabled: true,
+            }),
+          ],
+          summary: {
+            queuedCandidates: 1,
+            policyEligibleCandidates: 1,
+            proposedDispatches: 1,
+            humanGateRequired: true,
+          },
+          constraintsVerified: {
+            artifactWritten: "yes",
+            stateWritten: "no",
+            eventEmitted: "no",
+            dispatchTriggered: "no",
+            sessionsSpawnCalled: "no",
+            taskGraphMutated: "no",
+            returnConsumed: "no",
+            receiptWritten: "no",
+            applied: "no",
+          },
+        }),
+      );
+      expect(persisted.proposalId).toBe(proposal.proposalId);
+      expect(
+        existsSync(path.join(workspaceRoot, "runtime", "main", "tmp", "runtime-loop-state.json")),
+      ).toBe(false);
       expect(getRecentEvents(workspaceRoot, 10)).toEqual([]);
     }));
 });

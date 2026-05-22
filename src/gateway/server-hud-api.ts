@@ -6,7 +6,11 @@ import path from "node:path";
 import { getRecentEvents } from "../runtime/event-bus.js";
 import { writeHudStateSnapshot } from "../runtime/hud-state-refresh.js";
 import { scanReturnInbox } from "../runtime/returns/return-inbox.js";
-import { buildRuntimeLoopPreflight, tick as tickRuntimeLoop } from "../runtime/runtime-loop.js";
+import {
+  buildRuntimeLoopPreflight,
+  tick as tickRuntimeLoop,
+  writeRuntimeLoopDispatchProposal,
+} from "../runtime/runtime-loop.js";
 import { getTaskState } from "../runtime/task-state-machine.js";
 import { sendJson } from "./http-common.js";
 
@@ -22,6 +26,7 @@ const POLICY_STATE_ROUTE = "/api/hud/policy-state";
 const POLICY_ACTIONS_ROUTE = "/api/hud/policy-actions";
 const RUNTIME_LOOP_ROUTE = "/api/hud/runtime-loop";
 const RUNTIME_LOOP_PREFLIGHT_ROUTE = "/api/hud/runtime-loop/preflight";
+const RUNTIME_LOOP_DISPATCH_PROPOSAL_ROUTE = "/api/hud/runtime-loop/dispatch-proposal";
 const RUNTIME_LOOP_REFRESH_ROUTE = "/api/hud/runtime-loop/refresh";
 const RETURN_INBOX_ROUTE = "/api/hud/return-inbox";
 const RUNTIME_LOOP_STATE_RELATIVE_PATH = "runtime/main/tmp/runtime-loop-state.json";
@@ -220,6 +225,7 @@ export async function handleHudStateHttpRequest(
     requestPath !== POLICY_ACTIONS_ROUTE &&
     requestPath !== RUNTIME_LOOP_ROUTE &&
     requestPath !== RUNTIME_LOOP_PREFLIGHT_ROUTE &&
+    requestPath !== RUNTIME_LOOP_DISPATCH_PROPOSAL_ROUTE &&
     requestPath !== RUNTIME_LOOP_REFRESH_ROUTE &&
     requestPath !== RETURN_INBOX_ROUTE
   ) {
@@ -254,6 +260,24 @@ export async function handleHudStateHttpRequest(
     sendJson(res, 200, {
       ok: true,
       data: buildRuntimeLoopPreflight(workspaceRoot),
+    });
+    return true;
+  }
+
+  if (requestPath === RUNTIME_LOOP_DISPATCH_PROPOSAL_ROUTE) {
+    if (req.method !== "POST") {
+      res.setHeader("Allow", "POST");
+      res.statusCode = 405;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Method Not Allowed");
+      return true;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      created: true,
+      mode: "proposal-only",
+      data: writeRuntimeLoopDispatchProposal(workspaceRoot),
     });
     return true;
   }

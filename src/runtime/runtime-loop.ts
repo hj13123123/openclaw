@@ -24,6 +24,7 @@ const RUNTIME_LOOP_STATE_REL = "runtime/main/tmp/runtime-loop-state.json";
 const SCHEDULER_STATE_REL = "runtime/main/tmp/task-scheduler-state.json";
 const SCHEDULER_POLICY_REL = "runtime/scheduler/scheduler-policy.json";
 const POLICY_RULES_REL = "runtime/policy/policy-rules.json";
+const DISPATCH_PROPOSAL_DIR_REL = "runtime/dispatch/proposals";
 type SchedulerSnapshot = {
   enabled: boolean;
   mode: "observe" | "apply" | string;
@@ -135,8 +136,42 @@ export type RuntimeLoopPreflightState = {
   };
 };
 
+export type RuntimeLoopDispatchProposal = {
+  proposalId: string;
+  createdAt: string;
+  mode: "proposal-only";
+  proposalPath: string;
+  preflight: RuntimeLoopPreflightState;
+  selectedCandidates: RuntimeLoopPreflightDispatchPlanEntry[];
+  summary: {
+    queuedCandidates: number;
+    policyEligibleCandidates: number;
+    proposedDispatches: number;
+    humanGateRequired: boolean;
+  };
+  constraintsVerified: {
+    artifactWritten: "yes";
+    stateWritten: "no";
+    eventEmitted: "no";
+    dispatchTriggered: "no";
+    sessionsSpawnCalled: "no";
+    taskGraphMutated: "no";
+    returnConsumed: "no";
+    receiptWritten: "no";
+    applied: "no";
+  };
+};
+
 function statePath(workspaceRoot: string): string {
   return path.join(workspaceRoot, RUNTIME_LOOP_STATE_REL);
+}
+
+function relativeWorkspacePath(workspaceRoot: string, filePath: string): string {
+  return path.relative(workspaceRoot, filePath).replace(/\\/gu, "/");
+}
+
+function safeFileSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/gu, "_").slice(0, 120) || "unknown";
 }
 
 function readJsonObject(filePath: string): Record<string, unknown> | null {
@@ -332,6 +367,51 @@ export function buildRuntimeLoopPreflight(workspaceRoot: string): RuntimeLoopPre
       applied: "no",
     },
   };
+}
+
+export function writeRuntimeLoopDispatchProposal(
+  workspaceRoot: string,
+): RuntimeLoopDispatchProposal {
+  const proposalId = `runtime-loop-dispatch-proposal-${randomUUID()}`;
+  const createdAt = new Date().toISOString();
+  const preflight = buildRuntimeLoopPreflight(workspaceRoot);
+  const selectedCandidates = preflight.dispatch_plan.filter(
+    (entry) => entry.would_dispatch_if_apply_enabled,
+  );
+  const proposalPath = path.join(
+    workspaceRoot,
+    DISPATCH_PROPOSAL_DIR_REL,
+    `${safeFileSegment(proposalId)}.json`,
+  );
+  const proposal: RuntimeLoopDispatchProposal = {
+    proposalId,
+    createdAt,
+    mode: "proposal-only",
+    proposalPath: relativeWorkspacePath(workspaceRoot, proposalPath),
+    preflight,
+    selectedCandidates,
+    summary: {
+      queuedCandidates: preflight.tasks.queued_candidates,
+      policyEligibleCandidates: preflight.tasks.policy_eligible_candidates,
+      proposedDispatches: selectedCandidates.length,
+      humanGateRequired: preflight.human_gate_required || selectedCandidates.length > 0,
+    },
+    constraintsVerified: {
+      artifactWritten: "yes",
+      stateWritten: "no",
+      eventEmitted: "no",
+      dispatchTriggered: "no",
+      sessionsSpawnCalled: "no",
+      taskGraphMutated: "no",
+      returnConsumed: "no",
+      receiptWritten: "no",
+      applied: "no",
+    },
+  };
+
+  mkdirSync(path.dirname(proposalPath), { recursive: true });
+  writeFileSync(proposalPath, `${JSON.stringify(proposal, null, 2)}\n`, "utf8");
+  return proposal;
 }
 
 function emitRuntimeLoopEvent(
