@@ -177,6 +177,32 @@ type KbStateData = {
   };
 };
 
+type KbSemanticPlanStateData = {
+  available?: boolean;
+  status?: string;
+  mode?: string;
+  dryRun?: boolean;
+  generatedAt?: string | null;
+  reportPath?: string | null;
+  plannedBatches?: number;
+  blockedReasons?: string[];
+  source?: {
+    totalItems?: number;
+    sourceCaseCount?: number;
+    sourceSkillCount?: number;
+    keywordCount?: number;
+    warnings?: string[];
+  };
+  constraintsVerified?: {
+    embeddingCalls?: string;
+    fileWrites?: string;
+    keywordIndexWritten?: string;
+    vectorIndexWritten?: string;
+    applied?: string;
+    dryRunReportWritten?: string;
+  };
+};
+
 type PolicyStateData = {
   policyVersion?: string | null;
   rulesCount?: number;
@@ -311,6 +337,7 @@ export class TaskHUD extends LitElement {
   @state() private runtimeLoop: RuntimeLoopStateData | null = null;
   @state() private promoteGate: PromoteGateStateData | null = null;
   @state() private kbState: KbStateData | null = null;
+  @state() private kbSemanticPlan: KbSemanticPlanStateData | null = null;
   @state() private policy: PolicyStateData | null = null;
   @state() private refreshing = false;
 
@@ -624,6 +651,7 @@ export class TaskHUD extends LitElement {
         this.fetchRuntimeLoopState(),
         this.fetchPromoteGateState(),
         this.fetchKbState(),
+        this.fetchKbSemanticPlanState(),
         this.fetchPolicyState(),
       ]);
     } finally {
@@ -699,6 +727,15 @@ export class TaskHUD extends LitElement {
       this.kbState = response.ok ? ((await response.json()) as KbStateData) : null;
     } catch {
       this.kbState = null;
+    }
+  }
+
+  private async fetchKbSemanticPlanState() {
+    try {
+      const response = await fetch("/api/kb/semantic-rebuild-plan/state");
+      this.kbSemanticPlan = response.ok ? ((await response.json()) as KbSemanticPlanStateData) : null;
+    } catch {
+      this.kbSemanticPlan = null;
     }
   }
 
@@ -1120,6 +1157,8 @@ export class TaskHUD extends LitElement {
   private renderKnowledgeBase() {
     const state = this.kbState;
     const semantic = state?.semantic;
+    const plan = this.kbSemanticPlan;
+    const planConstraints = plan?.constraintsVerified ?? {};
     return html`
       <section class="section">
         <h4 class="section-title">知识库</h4>
@@ -1132,6 +1171,36 @@ export class TaskHUD extends LitElement {
             <div class="secondary">
               语义 ${text(semantic?.status, "default")} · ${text(semantic?.mode, "observe-only")} · 向量重建 ${text(semantic?.rebuild, "disabled")}
             </div>
+            <div class="secondary">
+              语义计划 ${plan?.available ? text(plan.status, "ready") : "暂无"} · batch ${plan?.plannedBatches ?? 0} · ${formatRelative(plan?.generatedAt)}
+            </div>
+            ${plan?.available
+              ? html`
+                  <details class="details">
+                    <summary>查看语义 dry-run 约束</summary>
+                    ${[
+                      ["embedding", planConstraints.embeddingCalls],
+                      ["report", planConstraints.dryRunReportWritten],
+                      ["fileWrites", planConstraints.fileWrites],
+                      ["vectorIndex", planConstraints.vectorIndexWritten],
+                      ["applied", planConstraints.applied],
+                    ].map(
+                      ([label, value]) => html`
+                        <div class="issue">
+                          <div class="secondary">${label} · ${text(value, "未知")}</div>
+                        </div>
+                      `,
+                    )}
+                    ${(plan.blockedReasons ?? []).slice(0, 3).map(
+                      (reason) => html`
+                        <div class="issue">
+                          <div class="secondary">blocked · ${text(reason, "未知")}</div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                `
+              : nothing}
           </div>
           <span class="badge">${text(semantic?.provider, formatRelative(state?.generatedAt))}</span>
         </div>

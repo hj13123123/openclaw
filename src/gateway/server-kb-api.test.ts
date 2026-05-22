@@ -54,6 +54,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/state")).toBe(true);
     expect(isKbApiPath("/api/kb/refresh")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan")).toBe(true);
+    expect(isKbApiPath("/api/kb/semantic-rebuild-plan/state")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -224,7 +225,8 @@ describe("server KB API", () => {
 
     expect(handled).toBe(true);
     expect(response.res.statusCode).toBe(200);
-    expect(response.json()).toEqual(expect.objectContaining({
+    const json = response.json();
+    expect(json).toEqual(expect.objectContaining({
       status: "ready",
       mode: "dry-run",
       dryRun: true,
@@ -248,15 +250,62 @@ describe("server KB API", () => {
       blockedReasons: [],
       constraintsVerified: {
         embeddingCalls: "no",
-        fileWrites: "no",
+        fileWrites: "dry-run-report-only",
         keywordIndexWritten: "no",
         vectorIndexWritten: "no",
         applied: "no",
+        dryRunReportWritten: "yes",
       },
+      reportPath: expect.stringMatching(/^runtime\/main\/tmp\/kb-semantic-rebuild-plan-/),
+      outputFile: expect.stringContaining("kb-semantic-rebuild-plan-"),
     }));
+    const reportPath = String(json.reportPath);
+    expect(JSON.parse(readFileSync(path.join(workspaceRoot, ...reportPath.split("/")), "utf8"))).toEqual(json);
     expect(readFileSync(path.join(workspaceRoot, "system", "case-library", "case-a.json"), "utf8")).toContain("case-a");
     expect(() => readFileSync(path.join(workspaceRoot, "system", "kb-index", "semantic-index.json"), "utf8")).toThrow();
     expect(() => readFileSync(path.join(workspaceRoot, "system", "kb-index", "vector-index.sqlite"), "utf8")).toThrow();
+  });
+
+  it("returns the latest semantic rebuild dry-run report state", async () => {
+    const workspaceRoot = makeWorkspace();
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+    });
+
+    const emptyStateResponse = makeResponse();
+    await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/state", "GET"),
+      emptyStateResponse.res,
+      workspaceRoot,
+    );
+    expect(emptyStateResponse.json()).toEqual(expect.objectContaining({
+      available: false,
+      mode: "dry-run",
+      dryRun: true,
+      reportDir: "runtime/main/tmp",
+      reportPrefix: "kb-semantic-rebuild-plan-",
+    }));
+
+    const planResponse = makeResponse();
+    await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan", "POST"),
+      planResponse.res,
+      workspaceRoot,
+    );
+    const plan = planResponse.json();
+
+    const stateResponse = makeResponse();
+    await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/state", "GET"),
+      stateResponse.res,
+      workspaceRoot,
+    );
+
+    expect(stateResponse.json()).toEqual({
+      available: true,
+      ...plan,
+    });
   });
 
   it("blocks semantic rebuild planning when vector search is disabled", () => {
@@ -320,5 +369,19 @@ describe("server KB API", () => {
     expect(response.res.statusCode).toBe(405);
     expect(response.text()).toBe("Method Not Allowed");
     expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "POST");
+  });
+
+  it("rejects semantic rebuild plan state writes", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/state", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
   });
 });

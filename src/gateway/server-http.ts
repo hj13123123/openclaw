@@ -283,7 +283,8 @@ function isHudStatePath(pathname: string): boolean {
 function isKbStatePath(pathname: string): boolean {
   return pathname === "/api/kb/state"
     || pathname === "/api/kb/refresh"
-    || pathname === "/api/kb/semantic-rebuild-plan";
+    || pathname === "/api/kb/semantic-rebuild-plan"
+    || pathname === "/api/kb/semantic-rebuild-plan/state";
 }
 
 function isPromoteGateStatePath(pathname: string): boolean {

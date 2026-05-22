@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { loadConfig, type OpenClawConfig, type MemorySearchConfig } from "../config/config.js";
@@ -12,6 +12,10 @@ import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 const KB_STATE_ROUTE = "/api/kb/state";
 const KB_REFRESH_ROUTE = "/api/kb/refresh";
 const KB_SEMANTIC_REBUILD_PLAN_ROUTE = "/api/kb/semantic-rebuild-plan";
+const KB_SEMANTIC_REBUILD_PLAN_STATE_ROUTE = "/api/kb/semantic-rebuild-plan/state";
+const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
+const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
+const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
 
 type KnowledgeIndexSummary = {
   generatedAt: string | null;
@@ -60,11 +64,14 @@ type KnowledgeSemanticRebuildPlan = {
   blockedReasons: string[];
   constraintsVerified: {
     embeddingCalls: "no";
-    fileWrites: "no";
+    fileWrites: "no" | "dry-run-report-only";
     keywordIndexWritten: "no";
     vectorIndexWritten: "no";
     applied: "no";
+    dryRunReportWritten?: "yes";
   };
+  reportPath?: string;
+  outputFile?: string;
 };
 
 function resolveRequestPath(req: IncomingMessage): string {
@@ -216,10 +223,64 @@ export function buildSemanticRebuildPlan(
   };
 }
 
+function toReportTimestamp(value: string): string {
+  return value.replace(/[^0-9A-Za-z-]/g, "-");
+}
+
+function buildSemanticRebuildPlanReportPath(generatedAt: string): string {
+  return [
+    SEMANTIC_REBUILD_PLAN_REPORT_DIR,
+    `${SEMANTIC_REBUILD_PLAN_REPORT_PREFIX}${toReportTimestamp(generatedAt)}${SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX}`,
+  ].join("/");
+}
+
+async function writeSemanticRebuildPlanReport(
+  workspaceRoot: string,
+  plan: KnowledgeSemanticRebuildPlan,
+): Promise<KnowledgeSemanticRebuildPlan> {
+  const reportPath = buildSemanticRebuildPlanReportPath(plan.generatedAt);
+  const outputFile = path.join(workspaceRoot, ...reportPath.split("/"));
+  const persisted: KnowledgeSemanticRebuildPlan = {
+    ...plan,
+    reportPath,
+    outputFile,
+    constraintsVerified: {
+      ...plan.constraintsVerified,
+      fileWrites: "dry-run-report-only",
+      dryRunReportWritten: "yes",
+    },
+  };
+  await mkdir(path.dirname(outputFile), { recursive: true });
+  await writeFile(outputFile, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
+  return persisted;
+}
+
+async function readLatestSemanticRebuildPlanReport(
+  workspaceRoot: string,
+): Promise<KnowledgeSemanticRebuildPlan | null> {
+  const reportDir = path.join(workspaceRoot, ...SEMANTIC_REBUILD_PLAN_REPORT_DIR.split("/"));
+  let entries: string[];
+  try {
+    entries = await readdir(reportDir);
+  } catch {
+    return null;
+  }
+  const latest = entries
+    .filter((entry) => entry.startsWith(SEMANTIC_REBUILD_PLAN_REPORT_PREFIX)
+      && entry.endsWith(SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX))
+    .sort()
+    .at(-1);
+  if (!latest) {
+    return null;
+  }
+  return JSON.parse(await readFile(path.join(reportDir, latest), "utf8")) as KnowledgeSemanticRebuildPlan;
+}
+
 export function isKbApiPath(pathname: string): boolean {
   return pathname === KB_STATE_ROUTE
     || pathname === KB_REFRESH_ROUTE
-    || pathname === KB_SEMANTIC_REBUILD_PLAN_ROUTE;
+    || pathname === KB_SEMANTIC_REBUILD_PLAN_ROUTE
+    || pathname === KB_SEMANTIC_REBUILD_PLAN_STATE_ROUTE;
 }
 
 export async function handleKbHttpRequest(
@@ -265,7 +326,10 @@ export async function handleKbHttpRequest(
 
     try {
       const semantic = resolveSemanticBoundary(options);
-      sendJson(res, 200, buildSemanticRebuildPlan(workspaceRoot, semantic));
+      sendJson(res, 200, await writeSemanticRebuildPlanReport(
+        workspaceRoot,
+        buildSemanticRebuildPlan(workspaceRoot, semantic),
+      ));
     } catch (error) {
       sendJson(res, 500, {
         status: "blocked",
@@ -280,6 +344,34 @@ export async function handleKbHttpRequest(
           vectorIndexWritten: "no",
           applied: "no",
         },
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_SEMANTIC_REBUILD_PLAN_STATE_ROUTE) {
+    if (req.method !== "GET") {
+      sendMethodNotAllowed(res, "GET");
+      return true;
+    }
+
+    try {
+      const latest = await readLatestSemanticRebuildPlanReport(workspaceRoot);
+      sendJson(res, 200, latest
+        ? { available: true, ...latest }
+        : {
+            available: false,
+            mode: "dry-run",
+            dryRun: true,
+            reportDir: SEMANTIC_REBUILD_PLAN_REPORT_DIR,
+            reportPrefix: SEMANTIC_REBUILD_PLAN_REPORT_PREFIX,
+          });
+    } catch (error) {
+      sendJson(res, 500, {
+        available: false,
+        mode: "dry-run",
+        dryRun: true,
+        error: `鐭ヨ瘑搴撹涔夐噸寤鸿鍒掓姤鍛婅鍙栧け璐ワ細${error instanceof Error ? error.message : String(error)}`,
       });
     }
     return true;

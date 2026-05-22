@@ -119,6 +119,25 @@ describe("TaskHUD task graph validation", () => {
           },
         }));
       }
+      if (url === "/api/kb/semantic-rebuild-plan/state") {
+        return Promise.resolve(jsonResponse({
+          available: true,
+          status: "ready",
+          mode: "dry-run",
+          dryRun: true,
+          generatedAt: "2026-05-21T00:01:00.000Z",
+          reportPath: "runtime/main/tmp/kb-semantic-rebuild-plan.json",
+          plannedBatches: 1,
+          blockedReasons: [],
+          constraintsVerified: {
+            embeddingCalls: "no",
+            dryRunReportWritten: "yes",
+            fileWrites: "dry-run-report-only",
+            vectorIndexWritten: "no",
+            applied: "no",
+          },
+        }));
+      }
       if (url === "/api/hud/scheduler-events?limit=8") return Promise.resolve(jsonResponse([]));
       return Promise.resolve(jsonResponse({}));
     });
@@ -177,5 +196,11 @@ describe("TaskHUD task graph validation", () => {
     expect(text).toContain("observe-only");
     expect(text).toContain("向量重建 disabled");
     expect(text).toContain("volcengine");
+    expect(fetchMock).toHaveBeenCalledWith("/api/kb/semantic-rebuild-plan/state");
+    expect(text).toContain("语义计划 ready");
+    expect(text).toContain("batch 1");
+    expect(text).toContain("查看语义 dry-run 约束");
+    expect(text).toContain("embedding");
+    expect(text).toContain("dry-run-report-only");
   });
 });
