@@ -46,6 +46,7 @@ describe("startGatewayMemoryBackend", () => {
 
     await startGatewayMemoryBackend({ cfg, log });
 
+    expect(resolveActiveMemoryBackendConfigMock).not.toHaveBeenCalled();
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
@@ -59,15 +60,23 @@ describe("startGatewayMemoryBackend", () => {
     await startGatewayMemoryBackend({ cfg, log });
 
     expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
-    expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(1, { cfg, agentId: "ops" });
-    expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(2, { cfg, agentId: "main" });
+    expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(1, {
+      cfg,
+      agentId: "ops",
+      purpose: "status",
+    });
+    expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(2, {
+      cfg,
+      agentId: "main",
+      purpose: "status",
+    });
     expect(log.info).toHaveBeenNthCalledWith(
       1,
-      'qmd memory startup initialization armed for agent "ops"',
+      'qmd memory startup status available for agent "ops"',
     );
     expect(log.info).toHaveBeenNthCalledWith(
       2,
-      'qmd memory startup initialization armed for agent "main"',
+      'qmd memory startup status available for agent "main"',
     );
     expect(log.warn).not.toHaveBeenCalled();
   });
@@ -84,9 +93,7 @@ describe("startGatewayMemoryBackend", () => {
     expect(log.warn).toHaveBeenCalledWith(
       'qmd memory startup initialization failed for agent "main": qmd missing',
     );
-    expect(log.info).toHaveBeenCalledWith(
-      'qmd memory startup initialization armed for agent "ops"',
-    );
+    expect(log.info).toHaveBeenCalledWith('qmd memory startup status available for agent "ops"');
   });
 
   it("skips agents with memory search disabled", async () => {
@@ -103,10 +110,12 @@ describe("startGatewayMemoryBackend", () => {
     await startGatewayMemoryBackend({ cfg, log });
 
     expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1);
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
-    expect(log.info).toHaveBeenCalledWith(
-      'qmd memory startup initialization armed for agent "main"',
-    );
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+    });
+    expect(log.info).toHaveBeenCalledWith('qmd memory startup status available for agent "main"');
     expect(log.warn).not.toHaveBeenCalled();
   });
 });

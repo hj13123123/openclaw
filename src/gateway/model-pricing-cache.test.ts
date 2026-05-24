@@ -22,6 +22,7 @@ import {
 describe("model-pricing-cache", () => {
   beforeEach(() => {
     __resetGatewayModelPricingCacheForTest();
+    normalizeProviderModelIdWithPluginMock.mockClear();
   });
 
   afterEach(() => {
@@ -96,9 +97,10 @@ describe("model-pricing-cache", () => {
       ]),
     );
     expect(new Set(refs).size).toBe(refs.length);
+    expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
   });
 
-  it("collects manifest-owned web search plugin model refs without a hardcoded plugin list", () => {
+  it("collects configured web search plugin model refs without a hardcoded plugin list", () => {
     const refs = collectConfiguredModelPricingRefs({
       plugins: {
         entries: {
@@ -199,6 +201,7 @@ describe("model-pricing-cache", () => {
       cacheRead: 0,
       cacheWrite: 0,
     });
+    expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
   });
 
   it("does not recurse forever for native openrouter auto refs", async () => {

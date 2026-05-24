@@ -120,6 +120,14 @@ function inferExactBundledPluginScopedWebToolConfigOwner(params: {
   return isRecord(pluginConfig?.[params.key]) ? params.pluginId : undefined;
 }
 
+function hasBundledWebSearchProviderPublicArtifact(pluginId: string): boolean {
+  return (
+    (resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+      onlyPluginIds: [pluginId],
+    })?.length ?? 0) > 0
+  );
+}
+
 async function hasCustomWebSearchPluginRisk(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -542,13 +550,31 @@ export async function resolveRuntimeWebTools(params: {
   }
   const rawProvider = normalizeLowercaseStringOrEmpty(search?.provider);
   let configuredBundledWebSearchPluginIdHint: string | undefined;
-  if (rawProvider && hasPluginWebSearchConfig) {
-    configuredBundledWebSearchPluginIdHint = inferExactBundledPluginScopedWebToolConfigOwner({
-      config: params.sourceConfig,
-      key: "webSearch",
-      pluginId: rawProvider,
-    });
-    if (!configuredBundledWebSearchPluginIdHint && !(await getHasCustomWebSearchRisk())) {
+  if (hasPluginWebSearchConfig) {
+    if (rawProvider) {
+      configuredBundledWebSearchPluginIdHint = inferExactBundledPluginScopedWebToolConfigOwner({
+        config: params.sourceConfig,
+        key: "webSearch",
+        pluginId: rawProvider,
+      });
+    }
+    if (!configuredBundledWebSearchPluginIdHint && !rawProvider) {
+      const singlePluginConfigOwner = inferSingleBundledPluginScopedWebToolConfigOwner(
+        params.sourceConfig,
+        "webSearch",
+      );
+      if (
+        singlePluginConfigOwner &&
+        hasBundledWebSearchProviderPublicArtifact(singlePluginConfigOwner)
+      ) {
+        configuredBundledWebSearchPluginIdHint = singlePluginConfigOwner;
+      }
+    }
+    if (
+      !configuredBundledWebSearchPluginIdHint &&
+      rawProvider &&
+      !(await getHasCustomWebSearchRisk())
+    ) {
       configuredBundledWebSearchPluginIdHint = inferSingleBundledPluginScopedWebToolConfigOwner(
         params.sourceConfig,
         "webSearch",

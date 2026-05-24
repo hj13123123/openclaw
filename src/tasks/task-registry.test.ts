@@ -1305,6 +1305,139 @@ describe("task-registry", () => {
     });
   });
 
+  it("reuses session store reads during task maintenance inspection and sweeps", async () => {
+    const now = Date.now();
+    const tasks = new Map(
+      [1, 2, 3].map((index) => {
+        const task = createTaskRecord({
+          runtime: "subagent",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          childSessionKey: `agent:main:subagent:child-${index}`,
+          runId: `run-session-cache-${index}`,
+          task: `Cached lookup ${index}`,
+          status: "running",
+          deliveryStatus: "pending",
+        });
+        return [
+          task.taskId,
+          {
+            ...task,
+            lastEventAt: now - 10 * 60_000,
+          },
+        ];
+      }),
+    );
+    const loadSessionStore = vi.fn(() => ({
+      "agent:main:subagent:child-1": {
+        sessionId: "agent:main:subagent:child-1",
+        updatedAt: now,
+      },
+      "agent:main:subagent:child-2": {
+        sessionId: "agent:main:subagent:child-2",
+        updatedAt: now,
+      },
+      "agent:main:subagent:child-3": {
+        sessionId: "agent:main:subagent:child-3",
+        updatedAt: now,
+      },
+    }));
+    setTaskRegistryMaintenanceRuntimeForTests({
+      readAcpSessionEntry: () => ({
+        cfg: {} as never,
+        storePath: "",
+        sessionKey: "",
+        storeSessionKey: "",
+        entry: undefined,
+        storeReadFailed: false,
+      }),
+      loadSessionStore,
+      resolveStorePath: () => "main-store",
+      parseAgentSessionKey: () => ({ agentId: "main" }) as ParsedAgentSessionKey,
+      isCronJobActive: () => false,
+      getAgentRunContext: () => undefined,
+      deleteTaskRecordById: (taskId: string) => tasks.delete(taskId),
+      ensureTaskRegistryReady: () => {},
+      getTaskById: (taskId: string) => tasks.get(taskId),
+      listTaskRecords: () => [...tasks.values()],
+      markTaskLostById: () => null,
+      maybeDeliverTaskTerminalUpdate: async () => null,
+      resolveTaskForLookupToken: () => undefined,
+      setTaskCleanupAfterById: () => null,
+    });
+
+    expect(reconcileInspectableTasks()).toHaveLength(3);
+    expect(loadSessionStore).toHaveBeenCalledTimes(1);
+
+    loadSessionStore.mockClear();
+    expect(await runTaskRegistryMaintenance()).toEqual({
+      reconciled: 0,
+      cleanupStamped: 0,
+      pruned: 0,
+    });
+    expect(loadSessionStore).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not inspect active CLI runs when a CLI task has a backing session", () => {
+    const now = Date.now();
+    const task = createTaskRecord({
+      runtime: "cli",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:main",
+      runId: "run-cli-backed-session",
+      task: "CLI backed by session",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    const tasks = new Map([
+      [
+        task.taskId,
+        {
+          ...task,
+          lastEventAt: now - 10 * 60_000,
+        },
+      ],
+    ]);
+    const loadSessionStore = vi.fn(() => ({
+      "agent:main:main": {
+        sessionId: "agent:main:main",
+        updatedAt: now,
+      },
+    }));
+    const getAgentRunContext = vi.fn(() => undefined);
+    setTaskRegistryMaintenanceRuntimeForTests({
+      readAcpSessionEntry: () => ({
+        cfg: {} as never,
+        storePath: "",
+        sessionKey: "",
+        storeSessionKey: "",
+        entry: undefined,
+        storeReadFailed: false,
+      }),
+      loadSessionStore,
+      resolveStorePath: () => "main-store",
+      parseAgentSessionKey: () => ({ agentId: "main" }) as ParsedAgentSessionKey,
+      isCronJobActive: () => false,
+      getAgentRunContext,
+      deleteTaskRecordById: (taskId: string) => tasks.delete(taskId),
+      ensureTaskRegistryReady: () => {},
+      getTaskById: (taskId: string) => tasks.get(taskId),
+      listTaskRecords: () => [...tasks.values()],
+      markTaskLostById: () => null,
+      maybeDeliverTaskTerminalUpdate: async () => null,
+      resolveTaskForLookupToken: () => undefined,
+      setTaskCleanupAfterById: () => null,
+    });
+
+    expect(reconcileInspectableTasks()[0]).toMatchObject({
+      status: "running",
+      runId: "run-cli-backed-session",
+    });
+    expect(loadSessionStore).toHaveBeenCalledTimes(1);
+    expect(getAgentRunContext).not.toHaveBeenCalled();
+  });
+
   it("marks orphaned tasks lost with cleanupAfter in a single maintenance pass", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

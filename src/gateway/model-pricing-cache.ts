@@ -10,8 +10,6 @@ import {
 import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveManifestContractPluginIds } from "../plugins/manifest-registry.js";
-import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
@@ -54,6 +52,7 @@ const WRAPPER_PROVIDERS = new Set([
   "openrouter",
   "vercel-ai-gateway",
 ]);
+const PRICING_REF_NORMALIZE_OPTIONS = { allowPluginNormalization: false } as const;
 const log = createSubsystemLogger("gateway").child("model-pricing");
 
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -120,7 +119,11 @@ function parseOpenRouterPricing(value: unknown): CachedModelPricing | null {
 }
 
 function canonicalizeOpenRouterProvider(provider: string): string {
-  const normalized = normalizeModelRef(provider, "placeholder").provider;
+  const normalized = normalizeModelRef(
+    provider,
+    "placeholder",
+    PRICING_REF_NORMALIZE_OPTIONS,
+  ).provider;
   return PROVIDER_ALIAS_TO_OPENROUTER[normalized] ?? normalized;
 }
 
@@ -143,14 +146,7 @@ function canonicalizeOpenRouterLookupId(id: string): string {
       .replace(/^claude-(\d+)\.(\d+)-/u, "claude-$1-$2-")
       .replace(/^claude-([a-z]+)-(\d+)\.(\d+)$/u, "claude-$1-$2-$3");
   }
-  model =
-    normalizeProviderModelIdWithPlugin({
-      provider,
-      context: {
-        provider,
-        modelId: model,
-      },
-    }) ?? model;
+  model = normalizeModelRef(provider, model, PRICING_REF_NORMALIZE_OPTIONS).model;
   return `${provider}/${model}`;
 }
 
@@ -203,11 +199,16 @@ function addResolvedModelRef(params: {
     raw,
     defaultProvider: DEFAULT_PROVIDER,
     aliasIndex: params.aliasIndex,
+    ...PRICING_REF_NORMALIZE_OPTIONS,
   });
   if (!resolved) {
     return;
   }
-  const normalized = normalizeModelRef(resolved.ref.provider, resolved.ref.model);
+  const normalized = normalizeModelRef(
+    resolved.ref.provider,
+    resolved.ref.model,
+    PRICING_REF_NORMALIZE_OPTIONS,
+  );
   params.refs.set(modelKey(normalized.provider, normalized.model), normalized);
 }
 
@@ -240,7 +241,7 @@ function addProviderModelPair(params: {
   if (!provider || !model) {
     return;
   }
-  const normalized = normalizeModelRef(provider, model);
+  const normalized = normalizeModelRef(provider, model, PRICING_REF_NORMALIZE_OPTIONS);
   params.refs.set(modelKey(normalized.provider, normalized.model), normalized);
 }
 
@@ -249,10 +250,19 @@ function addConfiguredWebSearchPluginModels(params: {
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   refs: Map<string, ModelRef>;
 }): void {
-  for (const pluginId of resolveManifestContractPluginIds({
-    contract: "webSearchProviders",
-    config: params.config,
-  })) {
+  const pluginIds = new Set<string>();
+  const configuredProvider = normalizeOptionalString(
+    (params.config.tools?.web?.search as { provider?: unknown } | undefined)?.provider,
+  );
+  if (configuredProvider) {
+    pluginIds.add(configuredProvider);
+  }
+  for (const [pluginId, entry] of Object.entries(params.config.plugins?.entries ?? {})) {
+    if (entry?.config && resolvePluginWebSearchConfig(params.config, pluginId)) {
+      pluginIds.add(pluginId);
+    }
+  }
+  for (const pluginId of pluginIds) {
     addResolvedModelRef({
       raw: resolvePluginWebSearchConfig(params.config, pluginId)?.model as string | undefined,
       aliasIndex: params.aliasIndex,
@@ -266,6 +276,7 @@ export function collectConfiguredModelPricingRefs(config: OpenClawConfig): Model
   const aliasIndex = buildModelAliasIndex({
     cfg: config,
     defaultProvider: DEFAULT_PROVIDER,
+    ...PRICING_REF_NORMALIZE_OPTIONS,
   });
 
   addModelListLike({ value: config.agents?.defaults?.model, aliasIndex, refs });

@@ -397,6 +397,37 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
   });
 
+  it("uses a single plugin-scoped web search config as a provider hint", async () => {
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY_REF" },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        GEMINI_API_KEY_REF: "gemini-runtime-key",
+      },
+    });
+
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBe("gemini");
+    expect(metadata.search.selectedProviderKeySource).toBe("secretRef");
+    expect(readProviderKey(resolvedConfig, "gemini")).toBe("gemini-runtime-key");
+    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith({
+      onlyPluginIds: ["google"],
+    });
+    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+  });
+
   it("auto-selects a keyless provider when no credentials are configured", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({

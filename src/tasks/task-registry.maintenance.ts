@@ -1,9 +1,10 @@
+import fs from "node:fs";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { deriveSessionChatType } from "../sessions/session-chat-type.js";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   deleteTaskRecordById,
@@ -30,9 +31,10 @@ const TASK_SWEEP_INTERVAL_MS = 60_000;
 
 /**
  * Number of tasks to process before yielding to the event loop.
- * Keeps the main thread responsive during large sweeps.
+ * Keeps the main thread responsive during large sweeps without splitting
+ * normal-sized startup maintenance into many delayed Windows setImmediate turns.
  */
-const SWEEP_YIELD_BATCH_SIZE = 25;
+const SWEEP_YIELD_BATCH_SIZE = 500;
 
 let sweeper: NodeJS.Timeout | null = null;
 let deferredSweep: NodeJS.Timeout | null = null;
@@ -81,6 +83,17 @@ export type TaskRegistryMaintenanceSummary = {
   pruned: number;
 };
 
+type SessionStoreCache = Map<string, Record<string, unknown>>;
+type SessionStoreKeySnapshot = {
+  exact: Set<string>;
+  normalized: Set<string>;
+};
+type SessionStoreKeyCache = Map<string, SessionStoreKeySnapshot>;
+type SessionLookupCaches = {
+  stores: SessionStoreCache;
+  keys: SessionStoreKeyCache;
+};
+
 function findSessionEntryByKey(store: Record<string, unknown>, sessionKey: string): unknown {
   const direct = store[sessionKey];
   if (direct) {
@@ -119,14 +132,74 @@ function hasActiveCliRun(task: TaskRecord): boolean {
   return false;
 }
 
-function hasBackingSession(task: TaskRecord): boolean {
+function loadCachedSessionStore(
+  storePath: string,
+  sessionStoreCache: SessionStoreCache,
+): Record<string, unknown> {
+  const cached = sessionStoreCache.get(storePath);
+  if (cached) {
+    return cached;
+  }
+  const store = taskRegistryMaintenanceRuntime.loadSessionStore(storePath);
+  sessionStoreCache.set(storePath, store);
+  return store;
+}
+
+function readDefaultSessionStoreKeySnapshot(storePath: string): SessionStoreKeySnapshot {
+  const exact = new Set<string>();
+  const normalized = new Set<string>();
+  const maxReadAttempts = process.platform === "win32" ? 3 : 1;
+  const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
+  for (let attempt = 0; attempt < maxReadAttempts; attempt += 1) {
+    try {
+      const raw = fs.readFileSync(storePath, "utf-8");
+      if (raw.length === 0 && attempt < maxReadAttempts - 1) {
+        Atomics.wait(retryBuf!, 0, 0, 50);
+        continue;
+      }
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { exact, normalized };
+      }
+      for (const key of Object.keys(parsed)) {
+        exact.add(key);
+        const normalizedKey = normalizeLowercaseStringOrEmpty(key);
+        if (normalizedKey) {
+          normalized.add(normalizedKey);
+        }
+      }
+      return { exact, normalized };
+    } catch {
+      if (attempt < maxReadAttempts - 1) {
+        Atomics.wait(retryBuf!, 0, 0, 50);
+        continue;
+      }
+    }
+  }
+  return { exact, normalized };
+}
+
+function hasCachedSessionStoreKey(
+  storePath: string,
+  sessionKey: string,
+  sessionStoreKeyCache: SessionStoreKeyCache,
+): boolean {
+  let snapshot = sessionStoreKeyCache.get(storePath);
+  if (!snapshot) {
+    snapshot = readDefaultSessionStoreKeySnapshot(storePath);
+    sessionStoreKeyCache.set(storePath, snapshot);
+  }
+  if (snapshot.exact.has(sessionKey)) {
+    return true;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  return normalized ? snapshot.normalized.has(normalized) : false;
+}
+
+function hasBackingSession(task: TaskRecord, sessionLookupCaches?: SessionLookupCaches): boolean {
   if (task.runtime === "cron") {
     const jobId = task.sourceId?.trim();
     return jobId ? taskRegistryMaintenanceRuntime.isCronJobActive(jobId) : false;
-  }
-
-  if (task.runtime === "cli" && hasActiveCliRun(task)) {
-    return true;
   }
 
   const childSessionKey = task.childSessionKey?.trim();
@@ -144,28 +217,41 @@ function hasBackingSession(task: TaskRecord): boolean {
   }
   if (task.runtime === "subagent" || task.runtime === "cli") {
     if (task.runtime === "cli") {
-      const chatType = deriveSessionChatType(childSessionKey);
+      const chatType = deriveSessionChatTypeFromKey(childSessionKey);
       if (chatType === "channel" || chatType === "group" || chatType === "direct") {
-        return false;
+        return hasActiveCliRun(task);
       }
     }
     const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
     const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
-    const store = taskRegistryMaintenanceRuntime.loadSessionStore(storePath);
-    return Boolean(findSessionEntryByKey(store, childSessionKey));
+    if (taskRegistryMaintenanceRuntime === defaultTaskRegistryMaintenanceRuntime) {
+      const hasSessionKey = hasCachedSessionStoreKey(
+        storePath,
+        childSessionKey,
+        sessionLookupCaches?.keys ?? new Map(),
+      );
+      return hasSessionKey || (task.runtime === "cli" && hasActiveCliRun(task));
+    }
+    const store = loadCachedSessionStore(storePath, sessionLookupCaches?.stores ?? new Map());
+    const hasSessionEntry = Boolean(findSessionEntryByKey(store, childSessionKey));
+    return hasSessionEntry || (task.runtime === "cli" && hasActiveCliRun(task));
   }
 
   return true;
 }
 
-function shouldMarkLost(task: TaskRecord, now: number): boolean {
+function shouldMarkLost(
+  task: TaskRecord,
+  now: number,
+  sessionLookupCaches?: SessionLookupCaches,
+): boolean {
   if (!isActiveTask(task)) {
     return false;
   }
   if (!hasLostGraceExpired(task, now)) {
     return false;
   }
-  return !hasBackingSession(task);
+  return !hasBackingSession(task, sessionLookupCaches);
 }
 
 function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {
@@ -228,9 +314,13 @@ export function reconcileTaskRecordForOperatorInspection(task: TaskRecord): Task
 
 export function reconcileInspectableTasks(): TaskRecord[] {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  const now = Date.now();
+  const sessionLookupCaches: SessionLookupCaches = { stores: new Map(), keys: new Map() };
   return taskRegistryMaintenanceRuntime
     .listTaskRecords()
-    .map((task) => reconcileTaskRecordForOperatorInspection(task));
+    .map((task) =>
+      shouldMarkLost(task, now, sessionLookupCaches) ? projectTaskLost(task, now) : task,
+    );
 }
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
@@ -253,11 +343,12 @@ export function reconcileTaskLookupToken(token: string): TaskRecord | undefined 
 export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const now = Date.now();
+  const sessionLookupCaches: SessionLookupCaches = { stores: new Map(), keys: new Map() };
   let reconciled = 0;
   let cleanupStamped = 0;
   let pruned = 0;
   for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
-    if (shouldMarkLost(task, now)) {
+    if (shouldMarkLost(task, now, sessionLookupCaches)) {
       reconciled += 1;
       continue;
     }
@@ -295,6 +386,7 @@ function startScheduledSweep() {
 export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const now = Date.now();
+  const sessionLookupCaches: SessionLookupCaches = { stores: new Map(), keys: new Map() };
   let reconciled = 0;
   let cleanupStamped = 0;
   let pruned = 0;
@@ -305,7 +397,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
     if (!current) {
       continue;
     }
-    if (shouldMarkLost(current, now)) {
+    if (shouldMarkLost(current, now, sessionLookupCaches)) {
       const next = markTaskLost(current, now);
       if (next.status === "lost") {
         reconciled += 1;
