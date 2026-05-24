@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { AGENT_LANE_NESTED } from "../agents/lanes.js";
-import { callGateway } from "../gateway/call.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { createRuntimeEvent, emitEvent, type RuntimeEvent } from "./event-bus.js";
 import {
   evaluatePolicyForTask,
@@ -1267,6 +1264,12 @@ This return will be saved to system/returns/inbox/ by the system for automatic p
       if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
 
       try {
+        const [{ callGateway }, { INTERNAL_MESSAGE_CHANNEL }, { AGENT_LANE_NESTED }] =
+          await Promise.all([
+            import("../gateway/call.js"),
+            import("../utils/message-channel.js"),
+            import("../agents/lanes.js"),
+          ]);
         const response = await callGateway<Record<string, unknown>>({
           method: "agent",
           params: {
