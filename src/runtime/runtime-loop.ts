@@ -162,6 +162,51 @@ export type RuntimeLoopDispatchProposal = {
   };
 };
 
+type RuntimeLoopProposalAcceptanceStatus =
+  | "ready_for_human_gate"
+  | "blocked"
+  | "invalid"
+  | "missing";
+
+type RuntimeLoopProposalAcceptanceBlockReason =
+  | "proposal_missing"
+  | "proposal_invalid_json"
+  | "proposal_mode_invalid"
+  | "proposal_constraints_invalid"
+  | "no_proposed_dispatches"
+  | "selected_candidate_invalid"
+  | "proposal_summary_mismatch"
+  | "current_preflight_drift";
+
+export type RuntimeLoopProposalAcceptanceCheck = {
+  mode: "acceptance-stub";
+  checkedAt: string;
+  proposalPath: string;
+  status: RuntimeLoopProposalAcceptanceStatus;
+  readyForHumanGate: boolean;
+  blockReasons: RuntimeLoopProposalAcceptanceBlockReason[];
+  proposalSummary: RuntimeLoopDispatchProposal["summary"] | null;
+  currentPreflightSummary: {
+    queuedCandidates: number;
+    policyEligibleCandidates: number;
+    wouldDispatchIfApplyEnabled: number;
+    wouldDispatch: 0;
+  };
+  selectedCandidateTaskIds: string[];
+  currentCandidateTaskIds: string[];
+  constraintsVerified: {
+    artifactWritten: "no";
+    stateWritten: "no";
+    eventEmitted: "no";
+    dispatchTriggered: "no";
+    sessionsSpawnCalled: "no";
+    taskGraphMutated: "no";
+    returnConsumed: "no";
+    receiptWritten: "no";
+    applied: "no";
+  };
+};
+
 function statePath(workspaceRoot: string): string {
   return path.join(workspaceRoot, RUNTIME_LOOP_STATE_REL);
 }
@@ -172,6 +217,24 @@ function relativeWorkspacePath(workspaceRoot: string, filePath: string): string 
 
 function safeFileSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/gu, "_").slice(0, 120) || "unknown";
+}
+
+function dispatchProposalDirPath(workspaceRoot: string): string {
+  return path.join(workspaceRoot, DISPATCH_PROPOSAL_DIR_REL);
+}
+
+function resolveDispatchProposalPath(workspaceRoot: string, proposalPath: string): string | null {
+  const proposalsDir = path.resolve(dispatchProposalDirPath(workspaceRoot));
+  const resolvedPath = path.resolve(workspaceRoot, proposalPath);
+  const relativeToProposalDir = path.relative(proposalsDir, resolvedPath);
+  if (
+    relativeToProposalDir.startsWith("..") ||
+    path.isAbsolute(relativeToProposalDir) ||
+    path.extname(resolvedPath) !== ".json"
+  ) {
+    return null;
+  }
+  return resolvedPath;
 }
 
 function readJsonObject(filePath: string): Record<string, unknown> | null {
@@ -412,6 +475,139 @@ export function writeRuntimeLoopDispatchProposal(
   mkdirSync(path.dirname(proposalPath), { recursive: true });
   writeFileSync(proposalPath, `${JSON.stringify(proposal, null, 2)}\n`, "utf8");
   return proposal;
+}
+
+function isRuntimeLoopDispatchProposal(value: unknown): value is RuntimeLoopDispatchProposal {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Partial<RuntimeLoopDispatchProposal>;
+  return (
+    typeof record.proposalId === "string" &&
+    typeof record.createdAt === "string" &&
+    record.mode === "proposal-only" &&
+    typeof record.proposalPath === "string" &&
+    !!record.preflight &&
+    Array.isArray(record.selectedCandidates) &&
+    !!record.summary &&
+    !!record.constraintsVerified
+  );
+}
+
+function proposalConstraintsValid(proposal: RuntimeLoopDispatchProposal): boolean {
+  return (
+    proposal.constraintsVerified.artifactWritten === "yes" &&
+    proposal.constraintsVerified.stateWritten === "no" &&
+    proposal.constraintsVerified.eventEmitted === "no" &&
+    proposal.constraintsVerified.dispatchTriggered === "no" &&
+    proposal.constraintsVerified.sessionsSpawnCalled === "no" &&
+    proposal.constraintsVerified.taskGraphMutated === "no" &&
+    proposal.constraintsVerified.returnConsumed === "no" &&
+    proposal.constraintsVerified.receiptWritten === "no" &&
+    proposal.constraintsVerified.applied === "no"
+  );
+}
+
+function selectedCandidatesValid(proposal: RuntimeLoopDispatchProposal): boolean {
+  return proposal.selectedCandidates.every(
+    (candidate) =>
+      candidate.policy_eligible === true &&
+      candidate.would_dispatch === false &&
+      candidate.would_dispatch_if_apply_enabled === true,
+  );
+}
+
+function sortedTaskIds(entries: RuntimeLoopPreflightDispatchPlanEntry[]): string[] {
+  return entries.map((entry) => entry.taskId).sort((a, b) => a.localeCompare(b));
+}
+
+function sameStringArray(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => item === right[index]);
+}
+
+export function checkRuntimeLoopProposalAcceptance(
+  workspaceRoot: string,
+  proposalPath: string,
+): RuntimeLoopProposalAcceptanceCheck {
+  const checkedAt = new Date().toISOString();
+  const resolvedProposalPath = resolveDispatchProposalPath(workspaceRoot, proposalPath);
+  if (!resolvedProposalPath) {
+    throw new Error("proposalPath must point to a JSON file under runtime/dispatch/proposals");
+  }
+  const normalizedProposalPath = relativeWorkspacePath(workspaceRoot, resolvedProposalPath);
+  const currentPreflight = buildRuntimeLoopPreflight(workspaceRoot);
+  const currentCandidates = currentPreflight.dispatch_plan.filter(
+    (entry) => entry.would_dispatch_if_apply_enabled,
+  );
+  const currentCandidateTaskIds = sortedTaskIds(currentCandidates);
+  const base = {
+    mode: "acceptance-stub" as const,
+    checkedAt,
+    proposalPath: normalizedProposalPath,
+    currentPreflightSummary: {
+      queuedCandidates: currentPreflight.tasks.queued_candidates,
+      policyEligibleCandidates: currentPreflight.tasks.policy_eligible_candidates,
+      wouldDispatchIfApplyEnabled: currentPreflight.tasks.would_dispatch_if_apply_enabled,
+      wouldDispatch: 0 as const,
+    },
+    currentCandidateTaskIds,
+    constraintsVerified: {
+      artifactWritten: "no" as const,
+      stateWritten: "no" as const,
+      eventEmitted: "no" as const,
+      dispatchTriggered: "no" as const,
+      sessionsSpawnCalled: "no" as const,
+      taskGraphMutated: "no" as const,
+      returnConsumed: "no" as const,
+      receiptWritten: "no" as const,
+      applied: "no" as const,
+    },
+  };
+
+  if (!existsSync(resolvedProposalPath)) {
+    return {
+      ...base,
+      status: "missing",
+      readyForHumanGate: false,
+      blockReasons: ["proposal_missing"],
+      proposalSummary: null,
+      selectedCandidateTaskIds: [],
+    };
+  }
+
+  const parsed = readJsonObject(resolvedProposalPath);
+  if (!isRuntimeLoopDispatchProposal(parsed)) {
+    return {
+      ...base,
+      status: parsed ? "invalid" : "invalid",
+      readyForHumanGate: false,
+      blockReasons: ["proposal_invalid_json"],
+      proposalSummary: null,
+      selectedCandidateTaskIds: [],
+    };
+  }
+
+  const selectedCandidateTaskIds = sortedTaskIds(parsed.selectedCandidates);
+  const blockReasons: RuntimeLoopProposalAcceptanceBlockReason[] = [];
+  if (parsed.mode !== "proposal-only") blockReasons.push("proposal_mode_invalid");
+  if (!proposalConstraintsValid(parsed)) blockReasons.push("proposal_constraints_invalid");
+  if (parsed.summary.proposedDispatches <= 0) blockReasons.push("no_proposed_dispatches");
+  if (!selectedCandidatesValid(parsed)) blockReasons.push("selected_candidate_invalid");
+  if (parsed.summary.proposedDispatches !== parsed.selectedCandidates.length) {
+    blockReasons.push("proposal_summary_mismatch");
+  }
+  if (!sameStringArray(selectedCandidateTaskIds, currentCandidateTaskIds)) {
+    blockReasons.push("current_preflight_drift");
+  }
+  const readyForHumanGate = blockReasons.length === 0;
+
+  return {
+    ...base,
+    status: readyForHumanGate ? "ready_for_human_gate" : "blocked",
+    readyForHumanGate,
+    blockReasons,
+    proposalSummary: parsed.summary,
+    selectedCandidateTaskIds,
+  };
 }
 
 function emitRuntimeLoopEvent(

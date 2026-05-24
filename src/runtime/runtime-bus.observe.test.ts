@@ -15,6 +15,7 @@ import { createRuntimeEvent, emitEvent, getRecentEvents } from "./event-bus.js";
 import { generateActionPlan, writeDryRunAudit } from "./policy-action-executor.js";
 import {
   buildRuntimeLoopPreflight,
+  checkRuntimeLoopProposalAcceptance,
   readLatestRuntimeLoopState,
   tick,
   writeRuntimeLoopDispatchProposal,
@@ -445,6 +446,104 @@ describe("runtime bus observe-only validation", () => {
       expect(
         existsSync(path.join(workspaceRoot, "runtime", "main", "tmp", "runtime-loop-state.json")),
       ).toBe(false);
+      expect(getRecentEvents(workspaceRoot, 10)).toEqual([]);
+    }));
+
+  it("checks dispatch proposal acceptance without executing dispatch", () =>
+    withTempRoot((workspaceRoot) => {
+      appendTask(
+        workspaceRoot,
+        task("ACCEPTANCE-A", "queued", {
+          metadata: { dispatchTarget: "/engineering-executive" },
+          policyDecision: autoCloseDecision,
+        }),
+      );
+      const schedulerStatePath = path.join(
+        workspaceRoot,
+        "runtime",
+        "main",
+        "tmp",
+        "task-scheduler-state.json",
+      );
+      ensureDir(schedulerStatePath);
+      writeFileSync(
+        schedulerStatePath,
+        `${JSON.stringify({
+          enabled: true,
+          mode: "observe",
+          status: "idle",
+          intervalMs: 60_000,
+          maxTicks: null,
+          policyWarnings: [],
+        })}\n`,
+        "utf8",
+      );
+      const policyPath = path.join(workspaceRoot, "runtime", "policy", "policy-rules.json");
+      ensureDir(policyPath);
+      writeFileSync(
+        policyPath,
+        `${JSON.stringify({
+          $schema: "policy-rules-v1",
+          schedulerPolicy: {
+            runtimeLoopMode: "observe",
+            maxDispatchesPerTick: 1,
+            disableOldTrigger: true,
+            enableContinuousApply: false,
+          },
+          rules: [],
+        })}\n`,
+        "utf8",
+      );
+      const proposal = writeRuntimeLoopDispatchProposal(workspaceRoot);
+      const beforeProposal = readFileSync(path.join(workspaceRoot, proposal.proposalPath), "utf8");
+
+      const readyCheck = checkRuntimeLoopProposalAcceptance(workspaceRoot, proposal.proposalPath);
+
+      expect(readyCheck).toEqual(
+        expect.objectContaining({
+          mode: "acceptance-stub",
+          proposalPath: proposal.proposalPath,
+          status: "ready_for_human_gate",
+          readyForHumanGate: true,
+          blockReasons: [],
+          proposalSummary: expect.objectContaining({ proposedDispatches: 1 }),
+          selectedCandidateTaskIds: ["ACCEPTANCE-A"],
+          currentCandidateTaskIds: ["ACCEPTANCE-A"],
+          constraintsVerified: {
+            artifactWritten: "no",
+            stateWritten: "no",
+            eventEmitted: "no",
+            dispatchTriggered: "no",
+            sessionsSpawnCalled: "no",
+            taskGraphMutated: "no",
+            returnConsumed: "no",
+            receiptWritten: "no",
+            applied: "no",
+          },
+        }),
+      );
+      appendTask(
+        workspaceRoot,
+        task("ACCEPTANCE-A", "completed", {
+          updatedAt: "2026-05-20T00:01:00.000Z",
+          policyDecision: autoCloseDecision,
+        }),
+      );
+
+      const driftCheck = checkRuntimeLoopProposalAcceptance(workspaceRoot, proposal.proposalPath);
+
+      expect(driftCheck).toEqual(
+        expect.objectContaining({
+          status: "blocked",
+          readyForHumanGate: false,
+          blockReasons: ["current_preflight_drift"],
+          selectedCandidateTaskIds: ["ACCEPTANCE-A"],
+          currentCandidateTaskIds: [],
+        }),
+      );
+      expect(readFileSync(path.join(workspaceRoot, proposal.proposalPath), "utf8")).toBe(
+        beforeProposal,
+      );
       expect(getRecentEvents(workspaceRoot, 10)).toEqual([]);
     }));
 });

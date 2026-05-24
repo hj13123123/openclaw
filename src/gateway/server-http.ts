@@ -282,6 +282,7 @@ function isHudStatePath(pathname: string): boolean {
     pathname === "/api/hud/runtime-loop" ||
     pathname === "/api/hud/runtime-loop/preflight" ||
     pathname === "/api/hud/runtime-loop/dispatch-proposal" ||
+    pathname === "/api/hud/runtime-loop/proposal-acceptance" ||
     pathname === "/api/hud/runtime-loop/refresh" ||
     pathname === "/api/hud/return-inbox"
   );

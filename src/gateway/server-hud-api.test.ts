@@ -351,6 +351,114 @@ describe("server HUD API runtime loop freshness", () => {
     expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "POST");
   });
 
+  it("checks runtime loop proposal acceptance without executing dispatch", async () => {
+    const workspaceRoot = makeWorkspace();
+    const tasksPath = path.join(workspaceRoot, "runtime", "tasks", "tasks.jsonl");
+    mkdirSync(path.dirname(tasksPath), { recursive: true });
+    writeFileSync(
+      tasksPath,
+      `${JSON.stringify({
+        taskId: "ACCEPTANCE-API-A",
+        status: "queued",
+        createdAt: "2026-05-22T08:00:00.000Z",
+        updatedAt: "2026-05-22T08:00:00.000Z",
+        metadata: { dispatchTarget: "/main" },
+        policyDecision: {
+          decisionId: "decision-1",
+          ruleId: "R001",
+          riskLevel: "L0",
+          action: "auto_close",
+          reason: "unit test",
+          timestamp: "2026-05-22T08:00:00.000Z",
+        },
+      })}\n`,
+      "utf8",
+    );
+    writeJson(path.join(workspaceRoot, "runtime", "main", "tmp", "task-scheduler-state.json"), {
+      enabled: true,
+      mode: "observe",
+      status: "idle",
+    });
+    writeJson(path.join(workspaceRoot, "runtime", "policy", "policy-rules.json"), {
+      $schema: "policy-rules-v1",
+      schedulerPolicy: {
+        runtimeLoopMode: "observe",
+        maxDispatchesPerTick: 1,
+        disableOldTrigger: true,
+        enableContinuousApply: false,
+      },
+      rules: [],
+    });
+    const proposalResponse = makeResponse();
+    await handleHudStateHttpRequest(
+      makeReq("/api/hud/runtime-loop/dispatch-proposal", "POST"),
+      proposalResponse.res,
+      workspaceRoot,
+    );
+    const proposal = proposalResponse.json().data as { proposalPath: string };
+
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq(
+        `/api/hud/runtime-loop/proposal-acceptance?proposalPath=${encodeURIComponent(proposal.proposalPath)}`,
+        "GET",
+      ),
+      response.res,
+      workspaceRoot,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      data: expect.objectContaining({
+        mode: "acceptance-stub",
+        proposalPath: proposal.proposalPath,
+        status: "ready_for_human_gate",
+        readyForHumanGate: true,
+        blockReasons: [],
+        selectedCandidateTaskIds: ["ACCEPTANCE-API-A"],
+        currentCandidateTaskIds: ["ACCEPTANCE-API-A"],
+        constraintsVerified: expect.objectContaining({
+          artifactWritten: "no",
+          dispatchTriggered: "no",
+          sessionsSpawnCalled: "no",
+          applied: "no",
+        }),
+      }),
+    });
+  });
+
+  it("rejects runtime loop proposal acceptance requests without proposal path", async () => {
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq("/api/hud/runtime-loop/proposal-acceptance", "GET"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "proposalPath is required",
+    });
+  });
+
+  it("rejects runtime loop proposal acceptance writes", async () => {
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq("/api/hud/runtime-loop/proposal-acceptance?proposalPath=x", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
+  });
+
   it("returns typed return inbox summaries without consuming files", async () => {
     const workspaceRoot = makeWorkspace();
     const returnPath = path.join(workspaceRoot, "system", "returns", "inbox", "return-a.json");
