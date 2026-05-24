@@ -15,6 +15,7 @@ import { createRuntimeEvent, emitEvent, getRecentEvents } from "./event-bus.js";
 import { generateActionPlan, writeDryRunAudit } from "./policy-action-executor.js";
 import {
   buildRuntimeLoopPreflight,
+  buildRuntimeLoopAcceptanceRecordDryRun,
   checkRuntimeLoopProposalAcceptance,
   readLatestRuntimeLoopState,
   tick,
@@ -544,6 +545,99 @@ describe("runtime bus observe-only validation", () => {
       expect(readFileSync(path.join(workspaceRoot, proposal.proposalPath), "utf8")).toBe(
         beforeProposal,
       );
+      expect(getRecentEvents(workspaceRoot, 10)).toEqual([]);
+    }));
+
+  it("builds acceptance record dry-run preview without writing approval state", () =>
+    withTempRoot((workspaceRoot) => {
+      appendTask(
+        workspaceRoot,
+        task("ACCEPTANCE-DRY-RUN-A", "queued", {
+          metadata: { dispatchTarget: "/engineering-executive" },
+          policyDecision: autoCloseDecision,
+        }),
+      );
+      const schedulerStatePath = path.join(
+        workspaceRoot,
+        "runtime",
+        "main",
+        "tmp",
+        "task-scheduler-state.json",
+      );
+      ensureDir(schedulerStatePath);
+      writeFileSync(
+        schedulerStatePath,
+        `${JSON.stringify({
+          enabled: true,
+          mode: "observe",
+          status: "idle",
+          intervalMs: 60_000,
+          maxTicks: null,
+          policyWarnings: [],
+        })}\n`,
+        "utf8",
+      );
+      const policyPath = path.join(workspaceRoot, "runtime", "policy", "policy-rules.json");
+      ensureDir(policyPath);
+      writeFileSync(
+        policyPath,
+        `${JSON.stringify({
+          $schema: "policy-rules-v1",
+          schedulerPolicy: {
+            runtimeLoopMode: "observe",
+            maxDispatchesPerTick: 1,
+            disableOldTrigger: true,
+            enableContinuousApply: false,
+          },
+          rules: [],
+        })}\n`,
+        "utf8",
+      );
+      const proposal = writeRuntimeLoopDispatchProposal(workspaceRoot);
+      const proposalPath = path.join(workspaceRoot, proposal.proposalPath);
+      const beforeProposal = readFileSync(proposalPath, "utf8");
+
+      const dryRun = buildRuntimeLoopAcceptanceRecordDryRun(workspaceRoot, proposal.proposalPath);
+
+      expect(dryRun).toEqual(
+        expect.objectContaining({
+          mode: "acceptance-record-dry-run",
+          proposalPath: proposal.proposalPath,
+          wouldWrite: false,
+          wouldWritePath: expect.stringMatching(
+            /^runtime\/dispatch\/acceptance-records\/runtime-loop-acceptance-.*\.json$/u,
+          ),
+          acceptance: expect.objectContaining({
+            status: "ready_for_human_gate",
+            readyForHumanGate: true,
+          }),
+          recordPreview: expect.objectContaining({
+            proposalId: proposal.proposalId,
+            proposalPath: proposal.proposalPath,
+            selectedCandidateTaskIds: ["ACCEPTANCE-DRY-RUN-A"],
+            proposedDispatches: 1,
+            requiredApproval: "human",
+            nextAction: "await_human_approval",
+            approved: false,
+            dispatchTriggered: false,
+          }),
+          constraintsVerified: {
+            recordWritten: "no",
+            stateWritten: "no",
+            eventEmitted: "no",
+            dispatchTriggered: "no",
+            sessionsSpawnCalled: "no",
+            taskGraphMutated: "no",
+            returnConsumed: "no",
+            receiptWritten: "no",
+            applied: "no",
+          },
+        }),
+      );
+      expect(
+        existsSync(path.join(workspaceRoot, "runtime", "dispatch", "acceptance-records")),
+      ).toBe(false);
+      expect(readFileSync(proposalPath, "utf8")).toBe(beforeProposal);
       expect(getRecentEvents(workspaceRoot, 10)).toEqual([]);
     }));
 });

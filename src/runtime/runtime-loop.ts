@@ -25,6 +25,7 @@ const SCHEDULER_STATE_REL = "runtime/main/tmp/task-scheduler-state.json";
 const SCHEDULER_POLICY_REL = "runtime/scheduler/scheduler-policy.json";
 const POLICY_RULES_REL = "runtime/policy/policy-rules.json";
 const DISPATCH_PROPOSAL_DIR_REL = "runtime/dispatch/proposals";
+const DISPATCH_ACCEPTANCE_RECORD_DIR_REL = "runtime/dispatch/acceptance-records";
 type SchedulerSnapshot = {
   enabled: boolean;
   mode: "observe" | "apply" | string;
@@ -207,6 +208,41 @@ export type RuntimeLoopProposalAcceptanceCheck = {
   };
 };
 
+export type RuntimeLoopAcceptanceRecordPreview = {
+  acceptanceId: string;
+  createdAt: string;
+  status: "human_gate_ready";
+  proposalId: string;
+  proposalPath: string;
+  selectedCandidateTaskIds: string[];
+  proposedDispatches: number;
+  requiredApproval: "human";
+  nextAction: "await_human_approval";
+  approved: false;
+  dispatchTriggered: false;
+};
+
+export type RuntimeLoopAcceptanceRecordDryRun = {
+  mode: "acceptance-record-dry-run";
+  checkedAt: string;
+  proposalPath: string;
+  wouldWrite: false;
+  wouldWritePath: string | null;
+  acceptance: RuntimeLoopProposalAcceptanceCheck;
+  recordPreview: RuntimeLoopAcceptanceRecordPreview | null;
+  constraintsVerified: {
+    recordWritten: "no";
+    stateWritten: "no";
+    eventEmitted: "no";
+    dispatchTriggered: "no";
+    sessionsSpawnCalled: "no";
+    taskGraphMutated: "no";
+    returnConsumed: "no";
+    receiptWritten: "no";
+    applied: "no";
+  };
+};
+
 function statePath(workspaceRoot: string): string {
   return path.join(workspaceRoot, RUNTIME_LOOP_STATE_REL);
 }
@@ -221,6 +257,10 @@ function safeFileSegment(value: string): string {
 
 function dispatchProposalDirPath(workspaceRoot: string): string {
   return path.join(workspaceRoot, DISPATCH_PROPOSAL_DIR_REL);
+}
+
+function dispatchAcceptanceRecordDirPath(workspaceRoot: string): string {
+  return path.join(workspaceRoot, DISPATCH_ACCEPTANCE_RECORD_DIR_REL);
 }
 
 function resolveDispatchProposalPath(workspaceRoot: string, proposalPath: string): string | null {
@@ -607,6 +647,59 @@ export function checkRuntimeLoopProposalAcceptance(
     blockReasons,
     proposalSummary: parsed.summary,
     selectedCandidateTaskIds,
+  };
+}
+
+export function buildRuntimeLoopAcceptanceRecordDryRun(
+  workspaceRoot: string,
+  proposalPath: string,
+): RuntimeLoopAcceptanceRecordDryRun {
+  const checkedAt = new Date().toISOString();
+  const acceptance = checkRuntimeLoopProposalAcceptance(workspaceRoot, proposalPath);
+  const resolvedProposalPath = resolveDispatchProposalPath(workspaceRoot, proposalPath);
+  const parsed = resolvedProposalPath ? readJsonObject(resolvedProposalPath) : null;
+  const proposal = isRuntimeLoopDispatchProposal(parsed) ? parsed : null;
+  const acceptanceId = `runtime-loop-acceptance-${randomUUID()}`;
+  const recordPath = path.join(
+    dispatchAcceptanceRecordDirPath(workspaceRoot),
+    `${safeFileSegment(acceptanceId)}.json`,
+  );
+  const recordPreview =
+    acceptance.readyForHumanGate && proposal
+      ? {
+          acceptanceId,
+          createdAt: checkedAt,
+          status: "human_gate_ready" as const,
+          proposalId: proposal.proposalId,
+          proposalPath: acceptance.proposalPath,
+          selectedCandidateTaskIds: acceptance.selectedCandidateTaskIds,
+          proposedDispatches: proposal.summary.proposedDispatches,
+          requiredApproval: "human" as const,
+          nextAction: "await_human_approval" as const,
+          approved: false as const,
+          dispatchTriggered: false as const,
+        }
+      : null;
+
+  return {
+    mode: "acceptance-record-dry-run",
+    checkedAt,
+    proposalPath: acceptance.proposalPath,
+    wouldWrite: false,
+    wouldWritePath: recordPreview ? relativeWorkspacePath(workspaceRoot, recordPath) : null,
+    acceptance,
+    recordPreview,
+    constraintsVerified: {
+      recordWritten: "no",
+      stateWritten: "no",
+      eventEmitted: "no",
+      dispatchTriggered: "no",
+      sessionsSpawnCalled: "no",
+      taskGraphMutated: "no",
+      returnConsumed: "no",
+      receiptWritten: "no",
+      applied: "no",
+    },
   };
 }
 

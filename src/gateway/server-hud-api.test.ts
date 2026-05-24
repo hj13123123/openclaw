@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -449,6 +449,126 @@ describe("server HUD API runtime loop freshness", () => {
     const response = makeResponse();
     const handled = await handleHudStateHttpRequest(
       makeReq("/api/hud/runtime-loop/proposal-acceptance?proposalPath=x", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
+  });
+
+  it("builds runtime loop acceptance record dry-run previews without writing records", async () => {
+    const workspaceRoot = makeWorkspace();
+    const tasksPath = path.join(workspaceRoot, "runtime", "tasks", "tasks.jsonl");
+    mkdirSync(path.dirname(tasksPath), { recursive: true });
+    writeFileSync(
+      tasksPath,
+      `${JSON.stringify({
+        taskId: "ACCEPTANCE-RECORD-API-A",
+        status: "queued",
+        createdAt: "2026-05-22T08:00:00.000Z",
+        updatedAt: "2026-05-22T08:00:00.000Z",
+        metadata: { dispatchTarget: "/main" },
+        policyDecision: {
+          decisionId: "decision-1",
+          ruleId: "R001",
+          riskLevel: "L0",
+          action: "auto_close",
+          reason: "unit test",
+          timestamp: "2026-05-22T08:00:00.000Z",
+        },
+      })}\n`,
+      "utf8",
+    );
+    writeJson(path.join(workspaceRoot, "runtime", "main", "tmp", "task-scheduler-state.json"), {
+      enabled: true,
+      mode: "observe",
+      status: "idle",
+    });
+    writeJson(path.join(workspaceRoot, "runtime", "policy", "policy-rules.json"), {
+      $schema: "policy-rules-v1",
+      schedulerPolicy: {
+        runtimeLoopMode: "observe",
+        maxDispatchesPerTick: 1,
+        disableOldTrigger: true,
+        enableContinuousApply: false,
+      },
+      rules: [],
+    });
+    const proposalResponse = makeResponse();
+    await handleHudStateHttpRequest(
+      makeReq("/api/hud/runtime-loop/dispatch-proposal", "POST"),
+      proposalResponse.res,
+      workspaceRoot,
+    );
+    const proposal = proposalResponse.json().data as { proposalPath: string };
+
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq(
+        `/api/hud/runtime-loop/acceptance-record-dry-run?proposalPath=${encodeURIComponent(proposal.proposalPath)}`,
+        "GET",
+      ),
+      response.res,
+      workspaceRoot,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      data: expect.objectContaining({
+        mode: "acceptance-record-dry-run",
+        proposalPath: proposal.proposalPath,
+        wouldWrite: false,
+        wouldWritePath: expect.stringMatching(
+          /^runtime\/dispatch\/acceptance-records\/runtime-loop-acceptance-.*\.json$/u,
+        ),
+        acceptance: expect.objectContaining({
+          status: "ready_for_human_gate",
+          readyForHumanGate: true,
+        }),
+        recordPreview: expect.objectContaining({
+          proposalPath: proposal.proposalPath,
+          selectedCandidateTaskIds: ["ACCEPTANCE-RECORD-API-A"],
+          approved: false,
+          dispatchTriggered: false,
+        }),
+        constraintsVerified: expect.objectContaining({
+          recordWritten: "no",
+          dispatchTriggered: "no",
+          sessionsSpawnCalled: "no",
+          applied: "no",
+        }),
+      }),
+    });
+    expect(existsSync(path.join(workspaceRoot, "runtime", "dispatch", "acceptance-records"))).toBe(
+      false,
+    );
+  });
+
+  it("rejects runtime loop acceptance record dry-run requests without proposal path", async () => {
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq("/api/hud/runtime-loop/acceptance-record-dry-run", "GET"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "proposalPath is required",
+    });
+  });
+
+  it("rejects runtime loop acceptance record dry-run writes", async () => {
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq("/api/hud/runtime-loop/acceptance-record-dry-run?proposalPath=x", "POST"),
       response.res,
       makeWorkspace(),
     );

@@ -8,6 +8,7 @@ import { writeHudStateSnapshot } from "../runtime/hud-state-refresh.js";
 import { scanReturnInbox } from "../runtime/returns/return-inbox.js";
 import {
   buildRuntimeLoopPreflight,
+  buildRuntimeLoopAcceptanceRecordDryRun,
   checkRuntimeLoopProposalAcceptance,
   tick as tickRuntimeLoop,
   writeRuntimeLoopDispatchProposal,
@@ -29,6 +30,8 @@ const RUNTIME_LOOP_ROUTE = "/api/hud/runtime-loop";
 const RUNTIME_LOOP_PREFLIGHT_ROUTE = "/api/hud/runtime-loop/preflight";
 const RUNTIME_LOOP_DISPATCH_PROPOSAL_ROUTE = "/api/hud/runtime-loop/dispatch-proposal";
 const RUNTIME_LOOP_PROPOSAL_ACCEPTANCE_ROUTE = "/api/hud/runtime-loop/proposal-acceptance";
+const RUNTIME_LOOP_ACCEPTANCE_RECORD_DRY_RUN_ROUTE =
+  "/api/hud/runtime-loop/acceptance-record-dry-run";
 const RUNTIME_LOOP_REFRESH_ROUTE = "/api/hud/runtime-loop/refresh";
 const RETURN_INBOX_ROUTE = "/api/hud/return-inbox";
 const RUNTIME_LOOP_STATE_RELATIVE_PATH = "runtime/main/tmp/runtime-loop-state.json";
@@ -229,6 +232,7 @@ export async function handleHudStateHttpRequest(
     requestPath !== RUNTIME_LOOP_PREFLIGHT_ROUTE &&
     requestPath !== RUNTIME_LOOP_DISPATCH_PROPOSAL_ROUTE &&
     requestPath !== RUNTIME_LOOP_PROPOSAL_ACCEPTANCE_ROUTE &&
+    requestPath !== RUNTIME_LOOP_ACCEPTANCE_RECORD_DRY_RUN_ROUTE &&
     requestPath !== RUNTIME_LOOP_REFRESH_ROUTE &&
     requestPath !== RETURN_INBOX_ROUTE
   ) {
@@ -307,6 +311,38 @@ export async function handleHudStateHttpRequest(
       sendJson(res, 200, {
         ok: true,
         data: checkRuntimeLoopProposalAcceptance(workspaceRoot, proposalPath),
+      });
+    } catch (error) {
+      sendJson(res, 400, {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === RUNTIME_LOOP_ACCEPTANCE_RECORD_DRY_RUN_ROUTE) {
+    if (req.method !== "GET") {
+      res.setHeader("Allow", "GET");
+      res.statusCode = 405;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Method Not Allowed");
+      return true;
+    }
+
+    const proposalPath = requestUrl.searchParams.get("proposalPath")?.trim();
+    if (!proposalPath) {
+      sendJson(res, 400, {
+        ok: false,
+        error: "proposalPath is required",
+      });
+      return true;
+    }
+
+    try {
+      sendJson(res, 200, {
+        ok: true,
+        data: buildRuntimeLoopAcceptanceRecordDryRun(workspaceRoot, proposalPath),
       });
     } catch (error) {
       sendJson(res, 400, {
