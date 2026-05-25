@@ -10,10 +10,8 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  processReturnInbox,
-  resolveReturnConsumerWorkspaceRoot,
-} from "./server-return-consumer.js";
+import { processReturnInbox } from "../runtime/returns/return-consumer.js";
+import { resolveReturnConsumerWorkspaceRoot } from "./server-return-consumer.js";
 
 function withTempRoot<T>(fn: (workspaceRoot: string) => T): T {
   const workspaceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-return-consumer-"));
