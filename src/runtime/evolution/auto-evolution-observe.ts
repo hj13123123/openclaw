@@ -1,11 +1,11 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { readLatestPromoteGateReport } from "../distillation/promote-gate-dry-run.js";
+import { readLatestMirrorObserveReport } from "../mirror/mirror-observe.js";
 
 export const AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH = "runtime/main/tmp";
 export const AUTO_EVOLUTION_REPORT_PREFIX = "auto-evolution-observe-";
 
-const MIRROR_REPORT_PREFIX = "mirror-observe-";
 const HUD_STATE_RELATIVE_PATH = "runtime/main/tmp/task-hud-state.json";
 const KB_INDEX_RELATIVE_PATH = "system/kb-index/index.json";
 const RUNTIME_LOOP_STATE_RELATIVE_PATH = "runtime/main/tmp/runtime-loop-state.json";
@@ -164,23 +164,6 @@ export function readLatestAutoEvolutionReport(
       error: error instanceof Error ? error.message : String(error),
     };
   }
-}
-
-function latestReport(
-  workspaceRoot: string,
-  prefix: string,
-): { path: string | null; data: JsonRecord | null; error: string | null } {
-  const reportDir = path.join(workspaceRoot, AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH);
-  if (!existsSync(reportDir)) return { path: null, data: null, error: null };
-  const filePath = readdirSync(reportDir, { withFileTypes: true })
-    .filter(
-      (entry) => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".json"),
-    )
-    .map((entry) => path.join(reportDir, entry.name))
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
-  if (!filePath) return { path: null, data: null, error: null };
-  const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/gu, "/");
-  return readJsonIfPresent(workspaceRoot, relativePath);
 }
 
 function nestedRecord(record: JsonRecord | null, key: string): JsonRecord | null {
@@ -447,7 +430,12 @@ export function runAutoEvolutionObserve(
           `${AUTO_EVOLUTION_REPORT_PREFIX}${generatedAt.replace(/[:.]/gu, "-")}.json`,
         )
       : options.outputPath;
-  const mirror = latestReport(workspaceRoot, MIRROR_REPORT_PREFIX);
+  const latestMirror = readLatestMirrorObserveReport(workspaceRoot);
+  const mirror = {
+    path: latestMirror.path,
+    data: latestMirror.data as unknown as JsonRecord | null,
+    error: latestMirror.error,
+  };
   const latestPromoteGate = readLatestPromoteGateReport(workspaceRoot);
   const promoteGate = {
     path: latestPromoteGate.path,
