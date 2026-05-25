@@ -1549,6 +1549,7 @@ describe("server KB API", () => {
     );
     const acceptanceWrite = await writeSemanticRebuildAcceptanceRecord(workspaceRoot, { config });
     const approvalWrite = await writeSemanticRebuildApprovalRecord(workspaceRoot, { config });
+    const expectedIdempotencyKey = `semantic-rebuild:${approvalWrite.record?.proposalId}:${approvalWrite.record?.approvalId}`;
 
     const response = makeResponse();
     const handled = await handleKbHttpRequest(
@@ -1579,8 +1580,12 @@ describe("server KB API", () => {
         executorInput: expect.objectContaining({
           contractVersion: "v1",
           action: "SEMANTIC_VECTOR_REBUILD",
+          idempotencyKey: expectedIdempotencyKey,
           workspaceRoot,
           sourceIndexPath: "system/kb-index/index.json",
+          executionRecordPath: expect.stringContaining(
+            "runtime/main/tmp/kb-semantic-rebuild-execution-",
+          ),
           proposal: expect.objectContaining({
             proposalId: approvalWrite.record?.proposalId,
             proposalPath: approvalWrite.record?.proposalPath,
@@ -1606,6 +1611,15 @@ describe("server KB API", () => {
             semanticIndexPath: "system/kb-index/semantic-index.json",
             vectorIndexPath: "system/kb-index/vector-index.sqlite",
             rebuildReportPath: "system/kb-index/semantic-rebuild-report.json",
+          },
+          stagedOutputs: {
+            semanticIndexPath: expect.stringContaining(
+              "runtime/main/tmp/semantic-rebuild-staging/",
+            ),
+            vectorIndexPath: expect.stringContaining("runtime/main/tmp/semantic-rebuild-staging/"),
+            rebuildReportPath: expect.stringContaining(
+              "runtime/main/tmp/semantic-rebuild-staging/",
+            ),
           },
           executionPolicy: {
             requiredApproval: "human",

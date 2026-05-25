@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
@@ -483,8 +483,10 @@ type SemanticRebuildExecutionContract = {
   executorInput: {
     contractVersion: "v1";
     action: "SEMANTIC_VECTOR_REBUILD";
+    idempotencyKey: string;
     workspaceRoot: string;
-    sourceIndexPath: typeof KB_INDEX_FILE_RELATIVE_PATH;
+    sourceIndexPath: string;
+    executionRecordPath: string;
     proposal: {
       proposalId: string;
       proposalPath: string;
@@ -511,6 +513,11 @@ type SemanticRebuildExecutionContract = {
       semanticIndexPath: "system/kb-index/semantic-index.json";
       vectorIndexPath: "system/kb-index/vector-index.sqlite";
       rebuildReportPath: "system/kb-index/semantic-rebuild-report.json";
+    };
+    stagedOutputs: {
+      semanticIndexPath: string;
+      vectorIndexPath: string;
+      rebuildReportPath: string;
     };
     plannedSteps: string[];
     executionPolicy: {
@@ -771,6 +778,10 @@ export function buildSemanticRebuildPlan(
 
 function toReportTimestamp(value: string): string {
   return value.replace(/[^0-9A-Za-z-]/g, "-");
+}
+
+function semanticRebuildExecutionPathSegment(idempotencyKey: string): string {
+  return `semantic-rebuild-${createHash("sha256").update(idempotencyKey).digest("hex").slice(0, 16)}`;
 }
 
 function buildSemanticRebuildPlanReportPath(generatedAt: string): string {
@@ -1763,6 +1774,68 @@ export async function buildSemanticRebuildExecutionContract(
     plannedExecution !== null &&
     latestPlan !== null &&
     latestApprovalRecord !== null;
+  const executorInput =
+    readyForExecutorContract && plannedExecution && latestPlan && latestApprovalRecord
+      ? (() => {
+          const idempotencyKey = `semantic-rebuild:${plannedExecution.proposalId}:${latestApprovalRecord.approvalId}`;
+          const pathSegment = semanticRebuildExecutionPathSegment(idempotencyKey);
+          const stagingDir = `runtime/main/tmp/semantic-rebuild-staging/${pathSegment}`;
+          return {
+            contractVersion: "v1" as const,
+            action: "SEMANTIC_VECTOR_REBUILD" as const,
+            idempotencyKey,
+            workspaceRoot,
+            sourceIndexPath: KB_INDEX_FILE_RELATIVE_PATH,
+            executionRecordPath: [
+              SEMANTIC_REBUILD_PLAN_REPORT_DIR,
+              `kb-semantic-rebuild-execution-${pathSegment}.json`,
+            ].join("/"),
+            proposal: {
+              proposalId: plannedExecution.proposalId,
+              proposalPath: plannedExecution.proposalPath,
+              generatedAt: latestPlan.plan.generatedAt,
+            },
+            acceptance: {
+              acceptanceId: plannedExecution.acceptanceId,
+              acceptanceRecordPath: plannedExecution.recordPath,
+            },
+            approval: {
+              approvalId: latestApprovalRecord.approvalId,
+              approvalRecordPath: latestApprovalRecord.recordPath,
+            },
+            semantic: {
+              provider: plannedExecution.provider,
+              model: plannedExecution.model,
+            },
+            batchPlan: {
+              totalItems: plannedExecution.totalItems,
+              plannedBatches: plannedExecution.plannedBatches,
+              maxItemsPerBatch: 100 as const,
+            },
+            plannedOutputs: {
+              semanticIndexPath: "system/kb-index/semantic-index.json" as const,
+              vectorIndexPath: "system/kb-index/vector-index.sqlite" as const,
+              rebuildReportPath: "system/kb-index/semantic-rebuild-report.json" as const,
+            },
+            stagedOutputs: {
+              semanticIndexPath: `${stagingDir}/semantic-index.json`,
+              vectorIndexPath: `${stagingDir}/vector-index.sqlite`,
+              rebuildReportPath: `${stagingDir}/semantic-rebuild-report.json`,
+            },
+            plannedSteps: plannedExecution.plannedSteps,
+            executionPolicy: {
+              requiredApproval: "human" as const,
+              approvedBy: "rebuild-approval-record" as const,
+              embeddingCallsAllowed: false as const,
+              semanticIndexWritesAllowed: false as const,
+              vectorIndexWritesAllowed: false as const,
+              atomicWritesRequired: true as const,
+              realRebuildExecutorImplemented: false as const,
+              nextAction: "implement_real_rebuild_executor" as const,
+            },
+          };
+        })()
+      : null;
 
   return {
     available: readyForExecutorContract,
@@ -1781,52 +1854,7 @@ export async function buildSemanticRebuildExecutionContract(
       executed: executionEntry.executed,
       nextAction: executionEntry.nextAction,
     },
-    executorInput: readyForExecutorContract
-      ? {
-          contractVersion: "v1",
-          action: "SEMANTIC_VECTOR_REBUILD",
-          workspaceRoot,
-          sourceIndexPath: KB_INDEX_FILE_RELATIVE_PATH,
-          proposal: {
-            proposalId: plannedExecution.proposalId,
-            proposalPath: plannedExecution.proposalPath,
-            generatedAt: latestPlan.plan.generatedAt,
-          },
-          acceptance: {
-            acceptanceId: plannedExecution.acceptanceId,
-            acceptanceRecordPath: plannedExecution.recordPath,
-          },
-          approval: {
-            approvalId: latestApprovalRecord.approvalId,
-            approvalRecordPath: latestApprovalRecord.recordPath,
-          },
-          semantic: {
-            provider: plannedExecution.provider,
-            model: plannedExecution.model,
-          },
-          batchPlan: {
-            totalItems: plannedExecution.totalItems,
-            plannedBatches: plannedExecution.plannedBatches,
-            maxItemsPerBatch: 100,
-          },
-          plannedOutputs: {
-            semanticIndexPath: "system/kb-index/semantic-index.json",
-            vectorIndexPath: "system/kb-index/vector-index.sqlite",
-            rebuildReportPath: "system/kb-index/semantic-rebuild-report.json",
-          },
-          plannedSteps: plannedExecution.plannedSteps,
-          executionPolicy: {
-            requiredApproval: "human",
-            approvedBy: "rebuild-approval-record",
-            embeddingCallsAllowed: false,
-            semanticIndexWritesAllowed: false,
-            vectorIndexWritesAllowed: false,
-            atomicWritesRequired: true,
-            realRebuildExecutorImplemented: false,
-            nextAction: "implement_real_rebuild_executor",
-          },
-        }
-      : null,
+    executorInput,
     constraintsVerified: preflightConstraints(),
   };
 }
