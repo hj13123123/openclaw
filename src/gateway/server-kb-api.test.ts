@@ -7,6 +7,7 @@ import {
   buildSemanticRebuildAcceptanceRecordDryRun,
   buildSemanticRebuildPlan,
   checkSemanticRebuildProposalAcceptance,
+  checkSemanticRebuildPreflight,
   handleKbHttpRequest,
   isKbApiPath,
   listSemanticRebuildAcceptanceRecords,
@@ -61,6 +62,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/state")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/acceptance")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/acceptance-records")).toBe(true);
+    expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-preflight")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -728,6 +730,182 @@ describe("server KB API", () => {
     });
   });
 
+  it("checks semantic rebuild preflight without mutating rebuild state", async () => {
+    const workspaceRoot = makeWorkspace();
+    const config = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "volcengine",
+            model: "doubao-embedding",
+            store: { vector: { enabled: true } },
+          },
+        },
+      },
+    };
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+    });
+
+    const planResponse = makeResponse();
+    await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan", "POST"),
+      planResponse.res,
+      workspaceRoot,
+      { config },
+    );
+    const plan = planResponse.json();
+    const write = await writeSemanticRebuildAcceptanceRecord(workspaceRoot, { config });
+
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/rebuild-preflight", "GET"),
+      response.res,
+      workspaceRoot,
+      { config },
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        available: true,
+        mode: "semantic-rebuild-preflight",
+        status: "ready_for_rebuild_human_approval",
+        readyForRebuildHumanApproval: true,
+        blockReasons: [],
+        recordPath: write.recordPath,
+        acceptanceRecord: expect.objectContaining({
+          recordPath: write.recordPath,
+          status: "human_gate_ready",
+          proposalPath: plan.reportPath,
+          plannedBatches: 1,
+          totalItems: 1,
+          requiredApproval: "human",
+          nextAction: "await_human_approval",
+          approved: false,
+          rebuildTriggered: false,
+        }),
+        acceptance: expect.objectContaining({
+          status: "ready_for_human_gate",
+          readyForHumanGate: true,
+          blockReasons: [],
+          proposalPath: plan.reportPath,
+        }),
+        constraintsVerified: {
+          fileWrites: "no",
+          stateWritten: "no",
+          embeddingCalls: "no",
+          keywordIndexWritten: "no",
+          vectorIndexWritten: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        },
+      }),
+    );
+    expect(() =>
+      readFileSync(path.join(workspaceRoot, "system", "kb-index", "semantic-index.json"), "utf8"),
+    ).toThrow();
+    expect(() =>
+      readFileSync(path.join(workspaceRoot, "system", "kb-index", "vector-index.sqlite"), "utf8"),
+    ).toThrow();
+  });
+
+  it("blocks semantic rebuild preflight when no acceptance record exists", async () => {
+    const preflight = await checkSemanticRebuildPreflight(makeWorkspace());
+
+    expect(preflight).toEqual(
+      expect.objectContaining({
+        available: false,
+        mode: "semantic-rebuild-preflight",
+        status: "blocked",
+        readyForRebuildHumanApproval: false,
+        blockReasons: ["acceptance_record_missing", "proposal_missing"],
+        recordPath: null,
+        acceptanceRecord: null,
+        acceptance: expect.objectContaining({
+          status: "missing",
+          readyForHumanGate: false,
+        }),
+        constraintsVerified: expect.objectContaining({
+          fileWrites: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        }),
+      }),
+    );
+  });
+
+  it("blocks semantic rebuild preflight when the latest acceptance record is invalid", async () => {
+    const workspaceRoot = makeWorkspace();
+    writeJson(
+      path.join(
+        workspaceRoot,
+        "runtime",
+        "main",
+        "tmp",
+        "kb-semantic-rebuild-acceptance-9999.json",
+      ),
+      { mode: "acceptance-record", approved: true },
+    );
+
+    const preflight = await checkSemanticRebuildPreflight(workspaceRoot);
+
+    expect(preflight).toEqual(
+      expect.objectContaining({
+        available: false,
+        status: "blocked",
+        readyForRebuildHumanApproval: false,
+        blockReasons: ["acceptance_record_invalid", "proposal_missing"],
+        recordPath: "runtime/main/tmp/kb-semantic-rebuild-acceptance-9999.json",
+        acceptanceRecord: null,
+      }),
+    );
+  });
+
+  it("blocks semantic rebuild preflight when the proposal has drifted", async () => {
+    const workspaceRoot = makeWorkspace();
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+    });
+
+    const planResponse = makeResponse();
+    await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan", "POST"),
+      planResponse.res,
+      workspaceRoot,
+    );
+    await writeSemanticRebuildAcceptanceRecord(workspaceRoot);
+    writeJson(path.join(workspaceRoot, "system", "skill-library", "skill-a.json"), {
+      skillId: "skill-a",
+      title: "KB refresh",
+    });
+
+    const preflight = await checkSemanticRebuildPreflight(workspaceRoot);
+
+    expect(preflight).toEqual(
+      expect.objectContaining({
+        available: true,
+        status: "blocked",
+        readyForRebuildHumanApproval: false,
+        blockReasons: ["source_summary_drift"],
+        acceptanceRecord: expect.objectContaining({
+          plannedBatches: 1,
+          totalItems: 1,
+        }),
+        acceptance: expect.objectContaining({
+          readyForHumanGate: false,
+          blockReasons: ["source_summary_drift"],
+          currentSummary: expect.objectContaining({
+            totalItems: 2,
+          }),
+        }),
+      }),
+    );
+  });
+
   it("blocks semantic rebuild planning when vector search is disabled", () => {
     const workspaceRoot = makeWorkspace();
     writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
@@ -826,6 +1004,20 @@ describe("server KB API", () => {
     const response = makeResponse();
     const handled = await handleKbHttpRequest(
       makeReq("/api/kb/semantic-rebuild-plan/acceptance-records", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
+  });
+
+  it("rejects semantic rebuild preflight writes", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/rebuild-preflight", "POST"),
       response.res,
       makeWorkspace(),
     );
