@@ -18,6 +18,7 @@ const KB_SEMANTIC_REBUILD_PLAN_ACCEPTANCE_ROUTE = "/api/kb/semantic-rebuild-plan
 const KB_SEMANTIC_REBUILD_ACCEPTANCE_RECORDS_ROUTE =
   "/api/kb/semantic-rebuild-plan/acceptance-records";
 const KB_SEMANTIC_REBUILD_PREFLIGHT_ROUTE = "/api/kb/semantic-rebuild-plan/rebuild-preflight";
+const KB_SEMANTIC_REBUILD_DRY_RUN_ROUTE = "/api/kb/semantic-rebuild-plan/rebuild-dry-run";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
@@ -255,6 +256,43 @@ type SemanticRebuildPreflight = {
   recordPath: string | null;
   acceptanceRecord: SemanticRebuildAcceptanceRecordSummary | null;
   acceptance: SemanticRebuildProposalAcceptance;
+  constraintsVerified: {
+    fileWrites: "no";
+    stateWritten: "no";
+    embeddingCalls: "no";
+    keywordIndexWritten: "no";
+    vectorIndexWritten: "no";
+    realRebuildTriggered: "no";
+    applied: "no";
+  };
+};
+
+type SemanticRebuildExecutionDryRun = {
+  available: boolean;
+  mode: "semantic-rebuild-execution-dry-run";
+  checkedAt: string;
+  status: "ready_for_execution_human_gate" | "blocked";
+  wouldExecute: false;
+  readyForExecutionHumanGate: boolean;
+  blockReasons: SemanticRebuildPreflightBlockReason[];
+  preflight: SemanticRebuildPreflight;
+  plannedExecution: {
+    acceptanceId: string;
+    proposalId: string;
+    proposalPath: string;
+    recordPath: string;
+    provider: string | null;
+    model: string | null;
+    totalItems: number;
+    plannedBatches: number;
+    plannedOutputs: string[];
+    plannedSteps: string[];
+    requiredApproval: "human";
+    nextAction: "await_human_rebuild_approval";
+    wouldCallEmbeddingProvider: false;
+    wouldWriteSemanticIndex: false;
+    wouldWriteVectorIndex: false;
+  } | null;
   constraintsVerified: {
     fileWrites: "no";
     stateWritten: "no";
@@ -1005,6 +1043,56 @@ export async function checkSemanticRebuildPreflight(
   };
 }
 
+export async function buildSemanticRebuildExecutionDryRun(
+  workspaceRoot: string,
+  options?: KbHttpOptions,
+): Promise<SemanticRebuildExecutionDryRun> {
+  const checkedAt = new Date().toISOString();
+  const preflight = await checkSemanticRebuildPreflight(workspaceRoot, options);
+  const latestPlan = await readLatestSemanticRebuildPlanReportEntry(workspaceRoot);
+  const readyForExecutionHumanGate =
+    preflight.readyForRebuildHumanApproval &&
+    preflight.acceptanceRecord !== null &&
+    latestPlan?.reportPath === preflight.acceptanceRecord.proposalPath;
+
+  return {
+    available: preflight.available,
+    mode: "semantic-rebuild-execution-dry-run",
+    checkedAt,
+    status: readyForExecutionHumanGate ? "ready_for_execution_human_gate" : "blocked",
+    wouldExecute: false,
+    readyForExecutionHumanGate,
+    blockReasons: preflight.blockReasons,
+    preflight,
+    plannedExecution:
+      readyForExecutionHumanGate && preflight.acceptanceRecord && latestPlan
+        ? {
+            acceptanceId: preflight.acceptanceRecord.acceptanceId,
+            proposalId: preflight.acceptanceRecord.proposalId,
+            proposalPath: preflight.acceptanceRecord.proposalPath,
+            recordPath: preflight.acceptanceRecord.recordPath,
+            provider: latestPlan.plan.semantic.provider,
+            model: latestPlan.plan.semantic.model,
+            totalItems: preflight.acceptanceRecord.totalItems,
+            plannedBatches: preflight.acceptanceRecord.plannedBatches,
+            plannedOutputs: latestPlan.plan.plannedOutputs,
+            plannedSteps: [
+              ...latestPlan.plan.plannedSteps.filter(
+                (step) => step !== "stop before embedding calls or file writes",
+              ),
+              "stop before real rebuild until explicit human approval",
+            ],
+            requiredApproval: "human",
+            nextAction: "await_human_rebuild_approval",
+            wouldCallEmbeddingProvider: false,
+            wouldWriteSemanticIndex: false,
+            wouldWriteVectorIndex: false,
+          }
+        : null,
+    constraintsVerified: preflightConstraints(),
+  };
+}
+
 export function isKbApiPath(pathname: string): boolean {
   return (
     pathname === KB_STATE_ROUTE ||
@@ -1013,7 +1101,8 @@ export function isKbApiPath(pathname: string): boolean {
     pathname === KB_SEMANTIC_REBUILD_PLAN_STATE_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_PLAN_ACCEPTANCE_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_ACCEPTANCE_RECORDS_ROUTE ||
-    pathname === KB_SEMANTIC_REBUILD_PREFLIGHT_ROUTE
+    pathname === KB_SEMANTIC_REBUILD_PREFLIGHT_ROUTE ||
+    pathname === KB_SEMANTIC_REBUILD_DRY_RUN_ROUTE
   );
 }
 
@@ -1195,6 +1284,28 @@ export async function handleKbHttpRequest(
         status: "blocked",
         readyForRebuildHumanApproval: false,
         error: `KB semantic rebuild preflight failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: preflightConstraints(),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_SEMANTIC_REBUILD_DRY_RUN_ROUTE) {
+    if (req.method !== "GET") {
+      sendMethodNotAllowed(res, "GET");
+      return true;
+    }
+
+    try {
+      sendJson(res, 200, await buildSemanticRebuildExecutionDryRun(workspaceRoot, options));
+    } catch (error) {
+      sendJson(res, 500, {
+        available: false,
+        mode: "semantic-rebuild-execution-dry-run",
+        status: "blocked",
+        wouldExecute: false,
+        readyForExecutionHumanGate: false,
+        error: `KB semantic rebuild execution dry-run failed: ${error instanceof Error ? error.message : String(error)}`,
         constraintsVerified: preflightConstraints(),
       });
     }
