@@ -933,6 +933,41 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("routes scheduler tick plans through the HTTP fast path", async () => {
+    await withGatewayServer({
+      prefix: "scheduler-tick-plan-fast-path",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = createRequest({
+          path: "/api/task-scheduler/tick-plan",
+        });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual(
+          expect.objectContaining({
+            ok: true,
+            data: expect.objectContaining({
+              mode: "observe-only",
+              decision: "disabled",
+              constraintsVerified: {
+                readOnly: "yes",
+                markerWritten: "no",
+                stateWritten: "no",
+                eventEmitted: "no",
+                scriptInvoked: "no",
+                childProcessSpawned: "no",
+                autoDispatchTriggered: "no",
+                applied: "no",
+              },
+            }),
+          }),
+        );
+      },
+    });
+  });
+
   it("returns detailed readiness payload for local /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: true,

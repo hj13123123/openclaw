@@ -102,6 +102,9 @@ let promotionCandidatesApiModulePromise:
 let executionLeaseApiModulePromise:
   | Promise<typeof import("./server-execution-lease-api.js")>
   | undefined;
+let schedulerTickPlanApiModulePromise:
+  | Promise<typeof import("./server-scheduler-tick-plan-api.js")>
+  | undefined;
 let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefined;
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
 let hudApiModulePromise: Promise<typeof import("./server-hud-api.js")> | undefined;
@@ -171,6 +174,11 @@ function getPromotionCandidatesApiModule() {
 function getExecutionLeaseApiModule() {
   executionLeaseApiModulePromise ??= import("./server-execution-lease-api.js");
   return executionLeaseApiModulePromise;
+}
+
+function getSchedulerTickPlanApiModule() {
+  schedulerTickPlanApiModulePromise ??= import("./server-scheduler-tick-plan-api.js");
+  return schedulerTickPlanApiModulePromise;
 }
 
 function getOpenAiHttpModule() {
@@ -466,6 +474,10 @@ function isPromotionCandidatesStatePath(pathname: string): boolean {
 
 function isExecutionLeaseStatePath(pathname: string): boolean {
   return pathname === "/api/execution-lease/evaluate";
+}
+
+function isSchedulerTickPlanStatePath(pathname: string): boolean {
+  return pathname === "/api/task-scheduler/tick-plan";
 }
 
 function isSessionKillPath(pathname: string): boolean {
@@ -1251,6 +1263,14 @@ export function createGatewayHttpServer(opts: {
         const handled = await (
           await getExecutionLeaseApiModule()
         ).handleExecutionLeaseHttpRequest(req, res);
+        if (handled) {
+          return;
+        }
+      }
+      if (isSchedulerTickPlanStatePath(requestPath)) {
+        const handled = await (
+          await getSchedulerTickPlanApiModule()
+        ).handleSchedulerTickPlanHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }
