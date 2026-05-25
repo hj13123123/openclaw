@@ -115,41 +115,51 @@ describe("server promote gate API", () => {
 
     expect(handled).toBe(true);
     expect(dryRunResponse.res.statusCode).toBe(200);
-    expect(dryRunResponse.json()).toEqual(expect.objectContaining({
-      status: "PASS",
-      mode: "dry-run",
-      dryRun: true,
-      promoted: "none",
-      stats: {
-        total: 1,
-        byVerdict: { READY_FOR_PROMOTE_GATE: 1 },
-        byType: { skill: 1 },
-      },
-    }));
+    expect(dryRunResponse.json()).toEqual(
+      expect.objectContaining({
+        status: "PASS",
+        mode: "dry-run",
+        dryRun: true,
+        promoted: "none",
+        stats: {
+          total: 1,
+          byVerdict: { READY_FOR_PROMOTE_GATE: 1 },
+          byType: { skill: 1 },
+        },
+      }),
+    );
 
     const outputFile = String(dryRunResponse.json().outputFile);
     expect(existsSync(outputFile)).toBe(true);
-    expect(JSON.parse(readFileSync(outputFile, "utf8"))).toEqual(expect.objectContaining({
-      mode: "dry-run",
-      constraintsVerified: expect.objectContaining({
-        MEMORYWritten: "no",
-        ENGINEERING_RULESWritten: "no",
-        promoted: "none",
+    expect(JSON.parse(readFileSync(outputFile, "utf8"))).toEqual(
+      expect.objectContaining({
+        mode: "dry-run",
+        constraintsVerified: expect.objectContaining({
+          MEMORYWritten: "no",
+          ENGINEERING_RULESWritten: "no",
+          promoted: "none",
+        }),
       }),
-    }));
+    );
 
     const stateResponse = makeResponse();
-    await handlePromoteGateHttpRequest(makeReq("/api/promote-gate/state", "GET"), stateResponse.res, root);
-    expect(stateResponse.json()).toEqual(expect.objectContaining({
-      available: true,
-      status: "PASS",
-      mode: "dry-run",
-      stats: {
-        total: 1,
-        byVerdict: { READY_FOR_PROMOTE_GATE: 1 },
-        byType: { skill: 1 },
-      },
-    }));
+    await handlePromoteGateHttpRequest(
+      makeReq("/api/promote-gate/state", "GET"),
+      stateResponse.res,
+      root,
+    );
+    expect(stateResponse.json()).toEqual(
+      expect.objectContaining({
+        available: true,
+        status: "PASS",
+        mode: "dry-run",
+        stats: {
+          total: 1,
+          byVerdict: { READY_FOR_PROMOTE_GATE: 1 },
+          byType: { skill: 1 },
+        },
+      }),
+    );
   });
 
   it("rejects wrong methods", async () => {
