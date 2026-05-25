@@ -1,8 +1,19 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { processReturnInbox } from "./server-return-consumer.js";
+import {
+  processReturnInbox,
+  resolveReturnConsumerWorkspaceRoot,
+} from "./server-return-consumer.js";
 
 function withTempRoot<T>(fn: (workspaceRoot: string) => T): T {
   const workspaceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-return-consumer-"));
@@ -60,58 +71,92 @@ function readJson(filePath: string): Record<string, unknown> {
 }
 
 describe("server return consumer", () => {
-  it("processes a valid return package into processed, receipt, bridge marker, and notice", () => withTempRoot((workspaceRoot) => {
-    writeJson(workspaceRoot, "system/returns/inbox/return-a.json", validReturnPackage());
+  it("falls back to patrol workspace when main is not configured", () => {
+    expect(
+      resolveReturnConsumerWorkspaceRoot({
+        agents: {
+          list: [
+            {
+              id: "patrol",
+              workspace: "C:\\openclaw\\workspace-main",
+            },
+          ],
+        },
+      }),
+    ).toBe("C:\\openclaw\\workspace-main");
+  });
 
-    const log = { info: vi.fn(), warn: vi.fn() };
-    const results = processReturnInbox(workspaceRoot, log);
-    const processedPath = path.join(workspaceRoot, "system/returns/processed/return-a.json");
-    const processedDir = path.join(workspaceRoot, "system/returns/processed");
-    const bridgeMarkerPath = path.join(workspaceRoot, "runtime/main/tmp/bridge-queue/rrpkg-a.json");
-    const noticeDir = path.join(workspaceRoot, "runtime/notifications/inbox");
+  it("processes a valid return package into processed, receipt, bridge marker, and notice", () =>
+    withTempRoot((workspaceRoot) => {
+      writeJson(workspaceRoot, "system/returns/inbox/return-a.json", validReturnPackage());
 
-    expect(results).toEqual([expect.objectContaining({
-      status: "processed",
-      returnId: "rrpkg-a",
-      taskId: "TASK-A",
-      sourceFile: "return-a.json",
-      actionRequired: true,
-    })]);
-    expect(existsSync(path.join(workspaceRoot, "system/returns/inbox/return-a.json"))).toBe(false);
-    expect(existsSync(processedPath)).toBe(true);
-    const receiptFile = readdirSync(processedDir).find((name) => /^receipt-rrpkg-TASK-A-.*\.json$/u.test(name));
-    expect(receiptFile).toBeDefined();
-    expect(readJson(path.join(processedDir, receiptFile as string))).toMatchObject({
-      sourcePackage: "return-a.json",
-      sourceReturnId: "rrpkg-a",
-      taskId: "TASK-A",
-      status: "consumed",
-    });
-    expect(readJson(bridgeMarkerPath)).toMatchObject({
-      packageId: "rrpkg-a",
-      taskId: "TASK-A",
-      returnFile: "return-a.json",
-      receiptFile,
-    });
-    expect(readdirSync(noticeDir).some((name) => /^notice-return-consumer-.*\.json$/u.test(name))).toBe(true);
-    expect(log.info).toHaveBeenCalledWith("[return-consumer] processed=1 skipped=0");
-  }));
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const results = processReturnInbox(workspaceRoot, log);
+      const processedPath = path.join(workspaceRoot, "system/returns/processed/return-a.json");
+      const processedDir = path.join(workspaceRoot, "system/returns/processed");
+      const bridgeMarkerPath = path.join(
+        workspaceRoot,
+        "runtime/main/tmp/bridge-queue/rrpkg-a.json",
+      );
+      const noticeDir = path.join(workspaceRoot, "runtime/notifications/inbox");
 
-  it("skips invalid return packages without moving them", () => withTempRoot((workspaceRoot) => {
-    writeJson(workspaceRoot, "system/returns/inbox/return-invalid.json", {
-      packageId: "rrpkg-invalid",
-      packageVersion: "1.0",
-    });
+      expect(results).toEqual([
+        expect.objectContaining({
+          status: "processed",
+          returnId: "rrpkg-a",
+          taskId: "TASK-A",
+          sourceFile: "return-a.json",
+          actionRequired: true,
+        }),
+      ]);
+      expect(existsSync(path.join(workspaceRoot, "system/returns/inbox/return-a.json"))).toBe(
+        false,
+      );
+      expect(existsSync(processedPath)).toBe(true);
+      const receiptFile = readdirSync(processedDir).find((name) =>
+        /^receipt-rrpkg-TASK-A-.*\.json$/u.test(name),
+      );
+      expect(receiptFile).toBeDefined();
+      expect(readJson(path.join(processedDir, receiptFile as string))).toMatchObject({
+        sourcePackage: "return-a.json",
+        sourceReturnId: "rrpkg-a",
+        taskId: "TASK-A",
+        status: "consumed",
+      });
+      expect(readJson(bridgeMarkerPath)).toMatchObject({
+        packageId: "rrpkg-a",
+        taskId: "TASK-A",
+        returnFile: "return-a.json",
+        receiptFile,
+      });
+      expect(
+        readdirSync(noticeDir).some((name) => /^notice-return-consumer-.*\.json$/u.test(name)),
+      ).toBe(true);
+      expect(log.info).toHaveBeenCalledWith("[return-consumer] processed=1 skipped=0");
+    }));
 
-    const results = processReturnInbox(workspaceRoot, { info: vi.fn(), warn: vi.fn() });
+  it("skips invalid return packages without moving them", () =>
+    withTempRoot((workspaceRoot) => {
+      writeJson(workspaceRoot, "system/returns/inbox/return-invalid.json", {
+        packageId: "rrpkg-invalid",
+        packageVersion: "1.0",
+      });
 
-    expect(results).toEqual([expect.objectContaining({
-      status: "skipped",
-      reason: "schema-invalid",
-      sourceFile: "return-invalid.json",
-      returnId: "rrpkg-invalid",
-    })]);
-    expect(existsSync(path.join(workspaceRoot, "system/returns/inbox/return-invalid.json"))).toBe(true);
-    expect(existsSync(path.join(workspaceRoot, "runtime/main/tmp/return-consumer-warn.jsonl"))).toBe(true);
-  }));
+      const results = processReturnInbox(workspaceRoot, { info: vi.fn(), warn: vi.fn() });
+
+      expect(results).toEqual([
+        expect.objectContaining({
+          status: "skipped",
+          reason: "schema-invalid",
+          sourceFile: "return-invalid.json",
+          returnId: "rrpkg-invalid",
+        }),
+      ]);
+      expect(existsSync(path.join(workspaceRoot, "system/returns/inbox/return-invalid.json"))).toBe(
+        true,
+      );
+      expect(
+        existsSync(path.join(workspaceRoot, "runtime/main/tmp/return-consumer-warn.jsonl")),
+      ).toBe(true);
+    }));
 });

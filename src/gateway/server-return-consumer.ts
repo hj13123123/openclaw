@@ -83,7 +83,7 @@ export function startReturnConsumerService(params: {
 export function resolveReturnConsumerWorkspaceRoot(cfg: OpenClawConfig): string {
   return (
     cfg.agents?.list?.find((agent) => agent.id === "main")?.workspace ??
-    cfg.agents?.list?.find((agent) => agent.id === "evolution-curator")?.workspace ??
+    cfg.agents?.list?.find((agent) => agent.id === "patrol")?.workspace ??
     path.join(os.homedir(), ".openclaw", "workspace-main")
   );
 }
