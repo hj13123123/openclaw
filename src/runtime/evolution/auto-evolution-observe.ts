@@ -1,18 +1,24 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { readLatestPromoteGateReport } from "../distillation/promote-gate-dry-run.js";
 
 export const AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH = "runtime/main/tmp";
 export const AUTO_EVOLUTION_REPORT_PREFIX = "auto-evolution-observe-";
 
 const MIRROR_REPORT_PREFIX = "mirror-observe-";
-const PROMOTE_GATE_REPORT_PREFIX = "d9-promote-gate-dryrun-";
 const HUD_STATE_RELATIVE_PATH = "runtime/main/tmp/task-hud-state.json";
 const KB_INDEX_RELATIVE_PATH = "system/kb-index/index.json";
 const RUNTIME_LOOP_STATE_RELATIVE_PATH = "runtime/main/tmp/runtime-loop-state.json";
 
 type JsonRecord = Record<string, unknown>;
 
-export type AutoEvolutionSuggestionSource = "mirror" | "promote_gate" | "kb" | "hud" | "runtime_loop" | "baseline";
+export type AutoEvolutionSuggestionSource =
+  | "mirror"
+  | "promote_gate"
+  | "kb"
+  | "hud"
+  | "runtime_loop"
+  | "baseline";
 export type AutoEvolutionSuggestionPriority = "P0" | "P1" | "P2";
 
 export interface AutoEvolutionSuggestion {
@@ -77,7 +83,10 @@ function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function readJsonIfPresent(workspaceRoot: string, relativePath: string): { path: string | null; data: JsonRecord | null; error: string | null } {
+function readJsonIfPresent(
+  workspaceRoot: string,
+  relativePath: string,
+): { path: string | null; data: JsonRecord | null; error: string | null } {
   const filePath = path.join(workspaceRoot, relativePath);
   if (!existsSync(filePath)) return { path: null, data: null, error: null };
   try {
@@ -88,15 +97,24 @@ function readJsonIfPresent(workspaceRoot: string, relativePath: string): { path:
       error: isRecord(parsed) ? null : "JSON root is not an object",
     };
   } catch (error) {
-    return { path: relativePath, data: null, error: error instanceof Error ? error.message : String(error) };
+    return {
+      path: relativePath,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
-function latestReport(workspaceRoot: string, prefix: string): { path: string | null; data: JsonRecord | null; error: string | null } {
+function latestReport(
+  workspaceRoot: string,
+  prefix: string,
+): { path: string | null; data: JsonRecord | null; error: string | null } {
   const reportDir = path.join(workspaceRoot, AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH);
   if (!existsSync(reportDir)) return { path: null, data: null, error: null };
   const filePath = readdirSync(reportDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".json"))
+    .filter(
+      (entry) => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".json"),
+    )
     .map((entry) => path.join(reportDir, entry.name))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
   if (!filePath) return { path: null, data: null, error: null };
@@ -117,7 +135,10 @@ function nextId(suggestions: AutoEvolutionSuggestion[]): string {
   return `auto-evolution-suggestion-${String(suggestions.length + 1).padStart(3, "0")}`;
 }
 
-function addSuggestion(suggestions: AutoEvolutionSuggestion[], suggestion: Omit<AutoEvolutionSuggestion, "suggestionId" | "allowedAction">): void {
+function addSuggestion(
+  suggestions: AutoEvolutionSuggestion[],
+  suggestion: Omit<AutoEvolutionSuggestion, "suggestionId" | "allowedAction">,
+): void {
   suggestions.push({
     suggestionId: nextId(suggestions),
     allowedAction: "OBSERVE_ONLY_RECOMMENDATION",
@@ -125,13 +146,17 @@ function addSuggestion(suggestions: AutoEvolutionSuggestion[], suggestion: Omit<
   });
 }
 
-function addMirrorSuggestions(suggestions: AutoEvolutionSuggestion[], mirror: { path: string | null; data: JsonRecord | null; error: string | null }): void {
+function addMirrorSuggestions(
+  suggestions: AutoEvolutionSuggestion[],
+  mirror: { path: string | null; data: JsonRecord | null; error: string | null },
+): void {
   if (mirror.error) {
     addSuggestion(suggestions, {
       source: "mirror",
       priority: "P1",
       title: "Repair mirror observe report parsing before enabling evolution planning",
-      rationale: "Auto-evolution planning depends on mirror evidence; malformed mirror state must stay fail-closed.",
+      rationale:
+        "Auto-evolution planning depends on mirror evidence; malformed mirror state must stay fail-closed.",
       evidence: { reportPath: mirror.path, error: mirror.error },
       blockedBy: ["human_review", "report_parse_error"],
     });
@@ -142,7 +167,8 @@ function addMirrorSuggestions(suggestions: AutoEvolutionSuggestion[], mirror: { 
       source: "mirror",
       priority: "P1",
       title: "Generate mirror observe evidence before evolution planning",
-      rationale: "D11 should not recommend system changes without a current D10 mirror observe report.",
+      rationale:
+        "D11 should not recommend system changes without a current D10 mirror observe report.",
       evidence: { reportPath: null },
       blockedBy: ["missing_mirror_observe_report"],
     });
@@ -158,7 +184,8 @@ function addMirrorSuggestions(suggestions: AutoEvolutionSuggestion[], mirror: { 
       source: "mirror",
       priority: attentionCount > 0 ? "P1" : "P2",
       title: "Review mirror observe findings before auto-evolution",
-      rationale: "Mirror observe has active findings; evolution must remain advisory until these are triaged.",
+      rationale:
+        "Mirror observe has active findings; evolution must remain advisory until these are triaged.",
       evidence: {
         reportPath: mirror.path,
         attentionCount,
@@ -170,7 +197,10 @@ function addMirrorSuggestions(suggestions: AutoEvolutionSuggestion[], mirror: { 
   }
 }
 
-function addPromoteGateSuggestions(suggestions: AutoEvolutionSuggestion[], promoteGate: { path: string | null; data: JsonRecord | null; error: string | null }): void {
+function addPromoteGateSuggestions(
+  suggestions: AutoEvolutionSuggestion[],
+  promoteGate: { path: string | null; data: JsonRecord | null; error: string | null },
+): void {
   if (promoteGate.error) {
     addSuggestion(suggestions, {
       source: "promote_gate",
@@ -187,7 +217,8 @@ function addPromoteGateSuggestions(suggestions: AutoEvolutionSuggestion[], promo
       source: "promote_gate",
       priority: "P1",
       title: "Run promote gate dry-run before auto-evolution planning",
-      rationale: "Auto-evolution suggestions require D9 gate evidence and must not infer promotability.",
+      rationale:
+        "Auto-evolution suggestions require D9 gate evidence and must not infer promotability.",
       evidence: { reportPath: null },
       blockedBy: ["missing_promote_gate_dry_run"],
     });
@@ -204,7 +235,8 @@ function addPromoteGateSuggestions(suggestions: AutoEvolutionSuggestion[], promo
       source: "promote_gate",
       priority: frozenBlocked > 0 || blocked > 0 ? "P1" : "P2",
       title: "Keep D9 promote candidates behind human gates",
-      rationale: "Promote gate evidence may identify useful candidates, but D11 cannot promote or modify rules.",
+      rationale:
+        "Promote gate evidence may identify useful candidates, but D11 cannot promote or modify rules.",
       evidence: {
         reportPath: promoteGate.path,
         frozenBlocked,
@@ -217,7 +249,10 @@ function addPromoteGateSuggestions(suggestions: AutoEvolutionSuggestion[], promo
   }
 }
 
-function addKbSuggestions(suggestions: AutoEvolutionSuggestion[], kb: { path: string | null; data: JsonRecord | null; error: string | null }): void {
+function addKbSuggestions(
+  suggestions: AutoEvolutionSuggestion[],
+  kb: { path: string | null; data: JsonRecord | null; error: string | null },
+): void {
   if (kb.error || !kb.data) {
     addSuggestion(suggestions, {
       source: "kb",
@@ -245,7 +280,10 @@ function addKbSuggestions(suggestions: AutoEvolutionSuggestion[], kb: { path: st
   }
 }
 
-function addHudSuggestions(suggestions: AutoEvolutionSuggestion[], hud: { path: string | null; data: JsonRecord | null; error: string | null }): void {
+function addHudSuggestions(
+  suggestions: AutoEvolutionSuggestion[],
+  hud: { path: string | null; data: JsonRecord | null; error: string | null },
+): void {
   if (hud.error || !hud.data) {
     addSuggestion(suggestions, {
       source: "hud",
@@ -265,7 +303,8 @@ function addHudSuggestions(suggestions: AutoEvolutionSuggestion[], hud: { path: 
       source: "hud",
       priority: "P1",
       title: "Resolve HUD watchdog alerts before enabling evolution actions",
-      rationale: "Watchdog alerts are compatible with observe-only recommendations but block automatic apply.",
+      rationale:
+        "Watchdog alerts are compatible with observe-only recommendations but block automatic apply.",
       evidence: {
         hudStatePath: hud.path,
         totalAlerts,
@@ -276,7 +315,10 @@ function addHudSuggestions(suggestions: AutoEvolutionSuggestion[], hud: { path: 
   }
 }
 
-function addRuntimeLoopSuggestions(suggestions: AutoEvolutionSuggestion[], runtimeLoop: { path: string | null; data: JsonRecord | null; error: string | null }): void {
+function addRuntimeLoopSuggestions(
+  suggestions: AutoEvolutionSuggestion[],
+  runtimeLoop: { path: string | null; data: JsonRecord | null; error: string | null },
+): void {
   if (runtimeLoop.error) {
     addSuggestion(suggestions, {
       source: "runtime_loop",
@@ -336,11 +378,21 @@ export function runAutoEvolutionObserve(
   options: AutoEvolutionObserveOptions = {},
 ): AutoEvolutionObserveReport {
   const generatedAt = options.generatedAt ?? new Date().toISOString();
-  const outputFile = options.outputPath === undefined
-    ? path.join(workspaceRoot, AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH, `${AUTO_EVOLUTION_REPORT_PREFIX}${generatedAt.replace(/[:.]/gu, "-")}.json`)
-    : options.outputPath;
+  const outputFile =
+    options.outputPath === undefined
+      ? path.join(
+          workspaceRoot,
+          AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH,
+          `${AUTO_EVOLUTION_REPORT_PREFIX}${generatedAt.replace(/[:.]/gu, "-")}.json`,
+        )
+      : options.outputPath;
   const mirror = latestReport(workspaceRoot, MIRROR_REPORT_PREFIX);
-  const promoteGate = latestReport(workspaceRoot, PROMOTE_GATE_REPORT_PREFIX);
+  const latestPromoteGate = readLatestPromoteGateReport(workspaceRoot);
+  const promoteGate = {
+    path: latestPromoteGate.path,
+    data: latestPromoteGate.data as unknown as JsonRecord | null,
+    error: latestPromoteGate.error,
+  };
   const hud = readJsonIfPresent(workspaceRoot, HUD_STATE_RELATIVE_PATH);
   const kb = readJsonIfPresent(workspaceRoot, KB_INDEX_RELATIVE_PATH);
   const runtimeLoop = readJsonIfPresent(workspaceRoot, RUNTIME_LOOP_STATE_RELATIVE_PATH);
@@ -356,7 +408,8 @@ export function runAutoEvolutionObserve(
       source: "baseline",
       priority: "P2",
       title: "Maintain observe-only auto-evolution baseline",
-      rationale: "No immediate evolution risks were detected; D11 remains advisory until explicit human approval.",
+      rationale:
+        "No immediate evolution risks were detected; D11 remains advisory until explicit human approval.",
       evidence: {},
       blockedBy: ["human_gate_required", "no_auto_apply"],
     });
@@ -395,9 +448,18 @@ export function runAutoEvolutionObserve(
   return report;
 }
 
-export function summarizeAutoEvolutionObserve(report: AutoEvolutionObserveReport): Pick<
+export function summarizeAutoEvolutionObserve(
+  report: AutoEvolutionObserveReport,
+): Pick<
   AutoEvolutionObserveReport,
-  "generatedAt" | "status" | "mode" | "outputFile" | "stats" | "inputs" | "constraintsVerified" | "verdict"
+  | "generatedAt"
+  | "status"
+  | "mode"
+  | "outputFile"
+  | "stats"
+  | "inputs"
+  | "constraintsVerified"
+  | "verdict"
 > {
   return {
     generatedAt: report.generatedAt,

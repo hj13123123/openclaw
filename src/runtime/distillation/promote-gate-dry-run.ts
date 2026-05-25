@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 export const DISTILL_CANDIDATES_RELATIVE_PATH = "runtime/main/tmp/distill-candidates";
@@ -109,6 +108,12 @@ export type PromoteGateStateSummary =
       available: true;
       reportPath: string;
     } & ReturnType<typeof summarizePromoteGateDryRun>);
+
+export interface PromoteGateReportReadResult {
+  path: string | null;
+  data: PromoteGateDryRunReport | null;
+  error: string | null;
+}
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -566,27 +571,49 @@ export function summarizePromoteGateDryRun(
 export async function readPromoteGateState(
   workspaceRoot: string,
 ): Promise<PromoteGateStateSummary> {
-  const latestReport = listPromoteGateReportFiles(workspaceRoot)[0];
-  if (!latestReport) {
+  const latestReport = readLatestPromoteGateReport(workspaceRoot);
+  if (!latestReport.path) {
     return {
       available: false,
       reportDir: PROMOTE_GATE_REPORT_DIR_RELATIVE_PATH,
     };
   }
 
-  try {
-    const report = JSON.parse(await readFile(latestReport, "utf8")) as PromoteGateDryRunReport;
-    return {
-      available: true,
-      reportPath: relativePath(workspaceRoot, latestReport),
-      ...summarizePromoteGateDryRun(report),
-    };
-  } catch (error) {
+  if (latestReport.error || !latestReport.data) {
     return {
       available: false,
       reportDir: PROMOTE_GATE_REPORT_DIR_RELATIVE_PATH,
-      reportPath: relativePath(workspaceRoot, latestReport),
-      error: `Promote gate state read failed: ${error instanceof Error ? error.message : String(error)}`,
+      reportPath: latestReport.path,
+      error: `Promote gate state read failed: ${latestReport.error ?? "report missing"}`,
+    };
+  }
+
+  return {
+    available: true,
+    reportPath: latestReport.path,
+    ...summarizePromoteGateDryRun(latestReport.data),
+  };
+}
+
+export function readLatestPromoteGateReport(workspaceRoot: string): PromoteGateReportReadResult {
+  const latestReport = listPromoteGateReportFiles(workspaceRoot)[0];
+  if (!latestReport) {
+    return { path: null, data: null, error: null };
+  }
+  const reportPath = relativePath(workspaceRoot, latestReport);
+  try {
+    return {
+      path: reportPath,
+      data: JSON.parse(
+        readFileSync(latestReport, "utf8").replace(/^\uFEFF/u, ""),
+      ) as PromoteGateDryRunReport,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      path: reportPath,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
     };
   }
 }

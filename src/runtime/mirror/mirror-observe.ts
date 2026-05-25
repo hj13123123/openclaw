@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { readLatestPromoteGateReport } from "../distillation/promote-gate-dry-run.js";
 
 export const MIRROR_REPORT_DIR_RELATIVE_PATH = "runtime/main/tmp";
 export const HUD_STATE_RELATIVE_PATH = "runtime/main/tmp/task-hud-state.json";
 export const SCHEDULER_STATE_RELATIVE_PATH = "runtime/main/tmp/task-scheduler-state.json";
 export const KB_INDEX_RELATIVE_PATH = "system/kb-index/index.json";
-export const PROMOTE_GATE_REPORT_PREFIX = "d9-promote-gate-dryrun-";
 export const MIRROR_REPORT_PREFIX = "mirror-observe-";
 
 type JsonRecord = Record<string, unknown>;
@@ -69,32 +69,43 @@ function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-function readJsonIfPresent(workspaceRoot: string, relativePath: string): { path: string; data: JsonRecord | null; error: string | null } {
+function readJsonIfPresent(
+  workspaceRoot: string,
+  relativePath: string,
+): { path: string; data: JsonRecord | null; error: string | null } {
   const filePath = path.join(workspaceRoot, relativePath);
   if (!existsSync(filePath)) return { path: relativePath, data: null, error: null };
   try {
     const parsed = JSON.parse(readFileSync(filePath, "utf8").replace(/^\uFEFF/u, "")) as unknown;
-    return { path: relativePath, data: isRecord(parsed) ? parsed : null, error: isRecord(parsed) ? null : "JSON root is not an object" };
+    return {
+      path: relativePath,
+      data: isRecord(parsed) ? parsed : null,
+      error: isRecord(parsed) ? null : "JSON root is not an object",
+    };
   } catch (error) {
-    return { path: relativePath, data: null, error: error instanceof Error ? error.message : String(error) };
+    return {
+      path: relativePath,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
-function latestPromoteGateReport(workspaceRoot: string): { path: string | null; data: JsonRecord | null; error: string | null } {
-  const dirPath = path.join(workspaceRoot, MIRROR_REPORT_DIR_RELATIVE_PATH);
-  if (!existsSync(dirPath)) return { path: null, data: null, error: null };
-  const filePath = readdirSync(dirPath, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.startsWith(PROMOTE_GATE_REPORT_PREFIX) && entry.name.endsWith(".json"))
-    .map((entry) => path.join(dirPath, entry.name))
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
-  if (!filePath) return { path: null, data: null, error: null };
-  const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/gu, "/");
-  return readJsonIfPresent(workspaceRoot, relativePath);
-}
-
 function summarizeHud(data: JsonRecord | null, error: string | null): MirrorObservation {
-  if (error) return { source: "hud", status: "error", summary: "HUD state could not be parsed", metrics: { error } };
-  if (!data) return { source: "hud", status: "missing", summary: "HUD state has not been generated", metrics: {} };
+  if (error)
+    return {
+      source: "hud",
+      status: "error",
+      summary: "HUD state could not be parsed",
+      metrics: { error },
+    };
+  if (!data)
+    return {
+      source: "hud",
+      status: "missing",
+      summary: "HUD state has not been generated",
+      metrics: {},
+    };
   const globalStatus = isRecord(data.globalStatus) ? data.globalStatus : {};
   const status = stringValue(globalStatus.status) ?? "unknown";
   const pendingReviewCount = numberValue(globalStatus.pendingReviewCount) ?? 0;
@@ -113,15 +124,29 @@ function summarizeHud(data: JsonRecord | null, error: string | null): MirrorObse
 }
 
 function summarizeScheduler(data: JsonRecord | null, error: string | null): MirrorObservation {
-  if (error) return { source: "scheduler", status: "error", summary: "Scheduler state could not be parsed", metrics: { error } };
-  if (!data) return { source: "scheduler", status: "missing", summary: "Scheduler state has not been generated", metrics: {} };
+  if (error)
+    return {
+      source: "scheduler",
+      status: "error",
+      summary: "Scheduler state could not be parsed",
+      metrics: { error },
+    };
+  if (!data)
+    return {
+      source: "scheduler",
+      status: "missing",
+      summary: "Scheduler state has not been generated",
+      metrics: {},
+    };
   const enabled = data.enabled === true;
   const mode = stringValue(data.mode) ?? "unknown";
   const status = stringValue(data.status) ?? "unknown";
   return {
     source: "scheduler",
     status: enabled ? "attention" : "ok",
-    summary: enabled ? `Scheduler is enabled in ${mode} mode` : `Scheduler is ${status} in ${mode} mode`,
+    summary: enabled
+      ? `Scheduler is enabled in ${mode} mode`
+      : `Scheduler is ${status} in ${mode} mode`,
     metrics: {
       enabled,
       mode,
@@ -134,8 +159,20 @@ function summarizeScheduler(data: JsonRecord | null, error: string | null): Mirr
 }
 
 function summarizeKb(data: JsonRecord | null, error: string | null): MirrorObservation {
-  if (error) return { source: "kb", status: "error", summary: "KB index could not be parsed", metrics: { error } };
-  if (!data) return { source: "kb", status: "missing", summary: "KB index has not been generated", metrics: {} };
+  if (error)
+    return {
+      source: "kb",
+      status: "error",
+      summary: "KB index could not be parsed",
+      metrics: { error },
+    };
+  if (!data)
+    return {
+      source: "kb",
+      status: "missing",
+      summary: "KB index has not been generated",
+      metrics: {},
+    };
   const totalItems = numberValue(data.totalItems) ?? 0;
   const keywordCount = isRecord(data.keywords) ? Object.keys(data.keywords).length : 0;
   return {
@@ -152,9 +189,25 @@ function summarizeKb(data: JsonRecord | null, error: string | null): MirrorObser
   };
 }
 
-function summarizePromoteGate(data: JsonRecord | null, error: string | null, reportPath: string | null): MirrorObservation {
-  if (error) return { source: "promote_gate", status: "error", summary: "Promote gate report could not be parsed", metrics: { error, reportPath } };
-  if (!data) return { source: "promote_gate", status: "missing", summary: "Promote gate dry-run report has not been generated", metrics: {} };
+function summarizePromoteGate(
+  data: JsonRecord | null,
+  error: string | null,
+  reportPath: string | null,
+): MirrorObservation {
+  if (error)
+    return {
+      source: "promote_gate",
+      status: "error",
+      summary: "Promote gate report could not be parsed",
+      metrics: { error, reportPath },
+    };
+  if (!data)
+    return {
+      source: "promote_gate",
+      status: "missing",
+      summary: "Promote gate dry-run report has not been generated",
+      metrics: {},
+    };
   const stats = isRecord(data.stats) ? data.stats : {};
   const byVerdict = isRecord(stats.byVerdict) ? stats.byVerdict : {};
   const frozenCount = numberValue(byVerdict.FROZEN_BLOCKED) ?? 0;
@@ -169,7 +222,9 @@ function summarizePromoteGate(data: JsonRecord | null, error: string | null, rep
       total: numberValue(stats.total) ?? 0,
       frozenBlocked: frozenCount,
       blocked: blockedCount,
-      promoted: isRecord(data.constraintsVerified) ? data.constraintsVerified.promoted ?? null : null,
+      promoted: isRecord(data.constraintsVerified)
+        ? (data.constraintsVerified.promoted ?? null)
+        : null,
     },
   };
 }
@@ -205,7 +260,10 @@ function buildFindings(observations: MirrorObservation[]): MirrorFinding[] {
       source: observation.source,
       severity: observation.status === "missing" ? "warning" : "attention",
       observedBehavior: observation.summary,
-      deviation: observation.status === "missing" ? "expected runtime evidence is missing" : "runtime state needs operator attention",
+      deviation:
+        observation.status === "missing"
+          ? "expected runtime evidence is missing"
+          : "runtime state needs operator attention",
       suggestedAction: ["inspect source state", "do not auto-apply changes from mirror observe"],
     });
   }
@@ -221,16 +279,29 @@ function writeJson(filePath: string, value: unknown): void {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-export function runMirrorObserve(workspaceRoot: string, options: MirrorObserveOptions = {}): MirrorObserveReport {
+export function runMirrorObserve(
+  workspaceRoot: string,
+  options: MirrorObserveOptions = {},
+): MirrorObserveReport {
   const generatedAt = options.generatedAt ?? new Date().toISOString();
   const mirrorId = reportIdFromTimestamp(generatedAt);
-  const outputFile = options.outputPath === undefined
-    ? path.join(workspaceRoot, MIRROR_REPORT_DIR_RELATIVE_PATH, `${MIRROR_REPORT_PREFIX}${generatedAt.replace(/[:.]/gu, "-")}.json`)
-    : options.outputPath;
+  const outputFile =
+    options.outputPath === undefined
+      ? path.join(
+          workspaceRoot,
+          MIRROR_REPORT_DIR_RELATIVE_PATH,
+          `${MIRROR_REPORT_PREFIX}${generatedAt.replace(/[:.]/gu, "-")}.json`,
+        )
+      : options.outputPath;
   const hud = readJsonIfPresent(workspaceRoot, HUD_STATE_RELATIVE_PATH);
   const scheduler = readJsonIfPresent(workspaceRoot, SCHEDULER_STATE_RELATIVE_PATH);
   const kb = readJsonIfPresent(workspaceRoot, KB_INDEX_RELATIVE_PATH);
-  const promoteGate = latestPromoteGateReport(workspaceRoot);
+  const latestPromoteGate = readLatestPromoteGateReport(workspaceRoot);
+  const promoteGate = {
+    path: latestPromoteGate.path,
+    data: latestPromoteGate.data as unknown as JsonRecord | null,
+    error: latestPromoteGate.error,
+  };
   const observations = [
     summarizeHud(hud.data, hud.error),
     summarizeScheduler(scheduler.data, scheduler.error),
@@ -271,7 +342,9 @@ export function runMirrorObserve(workspaceRoot: string, options: MirrorObserveOp
   return report;
 }
 
-export function summarizeMirrorObserve(report: MirrorObserveReport): Pick<
+export function summarizeMirrorObserve(
+  report: MirrorObserveReport,
+): Pick<
   MirrorObserveReport,
   "mirrorId" | "generatedAt" | "mode" | "outputFile" | "stats" | "constraintsVerified" | "verdict"
 > {

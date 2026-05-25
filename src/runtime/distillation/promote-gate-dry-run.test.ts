@@ -2,7 +2,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readPromoteGateState, runPromoteGateDryRun } from "./promote-gate-dry-run.js";
+import {
+  readLatestPromoteGateReport,
+  readPromoteGateState,
+  runPromoteGateDryRun,
+} from "./promote-gate-dry-run.js";
 
 function writeJson(filePath: string, value: unknown): void {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -226,8 +230,18 @@ describe("promote gate dry-run", () => {
     const report = runPromoteGateDryRun(root, {
       generatedAt: "2026-05-20T10:04:00.000Z",
     });
+    const latest = readLatestPromoteGateReport(root);
     const state = await readPromoteGateState(root);
 
+    expect(latest).toEqual(
+      expect.objectContaining({
+        path: "runtime/main/tmp/d9-promote-gate-dryrun-2026-05-20T10-04-00-000Z.json",
+        data: expect.objectContaining({
+          generatedAt: "2026-05-20T10:04:00.000Z",
+        }),
+        error: null,
+      }),
+    );
     expect(state).toEqual(
       expect.objectContaining({
         available: true,
