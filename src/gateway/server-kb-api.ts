@@ -19,10 +19,12 @@ const KB_SEMANTIC_REBUILD_ACCEPTANCE_RECORDS_ROUTE =
   "/api/kb/semantic-rebuild-plan/acceptance-records";
 const KB_SEMANTIC_REBUILD_PREFLIGHT_ROUTE = "/api/kb/semantic-rebuild-plan/rebuild-preflight";
 const KB_SEMANTIC_REBUILD_DRY_RUN_ROUTE = "/api/kb/semantic-rebuild-plan/rebuild-dry-run";
+const KB_SEMANTIC_REBUILD_APPROVAL_ROUTE = "/api/kb/semantic-rebuild-plan/rebuild-approval";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
 const SEMANTIC_REBUILD_ACCEPTANCE_PREFIX = "kb-semantic-rebuild-acceptance-";
+const SEMANTIC_REBUILD_APPROVAL_PREFIX = "kb-semantic-rebuild-approval-";
 
 type KnowledgeIndexSummary = {
   generatedAt: string | null;
@@ -295,6 +297,83 @@ type SemanticRebuildExecutionDryRun = {
   } | null;
   constraintsVerified: {
     fileWrites: "no";
+    stateWritten: "no";
+    embeddingCalls: "no";
+    keywordIndexWritten: "no";
+    vectorIndexWritten: "no";
+    realRebuildTriggered: "no";
+    applied: "no";
+  };
+};
+
+type SemanticRebuildApprovalRecordDryRun = {
+  mode: "rebuild-approval-record-dry-run";
+  checkedAt: string;
+  wouldWrite: false;
+  wouldWritePath: string | null;
+  dryRun: SemanticRebuildExecutionDryRun;
+  recordPreview: {
+    approvalId: string;
+    createdAt: string;
+    status: "rebuild_human_approved";
+    acceptanceId: string;
+    proposalId: string;
+    proposalPath: string;
+    acceptanceRecordPath: string;
+    plannedBatches: number;
+    totalItems: number;
+    requiredApproval: "human";
+    nextAction: "await_rebuild_execution";
+    approved: true;
+    rebuildTriggered: false;
+  } | null;
+  constraintsVerified: {
+    approvalRecordWritten: "no";
+    stateWritten: "no";
+    embeddingCalls: "no";
+    keywordIndexWritten: "no";
+    vectorIndexWritten: "no";
+    realRebuildTriggered: "no";
+    applied: "no";
+  };
+};
+
+type SemanticRebuildApprovalRecord = {
+  mode: "rebuild-approval-record";
+  approvalId: string;
+  createdAt: string;
+  status: "rebuild_human_approved";
+  acceptanceId: string;
+  proposalId: string;
+  proposalPath: string;
+  acceptanceRecordPath: string;
+  plannedBatches: number;
+  totalItems: number;
+  requiredApproval: "human";
+  nextAction: "await_rebuild_execution";
+  approved: true;
+  rebuildTriggered: false;
+  dryRun: SemanticRebuildExecutionDryRun;
+  constraintsVerified: {
+    approvalRecordWritten: "yes";
+    stateWritten: "no";
+    embeddingCalls: "no";
+    keywordIndexWritten: "no";
+    vectorIndexWritten: "no";
+    realRebuildTriggered: "no";
+    applied: "no";
+  };
+};
+
+type SemanticRebuildApprovalRecordWrite = {
+  mode: "rebuild-approval-record-write";
+  checkedAt: string;
+  wrote: boolean;
+  recordPath: string | null;
+  dryRun: SemanticRebuildExecutionDryRun;
+  record: SemanticRebuildApprovalRecord | null;
+  constraintsVerified: {
+    approvalRecordWritten: "yes" | "no";
     stateWritten: "no";
     embeddingCalls: "no";
     keywordIndexWritten: "no";
@@ -708,6 +787,18 @@ function preflightConstraints() {
   };
 }
 
+function approvalRecordConstraints<T extends "yes" | "no">(recordWritten: T) {
+  return {
+    approvalRecordWritten: recordWritten,
+    stateWritten: "no" as const,
+    embeddingCalls: "no" as const,
+    keywordIndexWritten: "no" as const,
+    vectorIndexWritten: "no" as const,
+    realRebuildTriggered: "no" as const,
+    applied: "no" as const,
+  };
+}
+
 function acceptanceRecordConstraintsValid(record: SemanticRebuildAcceptanceRecord): boolean {
   return (
     record.status === "human_gate_ready" &&
@@ -1093,6 +1184,107 @@ export async function buildSemanticRebuildExecutionDryRun(
   };
 }
 
+export async function buildSemanticRebuildApprovalRecordDryRun(
+  workspaceRoot: string,
+  options?: KbHttpOptions,
+): Promise<SemanticRebuildApprovalRecordDryRun> {
+  const checkedAt = new Date().toISOString();
+  const dryRun = await buildSemanticRebuildExecutionDryRun(workspaceRoot, options);
+  const approvalId = `kb-semantic-rebuild-approval-${randomUUID()}`;
+  const plannedExecution = dryRun.plannedExecution;
+  const wouldWritePath =
+    dryRun.readyForExecutionHumanGate && plannedExecution
+      ? [
+          SEMANTIC_REBUILD_PLAN_REPORT_DIR,
+          `${SEMANTIC_REBUILD_APPROVAL_PREFIX}${toReportTimestamp(checkedAt)}.json`,
+        ].join("/")
+      : null;
+
+  return {
+    mode: "rebuild-approval-record-dry-run",
+    checkedAt,
+    wouldWrite: false,
+    wouldWritePath,
+    dryRun,
+    recordPreview:
+      dryRun.readyForExecutionHumanGate && plannedExecution
+        ? {
+            approvalId,
+            createdAt: checkedAt,
+            status: "rebuild_human_approved",
+            acceptanceId: plannedExecution.acceptanceId,
+            proposalId: plannedExecution.proposalId,
+            proposalPath: plannedExecution.proposalPath,
+            acceptanceRecordPath: plannedExecution.recordPath,
+            plannedBatches: plannedExecution.plannedBatches,
+            totalItems: plannedExecution.totalItems,
+            requiredApproval: "human",
+            nextAction: "await_rebuild_execution",
+            approved: true,
+            rebuildTriggered: false,
+          }
+        : null,
+    constraintsVerified: approvalRecordConstraints("no"),
+  };
+}
+
+export async function writeSemanticRebuildApprovalRecord(
+  workspaceRoot: string,
+  options?: KbHttpOptions,
+): Promise<SemanticRebuildApprovalRecordWrite> {
+  const checkedAt = new Date().toISOString();
+  const dryRun = await buildSemanticRebuildExecutionDryRun(workspaceRoot, options);
+  const plannedExecution = dryRun.plannedExecution;
+  if (!dryRun.readyForExecutionHumanGate || !plannedExecution) {
+    return {
+      mode: "rebuild-approval-record-write",
+      checkedAt,
+      wrote: false,
+      recordPath: null,
+      dryRun,
+      record: null,
+      constraintsVerified: approvalRecordConstraints("no"),
+    };
+  }
+
+  const approvalId = `kb-semantic-rebuild-approval-${randomUUID()}`;
+  const recordPath = [
+    SEMANTIC_REBUILD_PLAN_REPORT_DIR,
+    `${SEMANTIC_REBUILD_APPROVAL_PREFIX}${toReportTimestamp(checkedAt)}.json`,
+  ].join("/");
+  const record: SemanticRebuildApprovalRecord = {
+    mode: "rebuild-approval-record",
+    approvalId,
+    createdAt: checkedAt,
+    status: "rebuild_human_approved",
+    acceptanceId: plannedExecution.acceptanceId,
+    proposalId: plannedExecution.proposalId,
+    proposalPath: plannedExecution.proposalPath,
+    acceptanceRecordPath: plannedExecution.recordPath,
+    plannedBatches: plannedExecution.plannedBatches,
+    totalItems: plannedExecution.totalItems,
+    requiredApproval: "human",
+    nextAction: "await_rebuild_execution",
+    approved: true,
+    rebuildTriggered: false,
+    dryRun,
+    constraintsVerified: approvalRecordConstraints("yes"),
+  };
+
+  const outputFile = path.join(workspaceRoot, ...recordPath.split("/"));
+  await mkdir(path.dirname(outputFile), { recursive: true });
+  await writeFile(outputFile, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  return {
+    mode: "rebuild-approval-record-write",
+    checkedAt,
+    wrote: true,
+    recordPath,
+    dryRun,
+    record,
+    constraintsVerified: approvalRecordConstraints("yes"),
+  };
+}
+
 export function isKbApiPath(pathname: string): boolean {
   return (
     pathname === KB_STATE_ROUTE ||
@@ -1102,7 +1294,8 @@ export function isKbApiPath(pathname: string): boolean {
     pathname === KB_SEMANTIC_REBUILD_PLAN_ACCEPTANCE_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_ACCEPTANCE_RECORDS_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_PREFLIGHT_ROUTE ||
-    pathname === KB_SEMANTIC_REBUILD_DRY_RUN_ROUTE
+    pathname === KB_SEMANTIC_REBUILD_DRY_RUN_ROUTE ||
+    pathname === KB_SEMANTIC_REBUILD_APPROVAL_ROUTE
   );
 }
 
@@ -1307,6 +1500,34 @@ export async function handleKbHttpRequest(
         readyForExecutionHumanGate: false,
         error: `KB semantic rebuild execution dry-run failed: ${error instanceof Error ? error.message : String(error)}`,
         constraintsVerified: preflightConstraints(),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_SEMANTIC_REBUILD_APPROVAL_ROUTE) {
+    if (req.method !== "GET" && req.method !== "POST") {
+      sendMethodNotAllowed(res, "GET, POST");
+      return true;
+    }
+
+    try {
+      if (req.method === "POST") {
+        const result = await writeSemanticRebuildApprovalRecord(workspaceRoot, options);
+        sendJson(res, result.wrote ? 201 : 409, result);
+        return true;
+      }
+
+      sendJson(res, 200, await buildSemanticRebuildApprovalRecordDryRun(workspaceRoot, options));
+    } catch (error) {
+      sendJson(res, 500, {
+        mode:
+          req.method === "POST"
+            ? "rebuild-approval-record-write"
+            : "rebuild-approval-record-dry-run",
+        wrote: false,
+        error: `KB semantic rebuild approval check failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: approvalRecordConstraints("no"),
       });
     }
     return true;

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildSemanticRebuildAcceptanceRecordDryRun,
+  buildSemanticRebuildApprovalRecordDryRun,
   buildSemanticRebuildExecutionDryRun,
   buildSemanticRebuildPlan,
   checkSemanticRebuildProposalAcceptance,
@@ -14,6 +15,7 @@ import {
   listSemanticRebuildAcceptanceRecords,
   summarizeSemanticBoundary,
   writeSemanticRebuildAcceptanceRecord,
+  writeSemanticRebuildApprovalRecord,
 } from "./server-kb-api.js";
 
 function makeResponse() {
@@ -65,6 +67,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/acceptance-records")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-preflight")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-dry-run")).toBe(true);
+    expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-approval")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -1029,6 +1032,221 @@ describe("server KB API", () => {
     );
   });
 
+  it("previews a semantic rebuild approval record without rebuilding vectors", async () => {
+    const workspaceRoot = makeWorkspace();
+    const config = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "volcengine",
+            model: "doubao-embedding",
+            store: { vector: { enabled: true } },
+          },
+        },
+      },
+    };
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+    });
+
+    await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan", "POST"),
+      makeResponse().res,
+      workspaceRoot,
+      { config },
+    );
+    const acceptanceWrite = await writeSemanticRebuildAcceptanceRecord(workspaceRoot, { config });
+
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/rebuild-approval", "GET"),
+      response.res,
+      workspaceRoot,
+      { config },
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    const json = response.json();
+    expect(json).toEqual(
+      expect.objectContaining({
+        mode: "rebuild-approval-record-dry-run",
+        wouldWrite: false,
+        wouldWritePath: expect.stringMatching(/^runtime\/main\/tmp\/kb-semantic-rebuild-approval-/),
+        dryRun: expect.objectContaining({
+          status: "ready_for_execution_human_gate",
+          readyForExecutionHumanGate: true,
+        }),
+        recordPreview: expect.objectContaining({
+          status: "rebuild_human_approved",
+          acceptanceId: acceptanceWrite.record?.acceptanceId,
+          proposalId: acceptanceWrite.record?.proposalId,
+          acceptanceRecordPath: acceptanceWrite.recordPath,
+          plannedBatches: 1,
+          totalItems: 1,
+          requiredApproval: "human",
+          nextAction: "await_rebuild_execution",
+          approved: true,
+          rebuildTriggered: false,
+        }),
+        constraintsVerified: {
+          approvalRecordWritten: "no",
+          stateWritten: "no",
+          embeddingCalls: "no",
+          keywordIndexWritten: "no",
+          vectorIndexWritten: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        },
+      }),
+    );
+    expect(() =>
+      readFileSync(path.join(workspaceRoot, ...String(json.wouldWritePath).split("/")), "utf8"),
+    ).toThrow();
+    expect(() =>
+      readFileSync(path.join(workspaceRoot, "system", "kb-index", "semantic-index.json"), "utf8"),
+    ).toThrow();
+    expect(() =>
+      readFileSync(path.join(workspaceRoot, "system", "kb-index", "vector-index.sqlite"), "utf8"),
+    ).toThrow();
+  });
+
+  it("writes a semantic rebuild approval record without triggering rebuild execution", async () => {
+    const workspaceRoot = makeWorkspace();
+    const config = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "volcengine",
+            model: "doubao-embedding",
+            store: { vector: { enabled: true } },
+          },
+        },
+      },
+    };
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+    });
+
+    await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan", "POST"),
+      makeResponse().res,
+      workspaceRoot,
+      { config },
+    );
+    const acceptanceWrite = await writeSemanticRebuildAcceptanceRecord(workspaceRoot, { config });
+
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/rebuild-approval", "POST"),
+      response.res,
+      workspaceRoot,
+      { config },
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(201);
+    const json = response.json();
+    expect(json).toEqual(
+      expect.objectContaining({
+        mode: "rebuild-approval-record-write",
+        wrote: true,
+        recordPath: expect.stringMatching(/^runtime\/main\/tmp\/kb-semantic-rebuild-approval-/),
+        dryRun: expect.objectContaining({
+          status: "ready_for_execution_human_gate",
+          wouldExecute: false,
+        }),
+        record: expect.objectContaining({
+          mode: "rebuild-approval-record",
+          status: "rebuild_human_approved",
+          acceptanceId: acceptanceWrite.record?.acceptanceId,
+          proposalId: acceptanceWrite.record?.proposalId,
+          acceptanceRecordPath: acceptanceWrite.recordPath,
+          plannedBatches: 1,
+          totalItems: 1,
+          requiredApproval: "human",
+          nextAction: "await_rebuild_execution",
+          approved: true,
+          rebuildTriggered: false,
+          constraintsVerified: {
+            approvalRecordWritten: "yes",
+            stateWritten: "no",
+            embeddingCalls: "no",
+            keywordIndexWritten: "no",
+            vectorIndexWritten: "no",
+            realRebuildTriggered: "no",
+            applied: "no",
+          },
+        }),
+        constraintsVerified: {
+          approvalRecordWritten: "yes",
+          stateWritten: "no",
+          embeddingCalls: "no",
+          keywordIndexWritten: "no",
+          vectorIndexWritten: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        },
+      }),
+    );
+    const persisted = JSON.parse(
+      readFileSync(path.join(workspaceRoot, ...String(json.recordPath).split("/")), "utf8"),
+    ) as Record<string, unknown>;
+    expect(persisted).toEqual(json.record);
+    expect(() =>
+      readFileSync(path.join(workspaceRoot, "system", "kb-index", "semantic-index.json"), "utf8"),
+    ).toThrow();
+    expect(() =>
+      readFileSync(path.join(workspaceRoot, "system", "kb-index", "vector-index.sqlite"), "utf8"),
+    ).toThrow();
+  });
+
+  it("blocks semantic rebuild approval writes when execution dry-run is not ready", async () => {
+    const write = await writeSemanticRebuildApprovalRecord(makeWorkspace());
+
+    expect(write).toEqual(
+      expect.objectContaining({
+        mode: "rebuild-approval-record-write",
+        wrote: false,
+        recordPath: null,
+        record: null,
+        dryRun: expect.objectContaining({
+          status: "blocked",
+          readyForExecutionHumanGate: false,
+        }),
+        constraintsVerified: expect.objectContaining({
+          approvalRecordWritten: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        }),
+      }),
+    );
+  });
+
+  it("returns missing semantic rebuild approval dry-run when execution dry-run is not ready", async () => {
+    const dryRun = await buildSemanticRebuildApprovalRecordDryRun(makeWorkspace());
+
+    expect(dryRun).toEqual(
+      expect.objectContaining({
+        mode: "rebuild-approval-record-dry-run",
+        wouldWrite: false,
+        wouldWritePath: null,
+        recordPreview: null,
+        dryRun: expect.objectContaining({
+          status: "blocked",
+          readyForExecutionHumanGate: false,
+        }),
+        constraintsVerified: expect.objectContaining({
+          approvalRecordWritten: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        }),
+      }),
+    );
+  });
+
   it("blocks semantic rebuild planning when vector search is disabled", () => {
     const workspaceRoot = makeWorkspace();
     writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
@@ -1163,5 +1381,19 @@ describe("server KB API", () => {
     expect(response.res.statusCode).toBe(405);
     expect(response.text()).toBe("Method Not Allowed");
     expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
+  });
+
+  it("rejects unsupported semantic rebuild approval methods", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/rebuild-approval", "PUT"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET, POST");
   });
 });
