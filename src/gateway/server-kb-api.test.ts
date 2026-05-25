@@ -26,6 +26,7 @@ import {
   getSemanticRebuildStatus,
   handleKbHttpRequest,
   isKbApiPath,
+  listDispatchRecallAcceptanceRecords,
   listSemanticRebuildApprovalRecords,
   listSemanticRebuildAcceptanceRecords,
   summarizeSemanticBoundary,
@@ -157,6 +158,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/dispatch-recall-preview")).toBe(true);
     expect(isKbApiPath("/api/kb/dispatch-recall-preview/acceptance")).toBe(true);
     expect(isKbApiPath("/api/kb/dispatch-recall-preview/acceptance-record-dry-run")).toBe(true);
+    expect(isKbApiPath("/api/kb/dispatch-recall-preview/acceptance-records")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -2578,6 +2580,38 @@ describe("server KB API", () => {
     expect(writtenRecord).toEqual(
       expect.objectContaining({ acceptanceId: write.record?.acceptanceId }),
     );
+
+    const recordList = await listDispatchRecallAcceptanceRecords(workspaceRoot);
+    expect(recordList).toEqual(
+      expect.objectContaining({
+        available: true,
+        mode: "dispatch-recall-acceptance-record-list",
+        recordDir: "runtime/dispatch/recall-acceptance-records",
+        recordPrefix: "dispatch-recall-acceptance-",
+        totalRecords: 1,
+        returnedRecords: 1,
+        invalidRecords: 0,
+        latestRecord: expect.objectContaining({
+          recordPath: write.recordPath,
+          acceptanceId: write.record?.acceptanceId,
+          status: "human_gate_ready",
+          requiredApproval: "human",
+          nextAction: "await_human_dispatch_approval",
+          approved: false,
+          dispatchTriggered: false,
+          selectedCandidateCount: 1,
+          previewedCandidateCount: 1,
+          taskIds: ["DISPATCH-RECALL-A"],
+          constraintsVerified: expect.objectContaining({
+            acceptanceRecordWritten: "yes",
+            recordWritten: "yes",
+            dispatchTriggered: "no",
+            sessionsSpawnCalled: "no",
+            applied: "no",
+          }),
+        }),
+      }),
+    );
     expect(existsSync(path.join(workspaceRoot, "runtime", "dispatch", "proposals"))).toBe(false);
   });
 
@@ -2755,6 +2789,49 @@ describe("server KB API", () => {
         }),
       }),
     );
+    expect(
+      existsSync(path.join(workspaceRoot, "runtime", "dispatch", "recall-acceptance-records")),
+    ).toBe(false);
+  });
+
+  it("serves empty dispatch recall acceptance record lists without mutating state", async () => {
+    const workspaceRoot = makeWorkspace();
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/dispatch-recall-preview/acceptance-records", "GET"),
+      response.res,
+      workspaceRoot,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      available: false,
+      mode: "dispatch-recall-acceptance-record-list",
+      recordDir: "runtime/dispatch/recall-acceptance-records",
+      recordPrefix: "dispatch-recall-acceptance-",
+      totalRecords: 0,
+      returnedRecords: 0,
+      invalidRecords: 0,
+      latestRecord: null,
+      records: [],
+      constraintsVerified: {
+        fileWrites: "no",
+        stateWritten: "no",
+        eventEmitted: "no",
+        dispatchTriggered: "no",
+        sessionsSpawnCalled: "no",
+        taskGraphMutated: "no",
+        returnConsumed: "no",
+        receiptWritten: "no",
+        embeddingCalls: "no",
+        keywordIndexWritten: "no",
+        semanticIndexWritten: "no",
+        vectorIndexWritten: "no",
+        realRebuildTriggered: "no",
+        applied: "no",
+      },
+    });
     expect(
       existsSync(path.join(workspaceRoot, "runtime", "dispatch", "recall-acceptance-records")),
     ).toBe(false);
@@ -3244,6 +3321,20 @@ describe("server KB API", () => {
     const response = makeResponse();
     const handled = await handleKbHttpRequest(
       makeReq("/api/kb/dispatch-recall-preview/acceptance-record-dry-run", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
+  });
+
+  it("rejects dispatch recall acceptance record list writes", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/dispatch-recall-preview/acceptance-records", "POST"),
       response.res,
       makeWorkspace(),
     );

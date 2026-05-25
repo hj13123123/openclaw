@@ -52,11 +52,16 @@ const KB_DISPATCH_RECALL_PREVIEW_ROUTE = "/api/kb/dispatch-recall-preview";
 const KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_ROUTE = "/api/kb/dispatch-recall-preview/acceptance";
 const KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_RECORD_DRY_RUN_ROUTE =
   "/api/kb/dispatch-recall-preview/acceptance-record-dry-run";
+const KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_RECORDS_ROUTE =
+  "/api/kb/dispatch-recall-preview/acceptance-records";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
 const SEMANTIC_REBUILD_ACCEPTANCE_PREFIX = "kb-semantic-rebuild-acceptance-";
 const SEMANTIC_REBUILD_APPROVAL_PREFIX = "kb-semantic-rebuild-approval-";
+const DISPATCH_RECALL_ACCEPTANCE_RECORD_DIR = "runtime/dispatch/recall-acceptance-records";
+const DISPATCH_RECALL_ACCEPTANCE_PREFIX = "dispatch-recall-acceptance-";
+const DISPATCH_RECALL_ACCEPTANCE_SUFFIX = ".json";
 
 type KnowledgeIndexSummary = {
   generatedAt: string | null;
@@ -990,6 +995,34 @@ type DispatchRecallAcceptanceRecordWrite = {
   acceptance: DispatchRecallAcceptance;
   record: DispatchRecallAcceptanceRecord | null;
   constraintsVerified: ReturnType<typeof dispatchRecallAcceptanceRecordWriteConstraints>;
+};
+
+type DispatchRecallAcceptanceRecordSummary = {
+  recordPath: string;
+  acceptanceId: string;
+  createdAt: string;
+  status: "human_gate_ready";
+  requiredApproval: "human";
+  nextAction: "await_human_dispatch_approval";
+  approved: false;
+  dispatchTriggered: false;
+  selectedCandidateCount: number;
+  previewedCandidateCount: number;
+  taskIds: string[];
+  constraintsVerified: DispatchRecallAcceptanceRecord["constraintsVerified"];
+};
+
+type DispatchRecallAcceptanceRecordList = {
+  available: boolean;
+  mode: "dispatch-recall-acceptance-record-list";
+  recordDir: string;
+  recordPrefix: string;
+  totalRecords: number;
+  returnedRecords: number;
+  invalidRecords: number;
+  latestRecord: DispatchRecallAcceptanceRecordSummary | null;
+  records: DispatchRecallAcceptanceRecordSummary[];
+  constraintsVerified: ReturnType<typeof dispatchRecallAcceptanceRecordListConstraints>;
 };
 
 type SemanticRebuildStatusStage =
@@ -3586,6 +3619,25 @@ function dispatchRecallAcceptanceRecordWriteConstraints(
   };
 }
 
+function dispatchRecallAcceptanceRecordListConstraints() {
+  return {
+    fileWrites: "no" as const,
+    stateWritten: "no" as const,
+    eventEmitted: "no" as const,
+    dispatchTriggered: "no" as const,
+    sessionsSpawnCalled: "no" as const,
+    taskGraphMutated: "no" as const,
+    returnConsumed: "no" as const,
+    receiptWritten: "no" as const,
+    embeddingCalls: "no" as const,
+    keywordIndexWritten: "no" as const,
+    semanticIndexWritten: "no" as const,
+    vectorIndexWritten: "no" as const,
+    realRebuildTriggered: "no" as const,
+    applied: "no" as const,
+  };
+}
+
 function dispatchRecallPreviewConstraintsValid(preview: DispatchRecallPreview): boolean {
   const constraints = preview.constraintsVerified;
   return (
@@ -3603,6 +3655,61 @@ function dispatchRecallPreviewConstraintsValid(preview: DispatchRecallPreview): 
     constraints.realRebuildTriggered === "no" &&
     constraints.applied === "no"
   );
+}
+
+function isDispatchRecallAcceptanceRecord(value: unknown): value is DispatchRecallAcceptanceRecord {
+  const record = value as Partial<DispatchRecallAcceptanceRecord>;
+  const constraints = record.constraintsVerified as Record<string, unknown> | undefined;
+  return (
+    Boolean(record) &&
+    typeof record === "object" &&
+    !Array.isArray(record) &&
+    record.mode === "dispatch-recall-acceptance-record" &&
+    typeof record.acceptanceId === "string" &&
+    typeof record.createdAt === "string" &&
+    record.status === "human_gate_ready" &&
+    record.requiredApproval === "human" &&
+    record.nextAction === "await_human_dispatch_approval" &&
+    record.approved === false &&
+    record.dispatchTriggered === false &&
+    typeof record.selectedCandidateCount === "number" &&
+    typeof record.previewedCandidateCount === "number" &&
+    Array.isArray(record.taskIds) &&
+    record.taskIds.every((taskId) => typeof taskId === "string") &&
+    Boolean(record.acceptance) &&
+    typeof record.acceptance === "object" &&
+    !Array.isArray(record.acceptance) &&
+    Boolean(constraints) &&
+    typeof constraints === "object" &&
+    !Array.isArray(constraints) &&
+    constraints.acceptanceRecordWritten === "yes" &&
+    constraints.recordWritten === "yes" &&
+    constraints.dispatchTriggered === "no" &&
+    constraints.sessionsSpawnCalled === "no" &&
+    constraints.taskGraphMutated === "no" &&
+    constraints.realRebuildTriggered === "no" &&
+    constraints.applied === "no"
+  );
+}
+
+function summarizeDispatchRecallAcceptanceRecord(
+  recordPath: string,
+  record: DispatchRecallAcceptanceRecord,
+): DispatchRecallAcceptanceRecordSummary {
+  return {
+    recordPath,
+    acceptanceId: record.acceptanceId,
+    createdAt: record.createdAt,
+    status: record.status,
+    requiredApproval: record.requiredApproval,
+    nextAction: record.nextAction,
+    approved: record.approved,
+    dispatchTriggered: record.dispatchTriggered,
+    selectedCandidateCount: record.selectedCandidateCount,
+    previewedCandidateCount: record.previewedCandidateCount,
+    taskIds: record.taskIds,
+    constraintsVerified: record.constraintsVerified,
+  };
 }
 
 function dispatchRecallHit(result: HybridRecallResult): DispatchRecallPreviewHit {
@@ -3632,10 +3739,8 @@ export async function buildDispatchRecallAcceptanceRecordDryRun(
   const acceptance = await checkDispatchRecallPreviewAcceptance(workspaceRoot, params, options);
   const acceptanceId = `dispatch-recall-acceptance-${randomUUID()}`;
   const recordPath = [
-    "runtime",
-    "dispatch",
-    "recall-acceptance-records",
-    `${acceptanceId}.json`,
+    DISPATCH_RECALL_ACCEPTANCE_RECORD_DIR,
+    `${acceptanceId}${DISPATCH_RECALL_ACCEPTANCE_SUFFIX}`,
   ].join("/");
 
   return {
@@ -3690,10 +3795,8 @@ export async function writeDispatchRecallAcceptanceRecord(
 
   const acceptanceId = `dispatch-recall-acceptance-${randomUUID()}`;
   const recordPath = [
-    "runtime",
-    "dispatch",
-    "recall-acceptance-records",
-    `${acceptanceId}.json`,
+    DISPATCH_RECALL_ACCEPTANCE_RECORD_DIR,
+    `${acceptanceId}${DISPATCH_RECALL_ACCEPTANCE_SUFFIX}`,
   ].join("/");
   const outputFile = path.join(workspaceRoot, ...recordPath.split("/"));
   const constraintsVerified = dispatchRecallAcceptanceRecordWriteConstraints(embeddingCalls, "yes");
@@ -3725,6 +3828,67 @@ export async function writeDispatchRecallAcceptanceRecord(
     recordPath,
     acceptance,
     record,
+    constraintsVerified,
+  };
+}
+
+export async function listDispatchRecallAcceptanceRecords(
+  workspaceRoot: string,
+): Promise<DispatchRecallAcceptanceRecordList> {
+  const recordDir = path.join(workspaceRoot, ...DISPATCH_RECALL_ACCEPTANCE_RECORD_DIR.split("/"));
+  const constraintsVerified = dispatchRecallAcceptanceRecordListConstraints();
+  let entries: string[];
+  try {
+    entries = await readdir(recordDir);
+  } catch {
+    return {
+      available: false,
+      mode: "dispatch-recall-acceptance-record-list",
+      recordDir: DISPATCH_RECALL_ACCEPTANCE_RECORD_DIR,
+      recordPrefix: DISPATCH_RECALL_ACCEPTANCE_PREFIX,
+      totalRecords: 0,
+      returnedRecords: 0,
+      invalidRecords: 0,
+      latestRecord: null,
+      records: [],
+      constraintsVerified,
+    };
+  }
+
+  const recordFiles = entries
+    .filter(
+      (entry) =>
+        entry.startsWith(DISPATCH_RECALL_ACCEPTANCE_PREFIX) &&
+        entry.endsWith(DISPATCH_RECALL_ACCEPTANCE_SUFFIX),
+    )
+    .sort()
+    .reverse();
+  const records: DispatchRecallAcceptanceRecordSummary[] = [];
+  let invalidRecords = 0;
+  for (const entry of recordFiles.slice(0, 20)) {
+    const recordPath = [DISPATCH_RECALL_ACCEPTANCE_RECORD_DIR, entry].join("/");
+    try {
+      const parsed = JSON.parse(await readFile(path.join(recordDir, entry), "utf8")) as unknown;
+      if (!isDispatchRecallAcceptanceRecord(parsed)) {
+        invalidRecords += 1;
+        continue;
+      }
+      records.push(summarizeDispatchRecallAcceptanceRecord(recordPath, parsed));
+    } catch {
+      invalidRecords += 1;
+    }
+  }
+
+  return {
+    available: records.length > 0,
+    mode: "dispatch-recall-acceptance-record-list",
+    recordDir: DISPATCH_RECALL_ACCEPTANCE_RECORD_DIR,
+    recordPrefix: DISPATCH_RECALL_ACCEPTANCE_PREFIX,
+    totalRecords: recordFiles.length,
+    returnedRecords: records.length,
+    invalidRecords,
+    latestRecord: records[0] ?? null,
+    records,
     constraintsVerified,
   };
 }
@@ -4288,7 +4452,8 @@ export function isKbApiPath(pathname: string): boolean {
     pathname === KB_HYBRID_RECALL_ROUTE ||
     pathname === KB_DISPATCH_RECALL_PREVIEW_ROUTE ||
     pathname === KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_ROUTE ||
-    pathname === KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_RECORD_DRY_RUN_ROUTE
+    pathname === KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_RECORD_DRY_RUN_ROUTE ||
+    pathname === KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_RECORDS_ROUTE
   );
 }
 
@@ -4865,6 +5030,25 @@ export async function handleKbHttpRequest(
         recordPreview: null,
         error: `KB dispatch recall acceptance record dry-run failed: ${error instanceof Error ? error.message : String(error)}`,
         constraintsVerified: dispatchRecallAcceptanceRecordDryRunConstraints("no"),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_RECORDS_ROUTE) {
+    if (req.method !== "GET") {
+      sendMethodNotAllowed(res, "GET");
+      return true;
+    }
+
+    try {
+      sendJson(res, 200, await listDispatchRecallAcceptanceRecords(workspaceRoot));
+    } catch (error) {
+      sendJson(res, 500, {
+        available: false,
+        mode: "dispatch-recall-acceptance-record-list",
+        error: `KB dispatch recall acceptance records read failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: dispatchRecallAcceptanceRecordListConstraints(),
       });
     }
     return true;
