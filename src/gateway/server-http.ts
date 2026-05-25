@@ -295,6 +295,7 @@ function isKbStatePath(pathname: string): boolean {
     pathname === "/api/kb/refresh" ||
     pathname === "/api/kb/semantic-rebuild-plan" ||
     pathname === "/api/kb/semantic-rebuild-plan/state" ||
+    pathname === "/api/kb/semantic-rebuild-plan/status" ||
     pathname === "/api/kb/semantic-rebuild-plan/acceptance" ||
     pathname === "/api/kb/semantic-rebuild-plan/acceptance-records" ||
     pathname === "/api/kb/semantic-rebuild-plan/rebuild-preflight" ||

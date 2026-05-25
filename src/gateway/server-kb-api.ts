@@ -14,6 +14,7 @@ const KB_STATE_ROUTE = "/api/kb/state";
 const KB_REFRESH_ROUTE = "/api/kb/refresh";
 const KB_SEMANTIC_REBUILD_PLAN_ROUTE = "/api/kb/semantic-rebuild-plan";
 const KB_SEMANTIC_REBUILD_PLAN_STATE_ROUTE = "/api/kb/semantic-rebuild-plan/state";
+const KB_SEMANTIC_REBUILD_PLAN_STATUS_ROUTE = "/api/kb/semantic-rebuild-plan/status";
 const KB_SEMANTIC_REBUILD_PLAN_ACCEPTANCE_ROUTE = "/api/kb/semantic-rebuild-plan/acceptance";
 const KB_SEMANTIC_REBUILD_ACCEPTANCE_RECORDS_ROUTE =
   "/api/kb/semantic-rebuild-plan/acceptance-records";
@@ -448,6 +449,71 @@ type SemanticRebuildExecutionEntry = {
   approvalRecords: SemanticRebuildApprovalRecordList;
   dryRun: SemanticRebuildExecutionDryRun;
   nextAction: "implement_real_rebuild_executor" | "resolve_blockers";
+  constraintsVerified: {
+    fileWrites: "no";
+    stateWritten: "no";
+    embeddingCalls: "no";
+    keywordIndexWritten: "no";
+    vectorIndexWritten: "no";
+    realRebuildTriggered: "no";
+    applied: "no";
+  };
+};
+
+type SemanticRebuildStatusStage =
+  | "plan_missing"
+  | "acceptance_blocked"
+  | "preflight_blocked"
+  | "execution_dry_run_blocked"
+  | "rebuild_approval_required"
+  | "ready_for_real_rebuild_implementation"
+  | "blocked";
+
+type SemanticRebuildStatus = {
+  available: boolean;
+  mode: "semantic-rebuild-status";
+  checkedAt: string;
+  stage: SemanticRebuildStatusStage;
+  status: "ready_for_real_rebuild_implementation" | "blocked";
+  nextAction: "implement_real_rebuild_executor" | "resolve_blockers";
+  plan: {
+    available: boolean;
+    reportPath: string | null;
+    proposalId: string | null;
+    status: KnowledgeSemanticRebuildPlan["status"] | null;
+    generatedAt: string | null;
+    totalItems: number | null;
+    plannedBatches: number | null;
+  };
+  acceptance: Pick<
+    SemanticRebuildProposalAcceptance,
+    "status" | "readyForHumanGate" | "blockReasons" | "proposalPath"
+  >;
+  acceptanceRecords: Pick<
+    SemanticRebuildAcceptanceRecordList,
+    "available" | "totalRecords" | "returnedRecords" | "invalidRecords"
+  > & { latestRecord: SemanticRebuildAcceptanceRecordSummary | null };
+  preflight: Pick<
+    SemanticRebuildPreflight,
+    "status" | "readyForRebuildHumanApproval" | "blockReasons" | "recordPath"
+  >;
+  executionDryRun: Pick<
+    SemanticRebuildExecutionDryRun,
+    "status" | "readyForExecutionHumanGate" | "blockReasons" | "wouldExecute"
+  >;
+  approvalRecords: Pick<
+    SemanticRebuildApprovalRecordList,
+    "available" | "totalRecords" | "returnedRecords" | "invalidRecords" | "latestRecord"
+  >;
+  executionEntry: Pick<
+    SemanticRebuildExecutionEntry,
+    | "status"
+    | "readyForRealRebuildImplementation"
+    | "blockReasons"
+    | "wouldExecute"
+    | "executed"
+    | "nextAction"
+  >;
   constraintsVerified: {
     fileWrites: "no";
     stateWritten: "no";
@@ -1608,12 +1674,113 @@ export async function checkSemanticRebuildExecutionEntry(
   };
 }
 
+function resolveSemanticRebuildStatusStage(
+  latestPlan: { reportPath: string; plan: KnowledgeSemanticRebuildPlan } | null,
+  acceptance: SemanticRebuildProposalAcceptance,
+  preflight: SemanticRebuildPreflight,
+  executionDryRun: SemanticRebuildExecutionDryRun,
+  approvalRecords: SemanticRebuildApprovalRecordList,
+  executionEntry: SemanticRebuildExecutionEntry,
+): SemanticRebuildStatusStage {
+  if (!latestPlan) return "plan_missing";
+  if (!acceptance.readyForHumanGate) return "acceptance_blocked";
+  if (!preflight.readyForRebuildHumanApproval) return "preflight_blocked";
+  if (!executionDryRun.readyForExecutionHumanGate) return "execution_dry_run_blocked";
+  if (!approvalRecords.latestRecord) return "rebuild_approval_required";
+  if (executionEntry.readyForRealRebuildImplementation) {
+    return "ready_for_real_rebuild_implementation";
+  }
+  return "blocked";
+}
+
+export async function getSemanticRebuildStatus(
+  workspaceRoot: string,
+  options?: KbHttpOptions,
+): Promise<SemanticRebuildStatus> {
+  const checkedAt = new Date().toISOString();
+  const latestPlan = await readLatestSemanticRebuildPlanReportEntry(workspaceRoot);
+  const acceptance = await checkSemanticRebuildProposalAcceptance(workspaceRoot, options);
+  const acceptanceRecords = await listSemanticRebuildAcceptanceRecords(workspaceRoot);
+  const preflight = await checkSemanticRebuildPreflight(workspaceRoot, options);
+  const executionDryRun = await buildSemanticRebuildExecutionDryRun(workspaceRoot, options);
+  const approvalRecords = await listSemanticRebuildApprovalRecords(workspaceRoot);
+  const executionEntry = await checkSemanticRebuildExecutionEntry(workspaceRoot, options);
+  const stage = resolveSemanticRebuildStatusStage(
+    latestPlan,
+    acceptance,
+    preflight,
+    executionDryRun,
+    approvalRecords,
+    executionEntry,
+  );
+
+  return {
+    available: latestPlan !== null,
+    mode: "semantic-rebuild-status",
+    checkedAt,
+    stage,
+    status: executionEntry.status,
+    nextAction: executionEntry.nextAction,
+    plan: {
+      available: latestPlan !== null,
+      reportPath: latestPlan?.reportPath ?? null,
+      proposalId: latestPlan ? proposalIdForSemanticRebuildPlan(latestPlan.plan) : null,
+      status: latestPlan?.plan.status ?? null,
+      generatedAt: latestPlan?.plan.generatedAt ?? null,
+      totalItems: latestPlan?.plan.source.totalItems ?? null,
+      plannedBatches: latestPlan?.plan.plannedBatches ?? null,
+    },
+    acceptance: {
+      status: acceptance.status,
+      readyForHumanGate: acceptance.readyForHumanGate,
+      blockReasons: acceptance.blockReasons,
+      proposalPath: acceptance.proposalPath,
+    },
+    acceptanceRecords: {
+      available: acceptanceRecords.available,
+      totalRecords: acceptanceRecords.totalRecords,
+      returnedRecords: acceptanceRecords.returnedRecords,
+      invalidRecords: acceptanceRecords.invalidRecords,
+      latestRecord: acceptanceRecords.records[0] ?? null,
+    },
+    preflight: {
+      status: preflight.status,
+      readyForRebuildHumanApproval: preflight.readyForRebuildHumanApproval,
+      blockReasons: preflight.blockReasons,
+      recordPath: preflight.recordPath,
+    },
+    executionDryRun: {
+      status: executionDryRun.status,
+      readyForExecutionHumanGate: executionDryRun.readyForExecutionHumanGate,
+      blockReasons: executionDryRun.blockReasons,
+      wouldExecute: executionDryRun.wouldExecute,
+    },
+    approvalRecords: {
+      available: approvalRecords.available,
+      totalRecords: approvalRecords.totalRecords,
+      returnedRecords: approvalRecords.returnedRecords,
+      invalidRecords: approvalRecords.invalidRecords,
+      latestRecord: approvalRecords.latestRecord,
+    },
+    executionEntry: {
+      status: executionEntry.status,
+      readyForRealRebuildImplementation: executionEntry.readyForRealRebuildImplementation,
+      blockReasons: executionEntry.blockReasons,
+      wouldExecute: executionEntry.wouldExecute,
+      executed: executionEntry.executed,
+      nextAction: executionEntry.nextAction,
+    },
+    constraintsVerified: preflightConstraints(),
+  };
+}
+
 export function isKbApiPath(pathname: string): boolean {
   return (
     pathname === KB_STATE_ROUTE ||
     pathname === KB_REFRESH_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_PLAN_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_PLAN_STATE_ROUTE ||
+    pathname === KB_SEMANTIC_REBUILD_PLAN_STATUS_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_PLAN_ACCEPTANCE_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_ACCEPTANCE_RECORDS_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_PREFLIGHT_ROUTE ||
@@ -1723,6 +1890,27 @@ export async function handleKbHttpRequest(
         mode: "dry-run",
         dryRun: true,
         error: `鐭ヨ瘑搴撹涔夐噸寤鸿鍒掓姤鍛婅鍙栧け璐ワ細${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_SEMANTIC_REBUILD_PLAN_STATUS_ROUTE) {
+    if (req.method !== "GET") {
+      sendMethodNotAllowed(res, "GET");
+      return true;
+    }
+
+    try {
+      sendJson(res, 200, await getSemanticRebuildStatus(workspaceRoot, options));
+    } catch (error) {
+      sendJson(res, 500, {
+        available: false,
+        mode: "semantic-rebuild-status",
+        status: "blocked",
+        stage: "blocked",
+        error: `KB semantic rebuild status read failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: preflightConstraints(),
       });
     }
     return true;
