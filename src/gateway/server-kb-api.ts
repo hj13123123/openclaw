@@ -50,6 +50,8 @@ const KB_SEMANTIC_SEARCH_ROUTE = "/api/kb/semantic-search";
 const KB_HYBRID_RECALL_ROUTE = "/api/kb/hybrid-recall";
 const KB_DISPATCH_RECALL_PREVIEW_ROUTE = "/api/kb/dispatch-recall-preview";
 const KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_ROUTE = "/api/kb/dispatch-recall-preview/acceptance";
+const KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_RECORD_DRY_RUN_ROUTE =
+  "/api/kb/dispatch-recall-preview/acceptance-record-dry-run";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
@@ -937,6 +939,29 @@ type DispatchRecallAcceptance = {
   }[];
   preview: DispatchRecallPreview;
   constraintsVerified: ReturnType<typeof dispatchRecallAcceptanceConstraints>;
+};
+
+type DispatchRecallAcceptanceRecordDryRun = {
+  mode: "dispatch-recall-acceptance-record-dry-run";
+  checkedAt: string;
+  status: "ready_for_human_gate" | "blocked";
+  readyForHumanGate: boolean;
+  wouldWrite: false;
+  wouldWritePath: string | null;
+  acceptance: DispatchRecallAcceptance;
+  recordPreview: {
+    acceptanceId: string;
+    createdAt: string;
+    status: "human_gate_ready";
+    requiredApproval: "human";
+    nextAction: "await_human_dispatch_approval";
+    approved: false;
+    dispatchTriggered: false;
+    selectedCandidateCount: number;
+    previewedCandidateCount: number;
+    taskIds: string[];
+  } | null;
+  constraintsVerified: ReturnType<typeof dispatchRecallAcceptanceRecordDryRunConstraints>;
 };
 
 type SemanticRebuildStatusStage =
@@ -3501,6 +3526,13 @@ function dispatchRecallAcceptanceConstraints(embeddingCalls: "no" | "yes") {
   };
 }
 
+function dispatchRecallAcceptanceRecordDryRunConstraints(embeddingCalls: "no" | "yes") {
+  return {
+    ...dispatchRecallAcceptanceConstraints(embeddingCalls),
+    recordWritten: "no" as const,
+  };
+}
+
 function dispatchRecallPreviewConstraintsValid(preview: DispatchRecallPreview): boolean {
   const constraints = preview.constraintsVerified;
   return (
@@ -3535,6 +3567,49 @@ function dispatchRecallHit(result: HybridRecallResult): DispatchRecallPreviewHit
       risk: result.item.risk,
       ...(result.item.status ? { status: result.item.status } : {}),
     },
+  };
+}
+
+export async function buildDispatchRecallAcceptanceRecordDryRun(
+  workspaceRoot: string,
+  params: { limit?: number | null; recallLimit?: number | null } = {},
+  options?: KbHttpOptions,
+): Promise<DispatchRecallAcceptanceRecordDryRun> {
+  const checkedAt = new Date().toISOString();
+  const acceptance = await checkDispatchRecallPreviewAcceptance(workspaceRoot, params, options);
+  const acceptanceId = `dispatch-recall-acceptance-${randomUUID()}`;
+  const recordPath = [
+    "runtime",
+    "dispatch",
+    "recall-acceptance-records",
+    `${acceptanceId}.json`,
+  ].join("/");
+
+  return {
+    mode: "dispatch-recall-acceptance-record-dry-run",
+    checkedAt,
+    status: acceptance.status,
+    readyForHumanGate: acceptance.readyForHumanGate,
+    wouldWrite: false,
+    wouldWritePath: acceptance.readyForHumanGate ? recordPath : null,
+    acceptance,
+    recordPreview: acceptance.readyForHumanGate
+      ? {
+          acceptanceId,
+          createdAt: checkedAt,
+          status: "human_gate_ready",
+          requiredApproval: "human",
+          nextAction: "await_human_dispatch_approval",
+          approved: false,
+          dispatchTriggered: false,
+          selectedCandidateCount: acceptance.previewSummary.selectedCandidateCount,
+          previewedCandidateCount: acceptance.previewSummary.previewedCandidateCount,
+          taskIds: acceptance.candidates.map((candidate) => candidate.taskId),
+        }
+      : null,
+    constraintsVerified: dispatchRecallAcceptanceRecordDryRunConstraints(
+      acceptance.constraintsVerified.embeddingCalls,
+    ),
   };
 }
 
@@ -4096,7 +4171,8 @@ export function isKbApiPath(pathname: string): boolean {
     pathname === KB_SEMANTIC_SEARCH_ROUTE ||
     pathname === KB_HYBRID_RECALL_ROUTE ||
     pathname === KB_DISPATCH_RECALL_PREVIEW_ROUTE ||
-    pathname === KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_ROUTE
+    pathname === KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_ROUTE ||
+    pathname === KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_RECORD_DRY_RUN_ROUTE
   );
 }
 
@@ -4619,6 +4695,40 @@ export async function handleKbHttpRequest(
         blockReasons: ["preview_constraints_invalid"],
         error: `KB dispatch recall acceptance failed: ${error instanceof Error ? error.message : String(error)}`,
         constraintsVerified: dispatchRecallAcceptanceConstraints("no"),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_RECORD_DRY_RUN_ROUTE) {
+    if (req.method !== "GET") {
+      sendMethodNotAllowed(res, "GET");
+      return true;
+    }
+
+    try {
+      const url = resolveRequestUrl(req);
+      const rawLimit = url.searchParams.get("limit");
+      const rawRecallLimit = url.searchParams.get("recallLimit");
+      const result = await buildDispatchRecallAcceptanceRecordDryRun(
+        workspaceRoot,
+        {
+          limit: rawLimit ? Number.parseInt(rawLimit, 10) : null,
+          recallLimit: rawRecallLimit ? Number.parseInt(rawRecallLimit, 10) : null,
+        },
+        options,
+      );
+      sendJson(res, result.readyForHumanGate ? 200 : 409, result);
+    } catch (error) {
+      sendJson(res, 500, {
+        mode: "dispatch-recall-acceptance-record-dry-run",
+        status: "blocked",
+        readyForHumanGate: false,
+        wouldWrite: false,
+        wouldWritePath: null,
+        recordPreview: null,
+        error: `KB dispatch recall acceptance record dry-run failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: dispatchRecallAcceptanceRecordDryRunConstraints("no"),
       });
     }
     return true;

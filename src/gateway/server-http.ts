@@ -309,7 +309,8 @@ function isKbStatePath(pathname: string): boolean {
     pathname === "/api/kb/semantic-search" ||
     pathname === "/api/kb/hybrid-recall" ||
     pathname === "/api/kb/dispatch-recall-preview" ||
-    pathname === "/api/kb/dispatch-recall-preview/acceptance"
+    pathname === "/api/kb/dispatch-recall-preview/acceptance" ||
+    pathname === "/api/kb/dispatch-recall-preview/acceptance-record-dry-run"
   );
 }
 
