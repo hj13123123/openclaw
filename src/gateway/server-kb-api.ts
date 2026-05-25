@@ -154,6 +154,50 @@ type SemanticRebuildAcceptanceRecordDryRun = {
   };
 };
 
+type SemanticRebuildAcceptanceRecord = {
+  mode: "acceptance-record";
+  acceptanceId: string;
+  createdAt: string;
+  status: "human_gate_ready";
+  proposalId: string;
+  proposalPath: string;
+  plannedBatches: number;
+  totalItems: number;
+  requiredApproval: "human";
+  nextAction: "await_human_approval";
+  approved: false;
+  rebuildTriggered: false;
+  acceptance: SemanticRebuildProposalAcceptance;
+  constraintsVerified: {
+    recordWritten: "yes";
+    stateWritten: "no";
+    embeddingCalls: "no";
+    keywordIndexWritten: "no";
+    vectorIndexWritten: "no";
+    realRebuildTriggered: "no";
+    applied: "no";
+  };
+};
+
+type SemanticRebuildAcceptanceRecordWrite = {
+  mode: "acceptance-record-write";
+  checkedAt: string;
+  proposalPath: string | null;
+  wrote: boolean;
+  recordPath: string | null;
+  acceptance: SemanticRebuildProposalAcceptance;
+  record: SemanticRebuildAcceptanceRecord | null;
+  constraintsVerified: {
+    recordWritten: "yes" | "no";
+    stateWritten: "no";
+    embeddingCalls: "no";
+    keywordIndexWritten: "no";
+    vectorIndexWritten: "no";
+    realRebuildTriggered: "no";
+    applied: "no";
+  };
+};
+
 function resolveRequestPath(req: IncomingMessage): string {
   return new URL(req.url ?? "/", "http://localhost").pathname;
 }
@@ -580,6 +624,80 @@ export async function buildSemanticRebuildAcceptanceRecordDryRun(
   };
 }
 
+export async function writeSemanticRebuildAcceptanceRecord(
+  workspaceRoot: string,
+  options?: KbHttpOptions,
+): Promise<SemanticRebuildAcceptanceRecordWrite> {
+  const checkedAt = new Date().toISOString();
+  const acceptance = await checkSemanticRebuildProposalAcceptance(workspaceRoot, options);
+  const blockedConstraints = {
+    recordWritten: "no" as const,
+    stateWritten: "no" as const,
+    embeddingCalls: "no" as const,
+    keywordIndexWritten: "no" as const,
+    vectorIndexWritten: "no" as const,
+    realRebuildTriggered: "no" as const,
+    applied: "no" as const,
+  };
+  if (!acceptance.readyForHumanGate || !acceptance.proposalPath || !acceptance.proposalSummary) {
+    return {
+      mode: "acceptance-record-write",
+      checkedAt,
+      proposalPath: acceptance.proposalPath,
+      wrote: false,
+      recordPath: null,
+      acceptance,
+      record: null,
+      constraintsVerified: blockedConstraints,
+    };
+  }
+
+  const acceptanceId = `kb-semantic-rebuild-acceptance-${randomUUID()}`;
+  const recordPath = [
+    SEMANTIC_REBUILD_PLAN_REPORT_DIR,
+    `${SEMANTIC_REBUILD_ACCEPTANCE_PREFIX}${toReportTimestamp(checkedAt)}.json`,
+  ].join("/");
+  const outputFile = path.join(workspaceRoot, ...recordPath.split("/"));
+  const writtenConstraints = {
+    recordWritten: "yes" as const,
+    stateWritten: "no" as const,
+    embeddingCalls: "no" as const,
+    keywordIndexWritten: "no" as const,
+    vectorIndexWritten: "no" as const,
+    realRebuildTriggered: "no" as const,
+    applied: "no" as const,
+  };
+  const record: SemanticRebuildAcceptanceRecord = {
+    mode: "acceptance-record",
+    acceptanceId,
+    createdAt: checkedAt,
+    status: "human_gate_ready",
+    proposalId: acceptance.proposalSummary.proposalId,
+    proposalPath: acceptance.proposalPath,
+    plannedBatches: acceptance.proposalSummary.plannedBatches,
+    totalItems: acceptance.proposalSummary.totalItems,
+    requiredApproval: "human",
+    nextAction: "await_human_approval",
+    approved: false,
+    rebuildTriggered: false,
+    acceptance,
+    constraintsVerified: writtenConstraints,
+  };
+
+  await mkdir(path.dirname(outputFile), { recursive: true });
+  await writeFile(outputFile, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  return {
+    mode: "acceptance-record-write",
+    checkedAt,
+    proposalPath: acceptance.proposalPath,
+    wrote: true,
+    recordPath,
+    acceptance,
+    record,
+    constraintsVerified: writtenConstraints,
+  };
+}
+
 export function isKbApiPath(pathname: string): boolean {
   return (
     pathname === KB_STATE_ROUTE ||
@@ -695,17 +813,23 @@ export async function handleKbHttpRequest(
   }
 
   if (requestPath === KB_SEMANTIC_REBUILD_PLAN_ACCEPTANCE_ROUTE) {
-    if (req.method !== "GET") {
-      sendMethodNotAllowed(res, "GET");
+    if (req.method !== "GET" && req.method !== "POST") {
+      sendMethodNotAllowed(res, "GET, POST");
       return true;
     }
 
     try {
+      if (req.method === "POST") {
+        const result = await writeSemanticRebuildAcceptanceRecord(workspaceRoot, options);
+        sendJson(res, result.wrote ? 201 : 409, result);
+        return true;
+      }
+
       sendJson(res, 200, await buildSemanticRebuildAcceptanceRecordDryRun(workspaceRoot, options));
     } catch (error) {
       sendJson(res, 500, {
-        mode: "acceptance-record-dry-run",
-        wouldWrite: false,
+        mode: req.method === "POST" ? "acceptance-record-write" : "acceptance-record-dry-run",
+        wrote: false,
         error: `KB semantic rebuild acceptance check failed: ${error instanceof Error ? error.message : String(error)}`,
         constraintsVerified: {
           recordWritten: "no",
