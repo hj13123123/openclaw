@@ -71,6 +71,24 @@ export interface AutoEvolutionObserveOptions {
   outputPath?: string | null;
 }
 
+export interface AutoEvolutionReportReadResult {
+  path: string | null;
+  data: AutoEvolutionObserveReport | null;
+  error: string | null;
+}
+
+export type AutoEvolutionStateSummary =
+  | {
+      available: false;
+      reportDir: string;
+      reportPath?: string;
+      error?: string;
+    }
+  | ({
+      available: true;
+      reportPath: string;
+    } & ReturnType<typeof summarizeAutoEvolutionObserve>);
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -99,6 +117,49 @@ function readJsonIfPresent(
   } catch (error) {
     return {
       path: relativePath,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function relativePath(workspaceRoot: string, filePath: string): string {
+  return path.relative(workspaceRoot, filePath).replace(/\\/gu, "/");
+}
+
+export function listAutoEvolutionReportFiles(workspaceRoot: string): string[] {
+  const reportDir = path.join(workspaceRoot, AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH);
+  if (!existsSync(reportDir)) return [];
+  return readdirSync(reportDir, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        entry.name.startsWith(AUTO_EVOLUTION_REPORT_PREFIX) &&
+        entry.name.endsWith(".json"),
+    )
+    .map((entry) => path.join(reportDir, entry.name))
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+}
+
+export function readLatestAutoEvolutionReport(
+  workspaceRoot: string,
+): AutoEvolutionReportReadResult {
+  const latestReport = listAutoEvolutionReportFiles(workspaceRoot)[0];
+  if (!latestReport) {
+    return { path: null, data: null, error: null };
+  }
+  const reportPath = relativePath(workspaceRoot, latestReport);
+  try {
+    return {
+      path: reportPath,
+      data: JSON.parse(
+        readFileSync(latestReport, "utf8").replace(/^\uFEFF/u, ""),
+      ) as AutoEvolutionObserveReport,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      path: reportPath,
       data: null,
       error: error instanceof Error ? error.message : String(error),
     };
@@ -470,5 +531,30 @@ export function summarizeAutoEvolutionObserve(
     inputs: report.inputs,
     constraintsVerified: report.constraintsVerified,
     verdict: report.verdict,
+  };
+}
+
+export function readAutoEvolutionState(workspaceRoot: string): AutoEvolutionStateSummary {
+  const latestReport = readLatestAutoEvolutionReport(workspaceRoot);
+  if (!latestReport.path) {
+    return {
+      available: false,
+      reportDir: AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH,
+    };
+  }
+
+  if (latestReport.error || !latestReport.data) {
+    return {
+      available: false,
+      reportDir: AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH,
+      reportPath: latestReport.path,
+      error: `Auto-evolution observe state read failed: ${latestReport.error ?? "report missing"}`,
+    };
+  }
+
+  return {
+    available: true,
+    reportPath: latestReport.path,
+    ...summarizeAutoEvolutionObserve(latestReport.data),
   };
 }

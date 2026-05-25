@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { readLatestPromoteGateReport } from "../distillation/promote-gate-dry-run.js";
 
@@ -57,6 +57,24 @@ export interface MirrorObserveOptions {
   outputPath?: string | null;
 }
 
+export interface MirrorObserveReportReadResult {
+  path: string | null;
+  data: MirrorObserveReport | null;
+  error: string | null;
+}
+
+export type MirrorObserveStateSummary =
+  | {
+      available: false;
+      reportDir: string;
+      reportPath?: string;
+      error?: string;
+    }
+  | ({
+      available: true;
+      reportPath: string;
+    } & ReturnType<typeof summarizeMirrorObserve>);
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -85,6 +103,49 @@ function readJsonIfPresent(
   } catch (error) {
     return {
       path: relativePath,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function relativePath(workspaceRoot: string, filePath: string): string {
+  return path.relative(workspaceRoot, filePath).replace(/\\/gu, "/");
+}
+
+export function listMirrorObserveReportFiles(workspaceRoot: string): string[] {
+  const reportDir = path.join(workspaceRoot, MIRROR_REPORT_DIR_RELATIVE_PATH);
+  if (!existsSync(reportDir)) return [];
+  return readdirSync(reportDir, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        entry.name.startsWith(MIRROR_REPORT_PREFIX) &&
+        entry.name.endsWith(".json"),
+    )
+    .map((entry) => path.join(reportDir, entry.name))
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+}
+
+export function readLatestMirrorObserveReport(
+  workspaceRoot: string,
+): MirrorObserveReportReadResult {
+  const latestReport = listMirrorObserveReportFiles(workspaceRoot)[0];
+  if (!latestReport) {
+    return { path: null, data: null, error: null };
+  }
+  const reportPath = relativePath(workspaceRoot, latestReport);
+  try {
+    return {
+      path: reportPath,
+      data: JSON.parse(
+        readFileSync(latestReport, "utf8").replace(/^\uFEFF/u, ""),
+      ) as MirrorObserveReport,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      path: reportPath,
       data: null,
       error: error instanceof Error ? error.message : String(error),
     };
@@ -356,5 +417,30 @@ export function summarizeMirrorObserve(
     stats: report.stats,
     constraintsVerified: report.constraintsVerified,
     verdict: report.verdict,
+  };
+}
+
+export function readMirrorObserveState(workspaceRoot: string): MirrorObserveStateSummary {
+  const latestReport = readLatestMirrorObserveReport(workspaceRoot);
+  if (!latestReport.path) {
+    return {
+      available: false,
+      reportDir: MIRROR_REPORT_DIR_RELATIVE_PATH,
+    };
+  }
+
+  if (latestReport.error || !latestReport.data) {
+    return {
+      available: false,
+      reportDir: MIRROR_REPORT_DIR_RELATIVE_PATH,
+      reportPath: latestReport.path,
+      error: `Mirror observe state read failed: ${latestReport.error ?? "report missing"}`,
+    };
+  }
+
+  return {
+    available: true,
+    reportPath: latestReport.path,
+    ...summarizeMirrorObserve(latestReport.data),
   };
 }
