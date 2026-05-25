@@ -26,6 +26,8 @@ const KB_SEMANTIC_REBUILD_APPROVAL_RECORDS_ROUTE =
 const KB_SEMANTIC_REBUILD_EXECUTION_ROUTE = "/api/kb/semantic-rebuild-plan/rebuild-execution";
 const KB_SEMANTIC_REBUILD_EXECUTION_CONTRACT_ROUTE =
   "/api/kb/semantic-rebuild-plan/rebuild-execution-contract";
+const KB_SEMANTIC_REBUILD_EXECUTION_STAGE_ROUTE =
+  "/api/kb/semantic-rebuild-plan/rebuild-execution-stage";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
@@ -542,6 +544,71 @@ type SemanticRebuildExecutionContract = {
   };
 };
 
+type SemanticRebuildExecutionStageConstraints = {
+  fileWrites: "no" | "staged-execution-record-and-manifest-only";
+  stateWritten: "no";
+  embeddingCalls: "no";
+  keywordIndexWritten: "no";
+  vectorIndexWritten: "no";
+  realRebuildTriggered: "no";
+  applied: "no";
+};
+
+type SemanticRebuildExecutionStageBatch = {
+  batchId: string;
+  itemOffset: number;
+  itemLimit: number;
+  itemCount: number;
+};
+
+type SemanticRebuildExecutionStageManifest = {
+  manifestVersion: "v1";
+  createdAt: string;
+  idempotencyKey: string;
+  sourceIndexPath: string;
+  provider: string | null;
+  model: string | null;
+  totalItems: number;
+  plannedBatches: number;
+  maxItemsPerBatch: 100;
+  batches: SemanticRebuildExecutionStageBatch[];
+  activeOutputs: NonNullable<SemanticRebuildExecutionContract["executorInput"]>["plannedOutputs"];
+  stagedOutputs: NonNullable<SemanticRebuildExecutionContract["executorInput"]>["stagedOutputs"];
+  executionPolicy: NonNullable<
+    SemanticRebuildExecutionContract["executorInput"]
+  >["executionPolicy"];
+};
+
+type SemanticRebuildExecutionStageRecord = {
+  mode: "semantic-rebuild-execution-stage-record";
+  executionId: string;
+  createdAt: string;
+  status: "staged_manifest_written";
+  idempotencyKey: string;
+  contractVersion: "v1";
+  contract: NonNullable<SemanticRebuildExecutionContract["executorInput"]>;
+  manifestPath: string;
+  manifest: SemanticRebuildExecutionStageManifest;
+  wouldExecute: false;
+  executed: false;
+  constraintsVerified: SemanticRebuildExecutionStageConstraints;
+};
+
+type SemanticRebuildExecutionStageWrite = {
+  mode: "semantic-rebuild-execution-stage-write";
+  checkedAt: string;
+  status: "staged_manifest_written" | "blocked";
+  readyForStagedExecution: boolean;
+  wrote: boolean;
+  idempotentReplay: boolean;
+  recordPath: string | null;
+  manifestPath: string | null;
+  blockReasons: Array<SemanticRebuildExecutionEntryBlockReason | "executor_contract_not_ready">;
+  contract: SemanticRebuildExecutionContract;
+  record: SemanticRebuildExecutionStageRecord | null;
+  constraintsVerified: SemanticRebuildExecutionStageConstraints;
+};
+
 type SemanticRebuildStatusStage =
   | "plan_missing"
   | "acceptance_blocked"
@@ -782,6 +849,10 @@ function toReportTimestamp(value: string): string {
 
 function semanticRebuildExecutionPathSegment(idempotencyKey: string): string {
   return `semantic-rebuild-${createHash("sha256").update(idempotencyKey).digest("hex").slice(0, 16)}`;
+}
+
+function semanticRebuildExecutionId(idempotencyKey: string): string {
+  return `kb-${semanticRebuildExecutionPathSegment(idempotencyKey)}`;
 }
 
 function buildSemanticRebuildPlanReportPath(generatedAt: string): string {
@@ -1107,6 +1178,20 @@ function preflightConstraints() {
 function approvalRecordConstraints<T extends "yes" | "no">(recordWritten: T) {
   return {
     approvalRecordWritten: recordWritten,
+    stateWritten: "no" as const,
+    embeddingCalls: "no" as const,
+    keywordIndexWritten: "no" as const,
+    vectorIndexWritten: "no" as const,
+    realRebuildTriggered: "no" as const,
+    applied: "no" as const,
+  };
+}
+
+function executionStageConstraints<T extends "no" | "staged-execution-record-and-manifest-only">(
+  fileWrites: T,
+) {
+  return {
+    fileWrites,
     stateWritten: "no" as const,
     embeddingCalls: "no" as const,
     keywordIndexWritten: "no" as const,
@@ -1859,6 +1944,173 @@ export async function buildSemanticRebuildExecutionContract(
   };
 }
 
+function buildExecutionStageBatches(
+  totalItems: number,
+  maxItemsPerBatch: 100,
+): SemanticRebuildExecutionStageBatch[] {
+  const batches: SemanticRebuildExecutionStageBatch[] = [];
+  for (let itemOffset = 0; itemOffset < totalItems; itemOffset += maxItemsPerBatch) {
+    const itemLimit = Math.min(itemOffset + maxItemsPerBatch, totalItems);
+    batches.push({
+      batchId: `batch-${String(batches.length + 1).padStart(4, "0")}`,
+      itemOffset,
+      itemLimit,
+      itemCount: itemLimit - itemOffset,
+    });
+  }
+  return batches;
+}
+
+function buildSemanticRebuildExecutionStageRecord(
+  executorInput: NonNullable<SemanticRebuildExecutionContract["executorInput"]>,
+  createdAt: string,
+): SemanticRebuildExecutionStageRecord {
+  const manifest: SemanticRebuildExecutionStageManifest = {
+    manifestVersion: "v1",
+    createdAt,
+    idempotencyKey: executorInput.idempotencyKey,
+    sourceIndexPath: executorInput.sourceIndexPath,
+    provider: executorInput.semantic.provider,
+    model: executorInput.semantic.model,
+    totalItems: executorInput.batchPlan.totalItems,
+    plannedBatches: executorInput.batchPlan.plannedBatches,
+    maxItemsPerBatch: executorInput.batchPlan.maxItemsPerBatch,
+    batches: buildExecutionStageBatches(
+      executorInput.batchPlan.totalItems,
+      executorInput.batchPlan.maxItemsPerBatch,
+    ),
+    activeOutputs: executorInput.plannedOutputs,
+    stagedOutputs: executorInput.stagedOutputs,
+    executionPolicy: executorInput.executionPolicy,
+  };
+  return {
+    mode: "semantic-rebuild-execution-stage-record",
+    executionId: semanticRebuildExecutionId(executorInput.idempotencyKey),
+    createdAt,
+    status: "staged_manifest_written",
+    idempotencyKey: executorInput.idempotencyKey,
+    contractVersion: executorInput.contractVersion,
+    contract: executorInput,
+    manifestPath: executorInput.stagedOutputs.rebuildReportPath,
+    manifest,
+    wouldExecute: false,
+    executed: false,
+    constraintsVerified: executionStageConstraints("staged-execution-record-and-manifest-only"),
+  };
+}
+
+function isSemanticRebuildExecutionStageRecord(
+  value: unknown,
+): value is SemanticRebuildExecutionStageRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const constraints = record.constraintsVerified as Record<string, unknown> | undefined;
+  if (!constraints) return false;
+  return (
+    record.mode === "semantic-rebuild-execution-stage-record" &&
+    typeof record.executionId === "string" &&
+    typeof record.createdAt === "string" &&
+    record.status === "staged_manifest_written" &&
+    typeof record.idempotencyKey === "string" &&
+    record.contractVersion === "v1" &&
+    typeof record.manifestPath === "string" &&
+    record.wouldExecute === false &&
+    record.executed === false &&
+    Boolean(record.contract) &&
+    typeof record.contract === "object" &&
+    Boolean(record.manifest) &&
+    typeof record.manifest === "object" &&
+    constraints.fileWrites === "staged-execution-record-and-manifest-only" &&
+    constraints.embeddingCalls === "no" &&
+    constraints.vectorIndexWritten === "no" &&
+    constraints.realRebuildTriggered === "no" &&
+    constraints.applied === "no"
+  );
+}
+
+async function readSemanticRebuildExecutionStageRecord(
+  workspaceRoot: string,
+  recordPath: string,
+): Promise<SemanticRebuildExecutionStageRecord | null> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(path.join(workspaceRoot, ...recordPath.split("/")), "utf8"),
+    ) as unknown;
+    return isSemanticRebuildExecutionStageRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function writeSemanticRebuildExecutionStageRecord(
+  workspaceRoot: string,
+  options?: KbHttpOptions,
+): Promise<SemanticRebuildExecutionStageWrite> {
+  const checkedAt = new Date().toISOString();
+  const contract = await buildSemanticRebuildExecutionContract(workspaceRoot, options);
+  const executorInput = contract.executorInput;
+  if (!contract.readyForExecutorContract || !executorInput) {
+    return {
+      mode: "semantic-rebuild-execution-stage-write",
+      checkedAt,
+      status: "blocked",
+      readyForStagedExecution: false,
+      wrote: false,
+      idempotentReplay: false,
+      recordPath: executorInput?.executionRecordPath ?? null,
+      manifestPath: executorInput?.stagedOutputs.rebuildReportPath ?? null,
+      blockReasons: ["executor_contract_not_ready", ...contract.blockReasons],
+      contract,
+      record: null,
+      constraintsVerified: executionStageConstraints("no"),
+    };
+  }
+
+  const existing = await readSemanticRebuildExecutionStageRecord(
+    workspaceRoot,
+    executorInput.executionRecordPath,
+  );
+  if (existing) {
+    return {
+      mode: "semantic-rebuild-execution-stage-write",
+      checkedAt,
+      status: "staged_manifest_written",
+      readyForStagedExecution: true,
+      wrote: false,
+      idempotentReplay: true,
+      recordPath: executorInput.executionRecordPath,
+      manifestPath: existing.manifestPath,
+      blockReasons: [],
+      contract,
+      record: existing,
+      constraintsVerified: executionStageConstraints("no"),
+    };
+  }
+
+  const record = buildSemanticRebuildExecutionStageRecord(executorInput, checkedAt);
+  const recordFile = path.join(workspaceRoot, ...executorInput.executionRecordPath.split("/"));
+  const manifestFile = path.join(workspaceRoot, ...record.manifestPath.split("/"));
+  await mkdir(path.dirname(recordFile), { recursive: true });
+  await mkdir(path.dirname(manifestFile), { recursive: true });
+  await writeFile(manifestFile, `${JSON.stringify(record.manifest, null, 2)}\n`, "utf8");
+  await writeFile(recordFile, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+
+  return {
+    mode: "semantic-rebuild-execution-stage-write",
+    checkedAt,
+    status: "staged_manifest_written",
+    readyForStagedExecution: true,
+    wrote: true,
+    idempotentReplay: false,
+    recordPath: executorInput.executionRecordPath,
+    manifestPath: record.manifestPath,
+    blockReasons: [],
+    contract,
+    record,
+    constraintsVerified: record.constraintsVerified,
+  };
+}
+
 function resolveSemanticRebuildStatusStage(
   latestPlan: { reportPath: string; plan: KnowledgeSemanticRebuildPlan } | null,
   acceptance: SemanticRebuildProposalAcceptance,
@@ -1973,7 +2225,8 @@ export function isKbApiPath(pathname: string): boolean {
     pathname === KB_SEMANTIC_REBUILD_APPROVAL_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_APPROVAL_RECORDS_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_EXECUTION_ROUTE ||
-    pathname === KB_SEMANTIC_REBUILD_EXECUTION_CONTRACT_ROUTE
+    pathname === KB_SEMANTIC_REBUILD_EXECUTION_CONTRACT_ROUTE ||
+    pathname === KB_SEMANTIC_REBUILD_EXECUTION_STAGE_ROUTE
   );
 }
 
@@ -2305,6 +2558,33 @@ export async function handleKbHttpRequest(
         executorInput: null,
         error: `KB semantic rebuild execution contract failed: ${error instanceof Error ? error.message : String(error)}`,
         constraintsVerified: preflightConstraints(),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_SEMANTIC_REBUILD_EXECUTION_STAGE_ROUTE) {
+    if (req.method !== "POST") {
+      sendMethodNotAllowed(res, "POST");
+      return true;
+    }
+
+    try {
+      const result = await writeSemanticRebuildExecutionStageRecord(workspaceRoot, options);
+      sendJson(res, result.wrote ? 201 : result.idempotentReplay ? 200 : 409, result);
+    } catch (error) {
+      sendJson(res, 500, {
+        mode: "semantic-rebuild-execution-stage-write",
+        status: "blocked",
+        readyForStagedExecution: false,
+        wrote: false,
+        idempotentReplay: false,
+        recordPath: null,
+        manifestPath: null,
+        blockReasons: ["executor_contract_not_ready"],
+        record: null,
+        error: `KB semantic rebuild execution stage failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: executionStageConstraints("no"),
       });
     }
     return true;
