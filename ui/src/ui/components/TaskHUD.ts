@@ -1,7 +1,14 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
 
-type HudStatus = "healthy" | "warning" | "error" | "idle" | "degraded" | "attention_required" | string;
+type HudStatus =
+  | "healthy"
+  | "warning"
+  | "error"
+  | "idle"
+  | "degraded"
+  | "attention_required"
+  | string;
 
 type AgentState = {
   agentId: string;
@@ -208,6 +215,71 @@ type KbSemanticPlanStateData = {
   };
 };
 
+type KbSemanticAcceptanceStateData = {
+  mode?: string;
+  checkedAt?: string | null;
+  proposalPath?: string | null;
+  wouldWrite?: boolean;
+  wouldWritePath?: string | null;
+  acceptance?: {
+    mode?: string;
+    checkedAt?: string | null;
+    proposalPath?: string | null;
+    status?: string;
+    readyForHumanGate?: boolean;
+    blockReasons?: string[];
+    proposalSummary?: {
+      proposalId?: string;
+      status?: string;
+      generatedAt?: string;
+      provider?: string | null;
+      model?: string | null;
+      totalItems?: number;
+      plannedBatches?: number;
+      blockedReasons?: string[];
+    } | null;
+    currentSummary?: {
+      status?: string;
+      provider?: string | null;
+      model?: string | null;
+      totalItems?: number;
+      plannedBatches?: number;
+      blockedReasons?: string[];
+    } | null;
+    constraintsVerified?: {
+      acceptanceRecordWritten?: string;
+      stateWritten?: string;
+      embeddingCalls?: string;
+      keywordIndexWritten?: string;
+      vectorIndexWritten?: string;
+      realRebuildTriggered?: string;
+      applied?: string;
+    };
+  };
+  recordPreview?: {
+    acceptanceId?: string;
+    createdAt?: string;
+    status?: string;
+    proposalId?: string;
+    proposalPath?: string;
+    plannedBatches?: number;
+    totalItems?: number;
+    requiredApproval?: string;
+    nextAction?: string;
+    approved?: boolean;
+    rebuildTriggered?: boolean;
+  } | null;
+  constraintsVerified?: {
+    recordWritten?: string;
+    stateWritten?: string;
+    embeddingCalls?: string;
+    keywordIndexWritten?: string;
+    vectorIndexWritten?: string;
+    realRebuildTriggered?: string;
+    applied?: string;
+  };
+};
+
 type PolicyStateData = {
   policyVersion?: string | null;
   rulesCount?: number;
@@ -327,7 +399,12 @@ function formatRelative(value: unknown): string {
 }
 
 function statusClass(status: unknown): string {
-  return typeof status === "string" ? status.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "") : "unknown";
+  return typeof status === "string"
+    ? status
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, "")
+    : "unknown";
 }
 
 @customElement("task-hud")
@@ -343,6 +420,7 @@ export class TaskHUD extends LitElement {
   @state() private promoteGate: PromoteGateStateData | null = null;
   @state() private kbState: KbStateData | null = null;
   @state() private kbSemanticPlan: KbSemanticPlanStateData | null = null;
+  @state() private kbSemanticAcceptance: KbSemanticAcceptanceStateData | null = null;
   @state() private policy: PolicyStateData | null = null;
   @state() private refreshing = false;
 
@@ -354,7 +432,12 @@ export class TaskHUD extends LitElement {
       right: 20px;
       bottom: 20px;
       z-index: 9999;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family:
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
       color: #e5edf8;
     }
 
@@ -660,6 +743,7 @@ export class TaskHUD extends LitElement {
         this.fetchPromoteGateState(),
         this.fetchKbState(),
         this.fetchKbSemanticPlanState(),
+        this.fetchKbSemanticAcceptanceState(),
         this.fetchPolicyState(),
       ]);
     } finally {
@@ -705,7 +789,9 @@ export class TaskHUD extends LitElement {
   private async fetchTaskGraphValidation() {
     try {
       const response = await fetch("/api/task-graph/validation");
-      this.taskGraphValidation = response.ok ? ((await response.json()) as TaskGraphValidationState) : null;
+      this.taskGraphValidation = response.ok
+        ? ((await response.json()) as TaskGraphValidationState)
+        : null;
     } catch {
       this.taskGraphValidation = null;
     }
@@ -741,9 +827,22 @@ export class TaskHUD extends LitElement {
   private async fetchKbSemanticPlanState() {
     try {
       const response = await fetch("/api/kb/semantic-rebuild-plan/state");
-      this.kbSemanticPlan = response.ok ? ((await response.json()) as KbSemanticPlanStateData) : null;
+      this.kbSemanticPlan = response.ok
+        ? ((await response.json()) as KbSemanticPlanStateData)
+        : null;
     } catch {
       this.kbSemanticPlan = null;
+    }
+  }
+
+  private async fetchKbSemanticAcceptanceState() {
+    try {
+      const response = await fetch("/api/kb/semantic-rebuild-plan/acceptance");
+      this.kbSemanticAcceptance = response.ok
+        ? ((await response.json()) as KbSemanticAcceptanceStateData)
+        : null;
+    } catch {
+      this.kbSemanticAcceptance = null;
     }
   }
 
@@ -827,17 +926,11 @@ export class TaskHUD extends LitElement {
         </div>
       </div>
 
-      ${this.renderAgents(this.hud?.agentGroups ?? [])}
-      ${this.renderActiveTasks(runningTasks)}
-      ${this.renderReviews(reviews)}
-      ${this.renderTaskGraphs(this.hud?.taskGraphs?.items ?? [])}
+      ${this.renderAgents(this.hud?.agentGroups ?? [])} ${this.renderActiveTasks(runningTasks)}
+      ${this.renderReviews(reviews)} ${this.renderTaskGraphs(this.hud?.taskGraphs?.items ?? [])}
       ${this.renderRecentCompletions(this.hud?.recentCompletions?.items ?? [])}
-      ${this.renderScheduler()}
-      ${this.renderRuntimeLoop()}
-      ${this.renderTaskState()}
-      ${this.renderPromoteGate()}
-      ${this.renderKnowledgeBase()}
-      ${this.renderPolicy()}
+      ${this.renderScheduler()} ${this.renderRuntimeLoop()} ${this.renderTaskState()}
+      ${this.renderPromoteGate()} ${this.renderKnowledgeBase()} ${this.renderPolicy()}
       ${this.renderWarnings()}
     `;
   }
@@ -856,14 +949,25 @@ export class TaskHUD extends LitElement {
                     <div class="card">
                       <div class="status-line">
                         <span class="dot ${statusClass(agent.status)}"></span>
-                        <span class="name">${this.agentName(agent.agentId, agent.displayName)}</span>
-                        <span class="badge">${ROLE_LABELS[text(agent.role, "")] ?? text(agent.role, "岗位")}</span>
+                        <span class="name"
+                          >${this.agentName(agent.agentId, agent.displayName)}</span
+                        >
+                        <span class="badge"
+                          >${ROLE_LABELS[text(agent.role, "")] ?? text(agent.role, "岗位")}</span
+                        >
                       </div>
-                      <div class="meta">${labelStatus(agent.status)} · ${formatRelative(agent.lastProgressAt)}</div>
-                      <div class="secondary" title=${text(agent.currentTaskTitle ?? agent.currentTask, "暂无任务")}>
+                      <div class="meta">
+                        ${labelStatus(agent.status)} · ${formatRelative(agent.lastProgressAt)}
+                      </div>
+                      <div
+                        class="secondary"
+                        title=${text(agent.currentTaskTitle ?? agent.currentTask, "暂无任务")}
+                      >
                         ${truncate(agent.currentTaskTitle ?? agent.currentTask)}
                       </div>
-                      <div class="progress-track"><div class="progress" style=${`width:${progress}%`}></div></div>
+                      <div class="progress-track">
+                        <div class="progress" style=${`width:${progress}%`}></div>
+                      </div>
                     </div>
                   `;
                 })}
@@ -884,7 +988,9 @@ export class TaskHUD extends LitElement {
                 <div class="row">
                   <div>
                     <div class="primary">${truncate(task.taskTitle ?? task.taskId)}</div>
-                    <div class="secondary">${text(task.agentId, "未知岗位")} · ${labelStatus(task.status)}</div>
+                    <div class="secondary">
+                      ${text(task.agentId, "未知岗位")} · ${labelStatus(task.status)}
+                    </div>
                   </div>
                   <span class="badge">${Math.round(Number(task.progressPct ?? 0))}%</span>
                 </div>
@@ -905,7 +1011,10 @@ export class TaskHUD extends LitElement {
                 <div class="row">
                   <div>
                     <div class="primary">${truncate(item.reason ?? item.taskId ?? item.id)}</div>
-                    <div class="secondary">${text(item.taskId ?? item.id, "未知任务")} · ${formatRelative(item.createdAt)}</div>
+                    <div class="secondary">
+                      ${text(item.taskId ?? item.id, "未知任务")} ·
+                      ${formatRelative(item.createdAt)}
+                    </div>
                   </div>
                   <span class="badge">${labelStatus(item.severity)}</span>
                 </div>
@@ -915,7 +1024,9 @@ export class TaskHUD extends LitElement {
     `;
   }
 
-  private findTaskGraphValidation(graphId: string | null | undefined): TaskGraphValidationReport | null {
+  private findTaskGraphValidation(
+    graphId: string | null | undefined,
+  ): TaskGraphValidationReport | null {
     if (!graphId) return null;
     return this.taskGraphValidation?.reports?.find((report) => report.graphId === graphId) ?? null;
   }
@@ -934,7 +1045,9 @@ export class TaskHUD extends LitElement {
         ${issues.map(
           (issue) => html`
             <div class="issue">
-              <div class="secondary">${issue.kind} · ${text(issue.check, "未知检查")} · ${text(issue.field, "未知字段")}</div>
+              <div class="secondary">
+                ${issue.kind} · ${text(issue.check, "未知检查")} · ${text(issue.field, "未知字段")}
+              </div>
               <div class="secondary">${text(issue.message, "暂无说明")}</div>
             </div>
           `,
@@ -953,7 +1066,11 @@ export class TaskHUD extends LitElement {
               <div class="row">
                 <div>
                   <div class="primary">任务图验真</div>
-                  <div class="secondary">总数 ${validationSummary.total ?? 0} · 错误 ${validationSummary.bySeverity?.error ?? 0} · 警告 ${validationSummary.bySeverity?.warning ?? 0}</div>
+                  <div class="secondary">
+                    总数 ${validationSummary.total ?? 0} · 错误
+                    ${validationSummary.bySeverity?.error ?? 0} · 警告
+                    ${validationSummary.bySeverity?.warning ?? 0}
+                  </div>
                 </div>
                 <span class="badge">${validationSummary.valid ? "通过" : "需关注"}</span>
               </div>
@@ -964,18 +1081,20 @@ export class TaskHUD extends LitElement {
           : graphs.slice(0, 4).map((graph) => {
               const validation = this.findTaskGraphValidation(graph.graphId);
               const severity = validation?.severity ?? graph.validationSeverity ?? null;
-              const issueCount = (validation?.errors?.length ?? 0) + (validation?.warnings?.length ?? 0);
+              const issueCount =
+                (validation?.errors?.length ?? 0) + (validation?.warnings?.length ?? 0);
               const validatedAt = validation?.checkedAt ?? graph.lastValidatedAt;
               return html`
                 <div class="row">
                   <div>
                     <div class="primary">${truncate(graph.title ?? graph.graphId)}</div>
                     <div class="secondary">
-                      总数 ${graph.nodeSummary?.total ?? 0} · 完成 ${graph.nodeSummary?.completed ?? 0} · 阻塞
-                      ${graph.nodeSummary?.blocked ?? 0}
+                      总数 ${graph.nodeSummary?.total ?? 0} · 完成
+                      ${graph.nodeSummary?.completed ?? 0} · 阻塞 ${graph.nodeSummary?.blocked ?? 0}
                     </div>
                     <div class="secondary">
-                      验真 ${severity ? labelStatus(severity) : "暂无"} · 问题 ${issueCount} · ${formatRelative(validatedAt)}
+                      验真 ${severity ? labelStatus(severity) : "暂无"} · 问题 ${issueCount} ·
+                      ${formatRelative(validatedAt)}
                     </div>
                     ${this.renderTaskGraphValidationIssues(validation)}
                   </div>
@@ -1014,9 +1133,13 @@ export class TaskHUD extends LitElement {
         <h4 class="section-title">调度器</h4>
         <div class="row">
           <div>
-            <div class="primary">${this.scheduler?.enabled ? "已启用" : "未启用"} · ${labelStatus(this.scheduler?.status)}</div>
+            <div class="primary">
+              ${this.scheduler?.enabled ? "已启用" : "未启用"} ·
+              ${labelStatus(this.scheduler?.status)}
+            </div>
             <div class="secondary">
-              模式 ${text(this.scheduler?.mode, "observe")} · tick ${this.scheduler?.totalTicks ?? 0} · 跳过
+              模式 ${text(this.scheduler?.mode, "observe")} · tick
+              ${this.scheduler?.totalTicks ?? 0} · 跳过
               ${this.scheduler?.skippedBecauseRunning ?? 0}
             </div>
           </div>
@@ -1045,13 +1168,16 @@ export class TaskHUD extends LitElement {
         <h4 class="section-title">运行态总线</h4>
         <div class="row">
           <div>
-            <div class="primary">${data ? "快照可用" : "暂无快照"} · ${text(data?.mode, "observe")}</div>
+            <div class="primary">
+              ${data ? "快照可用" : "暂无快照"} · ${text(data?.mode, "observe")}
+            </div>
             <div class="secondary">
               dispatch ${data?.dispatch_plan_count ?? 0} · inbox ${data?.inbox_count ?? 0} · 警告
               ${warnings.length}
             </div>
             <div class="secondary">
-              freshness ${text(data?.freshness?.status, "unknown")} · age ${Math.floor(Number(data?.freshness?.ageMs ?? 0) / 60_000)}m
+              freshness ${text(data?.freshness?.status, "unknown")} · age
+              ${Math.floor(Number(data?.freshness?.ageMs ?? 0) / 60_000)}m
             </div>
             ${warnings.length > 0
               ? html`
@@ -1106,21 +1232,29 @@ export class TaskHUD extends LitElement {
     const byVerdict = stats?.byVerdict ?? {};
     const byType = stats?.byType ?? {};
     const constraints = state?.constraintsVerified ?? {};
-    const verdictEntries = Object.entries(byVerdict).filter(([, value]) => value > 0).slice(0, 5);
-    const typeEntries = Object.entries(byType).filter(([, value]) => value > 0).slice(0, 5);
+    const verdictEntries = Object.entries(byVerdict)
+      .filter(([, value]) => value > 0)
+      .slice(0, 5);
+    const typeEntries = Object.entries(byType)
+      .filter(([, value]) => value > 0)
+      .slice(0, 5);
     const readyCount = byVerdict.READY_FOR_PROMOTE_GATE ?? 0;
-    const waitingCount = (byVerdict.WAITING_REVIEW ?? 0)
-      + (byVerdict.NEEDS_EVIDENCE ?? 0)
-      + (byVerdict.WAITING_SEPARATE_ENGINEERING_RULE_APPROVAL ?? 0);
+    const waitingCount =
+      (byVerdict.WAITING_REVIEW ?? 0) +
+      (byVerdict.NEEDS_EVIDENCE ?? 0) +
+      (byVerdict.WAITING_SEPARATE_ENGINEERING_RULE_APPROVAL ?? 0);
     const blockedCount = (byVerdict.BLOCKED ?? 0) + (byVerdict.FROZEN_BLOCKED ?? 0);
     return html`
       <section class="section">
         <h4 class="section-title">蒸馏闸口</h4>
         <div class="row">
           <div>
-            <div class="primary">${state?.available ? "报告可用" : "暂无报告"} · ${text(state?.mode, "dry-run")}</div>
+            <div class="primary">
+              ${state?.available ? "报告可用" : "暂无报告"} · ${text(state?.mode, "dry-run")}
+            </div>
             <div class="secondary">
-              候选 ${stats?.total ?? 0} · 就绪 ${readyCount} · 待审 ${waitingCount} · 阻塞 ${blockedCount}
+              候选 ${stats?.total ?? 0} · 就绪 ${readyCount} · 待审 ${waitingCount} · 阻塞
+              ${blockedCount}
             </div>
             ${state?.available
               ? html`
@@ -1170,6 +1304,9 @@ export class TaskHUD extends LitElement {
     const semantic = state?.semantic;
     const plan = this.kbSemanticPlan;
     const planConstraints = plan?.constraintsVerified ?? {};
+    const acceptance = this.kbSemanticAcceptance;
+    const acceptanceGate = acceptance?.acceptance;
+    const acceptanceConstraints = acceptance?.constraintsVerified ?? {};
     return html`
       <section class="section">
         <h4 class="section-title">知识库</h4>
@@ -1177,13 +1314,20 @@ export class TaskHUD extends LitElement {
           <div>
             <div class="primary">${state?.available ? "索引可用" : "暂无索引"} · keyword</div>
             <div class="secondary">
-              条目 ${state?.totalItems ?? 0} · 案例 ${state?.sourceCaseCount ?? 0} · 技能 ${state?.sourceSkillCount ?? 0} · 关键词 ${state?.keywordCount ?? 0}
+              条目 ${state?.totalItems ?? 0} · 案例 ${state?.sourceCaseCount ?? 0} · 技能
+              ${state?.sourceSkillCount ?? 0} · 关键词 ${state?.keywordCount ?? 0}
             </div>
             <div class="secondary">
-              语义 ${text(semantic?.status, "default")} · ${text(semantic?.mode, "observe-only")} · 向量重建 ${text(semantic?.rebuild, "disabled")}
+              语义 ${text(semantic?.status, "default")} · ${text(semantic?.mode, "observe-only")} ·
+              向量重建 ${text(semantic?.rebuild, "disabled")}
             </div>
             <div class="secondary">
-              语义计划 ${plan?.available ? text(plan.status, "ready") : "暂无"} · batch ${plan?.plannedBatches ?? 0} · ${formatRelative(plan?.generatedAt)}
+              语义计划 ${plan?.available ? text(plan.status, "ready") : "暂无"} · batch
+              ${plan?.plannedBatches ?? 0} · ${formatRelative(plan?.generatedAt)}
+            </div>
+            <div class="secondary">
+              semantic gate ${text(acceptanceGate?.status, "missing")} / human gate
+              ${acceptanceGate?.readyForHumanGate ? "ready" : "blocked"}
             </div>
             ${plan?.available
               ? html`
@@ -1212,6 +1356,43 @@ export class TaskHUD extends LitElement {
                   </details>
                 `
               : nothing}
+            ${acceptance
+              ? html`
+                  <details class="details">
+                    <summary>semantic acceptance dry-run</summary>
+                    ${[
+                      ["recordWritten", acceptanceConstraints.recordWritten],
+                      ["stateWritten", acceptanceConstraints.stateWritten],
+                      ["embedding", acceptanceConstraints.embeddingCalls],
+                      ["vectorIndex", acceptanceConstraints.vectorIndexWritten],
+                      ["realRebuild", acceptanceConstraints.realRebuildTriggered],
+                      ["applied", acceptanceConstraints.applied],
+                    ].map(
+                      ([label, value]) => html`
+                        <div class="issue">
+                          <div class="secondary">${label} / ${text(value, "unknown")}</div>
+                        </div>
+                      `,
+                    )}
+                    ${(acceptanceGate?.blockReasons ?? []).slice(0, 3).map(
+                      (reason) => html`
+                        <div class="issue">
+                          <div class="secondary">blocked / ${text(reason, "unknown")}</div>
+                        </div>
+                      `,
+                    )}
+                    ${acceptance.recordPreview
+                      ? html`
+                          <div class="issue">
+                            <div class="secondary">
+                              nextAction / ${text(acceptance.recordPreview.nextAction, "unknown")}
+                            </div>
+                          </div>
+                        `
+                      : nothing}
+                  </details>
+                `
+              : nothing}
           </div>
           <span class="badge">${text(semantic?.provider, formatRelative(state?.generatedAt))}</span>
         </div>
@@ -1225,8 +1406,13 @@ export class TaskHUD extends LitElement {
         <h4 class="section-title">策略闸口</h4>
         <div class="row">
           <div>
-            <div class="primary">规则 ${this.policy?.enabledCount ?? 0}/${this.policy?.rulesCount ?? 0}</div>
-            <div class="secondary">版本 ${text(this.policy?.policyVersion, "未加载")} · ${formatRelative(this.policy?.lastEvaluation)}</div>
+            <div class="primary">
+              规则 ${this.policy?.enabledCount ?? 0}/${this.policy?.rulesCount ?? 0}
+            </div>
+            <div class="secondary">
+              版本 ${text(this.policy?.policyVersion, "未加载")} ·
+              ${formatRelative(this.policy?.lastEvaluation)}
+            </div>
           </div>
           <span class="badge">只读</span>
         </div>
@@ -1264,7 +1450,8 @@ export class TaskHUD extends LitElement {
   }
 
   override render() {
-    const status = this.hud?.globalStatus?.status ?? (this.hudStatus === "unavailable" ? "warning" : "idle");
+    const status =
+      this.hud?.globalStatus?.status ?? (this.hudStatus === "unavailable" ? "warning" : "idle");
     return html`
       <button
         class="toggle ${this.panelOpen ? "active" : ""}"
