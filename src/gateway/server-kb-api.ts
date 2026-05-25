@@ -24,6 +24,8 @@ const KB_SEMANTIC_REBUILD_APPROVAL_ROUTE = "/api/kb/semantic-rebuild-plan/rebuil
 const KB_SEMANTIC_REBUILD_APPROVAL_RECORDS_ROUTE =
   "/api/kb/semantic-rebuild-plan/rebuild-approval-records";
 const KB_SEMANTIC_REBUILD_EXECUTION_ROUTE = "/api/kb/semantic-rebuild-plan/rebuild-execution";
+const KB_SEMANTIC_REBUILD_EXECUTION_CONTRACT_ROUTE =
+  "/api/kb/semantic-rebuild-plan/rebuild-execution-contract";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
@@ -449,6 +451,79 @@ type SemanticRebuildExecutionEntry = {
   approvalRecords: SemanticRebuildApprovalRecordList;
   dryRun: SemanticRebuildExecutionDryRun;
   nextAction: "implement_real_rebuild_executor" | "resolve_blockers";
+  constraintsVerified: {
+    fileWrites: "no";
+    stateWritten: "no";
+    embeddingCalls: "no";
+    keywordIndexWritten: "no";
+    vectorIndexWritten: "no";
+    realRebuildTriggered: "no";
+    applied: "no";
+  };
+};
+
+type SemanticRebuildExecutionContract = {
+  available: boolean;
+  mode: "semantic-rebuild-execution-contract";
+  checkedAt: string;
+  status: "ready_for_executor_contract" | "blocked";
+  readyForExecutorContract: boolean;
+  wouldExecute: false;
+  executed: false;
+  blockReasons: SemanticRebuildExecutionEntryBlockReason[];
+  executionEntry: Pick<
+    SemanticRebuildExecutionEntry,
+    | "status"
+    | "readyForRealRebuildImplementation"
+    | "blockReasons"
+    | "wouldExecute"
+    | "executed"
+    | "nextAction"
+  >;
+  executorInput: {
+    contractVersion: "v1";
+    action: "SEMANTIC_VECTOR_REBUILD";
+    workspaceRoot: string;
+    sourceIndexPath: typeof KB_INDEX_FILE_RELATIVE_PATH;
+    proposal: {
+      proposalId: string;
+      proposalPath: string;
+      generatedAt: string;
+    };
+    acceptance: {
+      acceptanceId: string;
+      acceptanceRecordPath: string;
+    };
+    approval: {
+      approvalId: string;
+      approvalRecordPath: string;
+    };
+    semantic: {
+      provider: string | null;
+      model: string | null;
+    };
+    batchPlan: {
+      totalItems: number;
+      plannedBatches: number;
+      maxItemsPerBatch: 100;
+    };
+    plannedOutputs: {
+      semanticIndexPath: "system/kb-index/semantic-index.json";
+      vectorIndexPath: "system/kb-index/vector-index.sqlite";
+      rebuildReportPath: "system/kb-index/semantic-rebuild-report.json";
+    };
+    plannedSteps: string[];
+    executionPolicy: {
+      requiredApproval: "human";
+      approvedBy: "rebuild-approval-record";
+      embeddingCallsAllowed: false;
+      semanticIndexWritesAllowed: false;
+      vectorIndexWritesAllowed: false;
+      atomicWritesRequired: true;
+      realRebuildExecutorImplemented: false;
+      nextAction: "implement_real_rebuild_executor";
+    };
+  } | null;
   constraintsVerified: {
     fileWrites: "no";
     stateWritten: "no";
@@ -1674,6 +1749,88 @@ export async function checkSemanticRebuildExecutionEntry(
   };
 }
 
+export async function buildSemanticRebuildExecutionContract(
+  workspaceRoot: string,
+  options?: KbHttpOptions,
+): Promise<SemanticRebuildExecutionContract> {
+  const checkedAt = new Date().toISOString();
+  const executionEntry = await checkSemanticRebuildExecutionEntry(workspaceRoot, options);
+  const plannedExecution = executionEntry.dryRun.plannedExecution;
+  const latestPlan = await readLatestSemanticRebuildPlanReportEntry(workspaceRoot);
+  const latestApprovalRecord = executionEntry.latestApprovalRecord;
+  const readyForExecutorContract =
+    executionEntry.readyForRealRebuildImplementation &&
+    plannedExecution !== null &&
+    latestPlan !== null &&
+    latestApprovalRecord !== null;
+
+  return {
+    available: readyForExecutorContract,
+    mode: "semantic-rebuild-execution-contract",
+    checkedAt,
+    status: readyForExecutorContract ? "ready_for_executor_contract" : "blocked",
+    readyForExecutorContract,
+    wouldExecute: false,
+    executed: false,
+    blockReasons: executionEntry.blockReasons,
+    executionEntry: {
+      status: executionEntry.status,
+      readyForRealRebuildImplementation: executionEntry.readyForRealRebuildImplementation,
+      blockReasons: executionEntry.blockReasons,
+      wouldExecute: executionEntry.wouldExecute,
+      executed: executionEntry.executed,
+      nextAction: executionEntry.nextAction,
+    },
+    executorInput: readyForExecutorContract
+      ? {
+          contractVersion: "v1",
+          action: "SEMANTIC_VECTOR_REBUILD",
+          workspaceRoot,
+          sourceIndexPath: KB_INDEX_FILE_RELATIVE_PATH,
+          proposal: {
+            proposalId: plannedExecution.proposalId,
+            proposalPath: plannedExecution.proposalPath,
+            generatedAt: latestPlan.plan.generatedAt,
+          },
+          acceptance: {
+            acceptanceId: plannedExecution.acceptanceId,
+            acceptanceRecordPath: plannedExecution.recordPath,
+          },
+          approval: {
+            approvalId: latestApprovalRecord.approvalId,
+            approvalRecordPath: latestApprovalRecord.recordPath,
+          },
+          semantic: {
+            provider: plannedExecution.provider,
+            model: plannedExecution.model,
+          },
+          batchPlan: {
+            totalItems: plannedExecution.totalItems,
+            plannedBatches: plannedExecution.plannedBatches,
+            maxItemsPerBatch: 100,
+          },
+          plannedOutputs: {
+            semanticIndexPath: "system/kb-index/semantic-index.json",
+            vectorIndexPath: "system/kb-index/vector-index.sqlite",
+            rebuildReportPath: "system/kb-index/semantic-rebuild-report.json",
+          },
+          plannedSteps: plannedExecution.plannedSteps,
+          executionPolicy: {
+            requiredApproval: "human",
+            approvedBy: "rebuild-approval-record",
+            embeddingCallsAllowed: false,
+            semanticIndexWritesAllowed: false,
+            vectorIndexWritesAllowed: false,
+            atomicWritesRequired: true,
+            realRebuildExecutorImplemented: false,
+            nextAction: "implement_real_rebuild_executor",
+          },
+        }
+      : null,
+    constraintsVerified: preflightConstraints(),
+  };
+}
+
 function resolveSemanticRebuildStatusStage(
   latestPlan: { reportPath: string; plan: KnowledgeSemanticRebuildPlan } | null,
   acceptance: SemanticRebuildProposalAcceptance,
@@ -1787,7 +1944,8 @@ export function isKbApiPath(pathname: string): boolean {
     pathname === KB_SEMANTIC_REBUILD_DRY_RUN_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_APPROVAL_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_APPROVAL_RECORDS_ROUTE ||
-    pathname === KB_SEMANTIC_REBUILD_EXECUTION_ROUTE
+    pathname === KB_SEMANTIC_REBUILD_EXECUTION_ROUTE ||
+    pathname === KB_SEMANTIC_REBUILD_EXECUTION_CONTRACT_ROUTE
   );
 }
 
@@ -2094,6 +2252,30 @@ export async function handleKbHttpRequest(
         executed: false,
         readyForRealRebuildImplementation: false,
         error: `KB semantic rebuild execution entry failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: preflightConstraints(),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_SEMANTIC_REBUILD_EXECUTION_CONTRACT_ROUTE) {
+    if (req.method !== "GET") {
+      sendMethodNotAllowed(res, "GET");
+      return true;
+    }
+
+    try {
+      sendJson(res, 200, await buildSemanticRebuildExecutionContract(workspaceRoot, options));
+    } catch (error) {
+      sendJson(res, 500, {
+        available: false,
+        mode: "semantic-rebuild-execution-contract",
+        status: "blocked",
+        readyForExecutorContract: false,
+        wouldExecute: false,
+        executed: false,
+        executorInput: null,
+        error: `KB semantic rebuild execution contract failed: ${error instanceof Error ? error.message : String(error)}`,
         constraintsVerified: preflightConstraints(),
       });
     }

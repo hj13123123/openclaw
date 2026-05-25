@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildSemanticRebuildAcceptanceRecordDryRun,
   buildSemanticRebuildApprovalRecordDryRun,
+  buildSemanticRebuildExecutionContract,
   buildSemanticRebuildExecutionDryRun,
   buildSemanticRebuildPlan,
   checkSemanticRebuildProposalAcceptance,
@@ -74,6 +75,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-approval")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-approval-records")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-execution")).toBe(true);
+    expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-execution-contract")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -1521,6 +1523,148 @@ describe("server KB API", () => {
     );
   });
 
+  it("returns semantic rebuild execution contract without executing rebuild", async () => {
+    const workspaceRoot = makeWorkspace();
+    const config = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "volcengine",
+            model: "doubao-embedding",
+            store: { vector: { enabled: true } },
+          },
+        },
+      },
+    };
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+    });
+
+    await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan", "POST"),
+      makeResponse().res,
+      workspaceRoot,
+      { config },
+    );
+    const acceptanceWrite = await writeSemanticRebuildAcceptanceRecord(workspaceRoot, { config });
+    const approvalWrite = await writeSemanticRebuildApprovalRecord(workspaceRoot, { config });
+
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/rebuild-execution-contract", "GET"),
+      response.res,
+      workspaceRoot,
+      { config },
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        available: true,
+        mode: "semantic-rebuild-execution-contract",
+        status: "ready_for_executor_contract",
+        readyForExecutorContract: true,
+        wouldExecute: false,
+        executed: false,
+        blockReasons: [],
+        executionEntry: expect.objectContaining({
+          status: "ready_for_real_rebuild_implementation",
+          readyForRealRebuildImplementation: true,
+          wouldExecute: false,
+          executed: false,
+          nextAction: "implement_real_rebuild_executor",
+        }),
+        executorInput: expect.objectContaining({
+          contractVersion: "v1",
+          action: "SEMANTIC_VECTOR_REBUILD",
+          workspaceRoot,
+          sourceIndexPath: "system/kb-index/index.json",
+          proposal: expect.objectContaining({
+            proposalId: approvalWrite.record?.proposalId,
+            proposalPath: approvalWrite.record?.proposalPath,
+          }),
+          acceptance: {
+            acceptanceId: acceptanceWrite.record?.acceptanceId,
+            acceptanceRecordPath: acceptanceWrite.recordPath,
+          },
+          approval: {
+            approvalId: approvalWrite.record?.approvalId,
+            approvalRecordPath: approvalWrite.recordPath,
+          },
+          semantic: {
+            provider: "volcengine",
+            model: "doubao-embedding",
+          },
+          batchPlan: {
+            totalItems: 1,
+            plannedBatches: 1,
+            maxItemsPerBatch: 100,
+          },
+          plannedOutputs: {
+            semanticIndexPath: "system/kb-index/semantic-index.json",
+            vectorIndexPath: "system/kb-index/vector-index.sqlite",
+            rebuildReportPath: "system/kb-index/semantic-rebuild-report.json",
+          },
+          executionPolicy: {
+            requiredApproval: "human",
+            approvedBy: "rebuild-approval-record",
+            embeddingCallsAllowed: false,
+            semanticIndexWritesAllowed: false,
+            vectorIndexWritesAllowed: false,
+            atomicWritesRequired: true,
+            realRebuildExecutorImplemented: false,
+            nextAction: "implement_real_rebuild_executor",
+          },
+        }),
+        constraintsVerified: {
+          fileWrites: "no",
+          stateWritten: "no",
+          embeddingCalls: "no",
+          keywordIndexWritten: "no",
+          vectorIndexWritten: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        },
+      }),
+    );
+    expect(() =>
+      readFileSync(path.join(workspaceRoot, "system", "kb-index", "semantic-index.json"), "utf8"),
+    ).toThrow();
+    expect(() =>
+      readFileSync(path.join(workspaceRoot, "system", "kb-index", "vector-index.sqlite"), "utf8"),
+    ).toThrow();
+  });
+
+  it("blocks semantic rebuild execution contract when gate records are missing", async () => {
+    const contract = await buildSemanticRebuildExecutionContract(makeWorkspace());
+
+    expect(contract).toEqual(
+      expect.objectContaining({
+        available: false,
+        mode: "semantic-rebuild-execution-contract",
+        status: "blocked",
+        readyForExecutorContract: false,
+        wouldExecute: false,
+        executed: false,
+        blockReasons: [
+          "approval_record_missing",
+          "execution_dry_run_not_ready",
+          "acceptance_record_missing",
+          "proposal_missing",
+        ],
+        executorInput: null,
+        constraintsVerified: expect.objectContaining({
+          fileWrites: "no",
+          embeddingCalls: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        }),
+      }),
+    );
+  });
+
   it("summarizes semantic rebuild status when no plan exists", async () => {
     const status = await getSemanticRebuildStatus(makeWorkspace());
 
@@ -1883,5 +2027,19 @@ describe("server KB API", () => {
     expect(response.res.statusCode).toBe(405);
     expect(response.text()).toBe("Method Not Allowed");
     expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET, POST");
+  });
+
+  it("rejects semantic rebuild execution contract writes", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/rebuild-execution-contract", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
   });
 });
