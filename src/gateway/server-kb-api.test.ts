@@ -15,6 +15,7 @@ import {
   buildSemanticRebuildExecutionDryRun,
   buildSemanticRebuildPlan,
   buildDispatchRecallAcceptanceRecordDryRun,
+  buildDispatchRecallDispatchDryRun,
   checkDispatchRecallPreflight,
   checkSemanticRebuildProposalAcceptance,
   checkDispatchRecallPreviewAcceptance,
@@ -161,6 +162,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/dispatch-recall-preview/acceptance-record-dry-run")).toBe(true);
     expect(isKbApiPath("/api/kb/dispatch-recall-preview/acceptance-records")).toBe(true);
     expect(isKbApiPath("/api/kb/dispatch-recall-preview/preflight")).toBe(true);
+    expect(isKbApiPath("/api/kb/dispatch-recall-preview/dispatch-dry-run")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -2645,6 +2647,38 @@ describe("server KB API", () => {
         }),
       }),
     );
+
+    const dispatchDryRun = await buildDispatchRecallDispatchDryRun(
+      workspaceRoot,
+      { limit: 1, recallLimit: 1 },
+      { config },
+    );
+
+    expect(dispatchDryRun).toEqual(
+      expect.objectContaining({
+        available: true,
+        mode: "dispatch-recall-dispatch-dry-run",
+        status: "ready_for_dispatch_human_gate",
+        wouldDispatch: false,
+        readyForDispatchHumanGate: true,
+        blockReasons: [],
+        plannedDispatches: [
+          {
+            taskId: "DISPATCH-RECALL-A",
+            dispatchTarget: "/engineering-executive",
+            recallResultIds: ["case-a"],
+          },
+        ],
+        constraintsVerified: expect.objectContaining({
+          fileWrites: "no",
+          dispatchTriggered: "no",
+          wouldDispatch: false,
+          sessionsSpawnCalled: "no",
+          taskGraphMutated: "no",
+          applied: "no",
+        }),
+      }),
+    );
     expect(existsSync(path.join(workspaceRoot, "runtime", "dispatch", "proposals"))).toBe(false);
   });
 
@@ -2984,6 +3018,44 @@ describe("server KB API", () => {
         constraintsVerified: expect.objectContaining({
           fileWrites: "no",
           dispatchTriggered: "no",
+          sessionsSpawnCalled: "no",
+          taskGraphMutated: "no",
+          applied: "no",
+        }),
+      }),
+    );
+    expect(
+      existsSync(path.join(workspaceRoot, "runtime", "dispatch", "recall-acceptance-records")),
+    ).toBe(false);
+  });
+
+  it("serves dispatch recall dispatch dry-runs and blocks missing records", async () => {
+    const workspaceRoot = makeWorkspace();
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/dispatch-recall-preview/dispatch-dry-run?limit=1&recallLimit=1", "GET"),
+      response.res,
+      workspaceRoot,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(409);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        available: false,
+        mode: "dispatch-recall-dispatch-dry-run",
+        status: "blocked",
+        wouldDispatch: false,
+        readyForDispatchHumanGate: false,
+        blockReasons: ["acceptance_record_missing", "current_acceptance_blocked"],
+        plannedDispatches: [],
+        preflight: expect.objectContaining({
+          blockReasons: ["acceptance_record_missing", "current_acceptance_blocked"],
+        }),
+        constraintsVerified: expect.objectContaining({
+          fileWrites: "no",
+          dispatchTriggered: "no",
+          wouldDispatch: false,
           sessionsSpawnCalled: "no",
           taskGraphMutated: "no",
           applied: "no",
@@ -3507,6 +3579,20 @@ describe("server KB API", () => {
     const response = makeResponse();
     const handled = await handleKbHttpRequest(
       makeReq("/api/kb/dispatch-recall-preview/preflight", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
+  });
+
+  it("rejects dispatch recall dispatch dry-run writes", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/dispatch-recall-preview/dispatch-dry-run", "POST"),
       response.res,
       makeWorkspace(),
     );
