@@ -2094,6 +2094,19 @@ describe("server KB API", () => {
         },
       }),
     );
+    await expect(
+      getSemanticRebuildStatus(workspaceRoot, {
+        loadConfig: () => {
+          throw new Error("applied status should not recompute semantic gates");
+        },
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        stage: "applied",
+        status: "applied",
+        nextAction: "no_action_required",
+      }),
+    );
 
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(

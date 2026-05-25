@@ -4553,6 +4553,70 @@ export async function getSemanticRebuildStatus(
   const semanticRebuildSummary = readSemanticRebuildSummary(workspaceRoot);
   const executionApplied = semanticRebuildSummary.stage === "applied";
   const latestPlan = await readLatestSemanticRebuildPlanReportEntry(workspaceRoot);
+  if (executionApplied) {
+    const acceptanceRecords = await listSemanticRebuildAcceptanceRecords(workspaceRoot);
+    const approvalRecords = await listSemanticRebuildApprovalRecords(workspaceRoot);
+    const hasAcceptance = semanticRebuildSummary.latestAcceptancePath !== null;
+    const hasApproval = semanticRebuildSummary.latestApprovalPath !== null;
+    return {
+      available: true,
+      mode: "semantic-rebuild-status",
+      checkedAt,
+      stage: "applied",
+      status: "applied",
+      nextAction: "no_action_required",
+      plan: {
+        available: latestPlan !== null,
+        reportPath: latestPlan?.reportPath ?? semanticRebuildSummary.latestPlanPath,
+        proposalId: latestPlan ? proposalIdForSemanticRebuildPlan(latestPlan.plan) : null,
+        status: latestPlan?.plan.status ?? null,
+        generatedAt: latestPlan?.plan.generatedAt ?? null,
+        totalItems: latestPlan?.plan.source.totalItems ?? semanticRebuildSummary.totalItems,
+        plannedBatches: latestPlan?.plan.plannedBatches ?? semanticRebuildSummary.plannedBatches,
+      },
+      acceptance: {
+        status: hasAcceptance ? "ready_for_human_gate" : "missing",
+        readyForHumanGate: hasAcceptance,
+        blockReasons: hasAcceptance ? [] : ["proposal_missing"],
+        proposalPath: semanticRebuildSummary.latestPlanPath,
+      },
+      acceptanceRecords: {
+        available: acceptanceRecords.available,
+        totalRecords: acceptanceRecords.totalRecords,
+        returnedRecords: acceptanceRecords.returnedRecords,
+        invalidRecords: acceptanceRecords.invalidRecords,
+        latestRecord: acceptanceRecords.records[0] ?? null,
+      },
+      preflight: {
+        status: hasAcceptance ? "ready_for_rebuild_human_approval" : "blocked",
+        readyForRebuildHumanApproval: hasAcceptance,
+        blockReasons: [],
+        recordPath: semanticRebuildSummary.latestAcceptancePath,
+      },
+      executionDryRun: {
+        status: hasApproval ? "ready_for_execution_human_gate" : "blocked",
+        readyForExecutionHumanGate: hasApproval,
+        blockReasons: [],
+        wouldExecute: false,
+      },
+      approvalRecords: {
+        available: approvalRecords.available,
+        totalRecords: approvalRecords.totalRecords,
+        returnedRecords: approvalRecords.returnedRecords,
+        invalidRecords: approvalRecords.invalidRecords,
+        latestRecord: approvalRecords.latestRecord,
+      },
+      executionEntry: {
+        status: hasApproval ? "ready_for_real_rebuild_implementation" : "blocked",
+        readyForRealRebuildImplementation: false,
+        blockReasons: [],
+        wouldExecute: false,
+        executed: false,
+        nextAction: hasApproval ? "run_real_rebuild_executor" : "resolve_blockers",
+      },
+      constraintsVerified: appliedExecutionRunConstraints(),
+    };
+  }
   const acceptance = await checkSemanticRebuildProposalAcceptance(workspaceRoot, options);
   const acceptanceRecords = await listSemanticRebuildAcceptanceRecords(workspaceRoot);
   const preflight = await checkSemanticRebuildPreflight(workspaceRoot, options);
