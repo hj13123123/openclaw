@@ -29,6 +29,7 @@ import {
   listSemanticRebuildApprovalRecords,
   listSemanticRebuildAcceptanceRecords,
   summarizeSemanticBoundary,
+  writeDispatchRecallAcceptanceRecord,
   writeSemanticRebuildAcceptanceRecord,
   writeSemanticRebuildApprovalRecord,
   writeSemanticRebuildExecutionStageRecord,
@@ -2532,6 +2533,52 @@ describe("server KB API", () => {
         }),
       }),
     );
+
+    const write = await writeDispatchRecallAcceptanceRecord(
+      workspaceRoot,
+      { limit: 1, recallLimit: 1 },
+      { config },
+    );
+
+    expect(write).toEqual(
+      expect.objectContaining({
+        mode: "dispatch-recall-acceptance-record-write",
+        status: "human_gate_ready",
+        readyForHumanGate: true,
+        wrote: true,
+        recordPath: expect.stringMatching(
+          /^runtime\/dispatch\/recall-acceptance-records\/dispatch-recall-acceptance-.*\.json$/u,
+        ),
+        record: expect.objectContaining({
+          mode: "dispatch-recall-acceptance-record",
+          status: "human_gate_ready",
+          requiredApproval: "human",
+          nextAction: "await_human_dispatch_approval",
+          approved: false,
+          dispatchTriggered: false,
+          selectedCandidateCount: 1,
+          previewedCandidateCount: 1,
+          taskIds: ["DISPATCH-RECALL-A"],
+        }),
+        constraintsVerified: expect.objectContaining({
+          stateWritten: "no",
+          artifactWritten: "acceptance-record-only",
+          acceptanceRecordWritten: "yes",
+          recordWritten: "yes",
+          dispatchTriggered: "no",
+          sessionsSpawnCalled: "no",
+          taskGraphMutated: "no",
+          applied: "no",
+        }),
+      }),
+    );
+    const writtenRecord = JSON.parse(
+      readFileSync(path.join(workspaceRoot, ...(write.recordPath ?? "").split("/")), "utf8"),
+    );
+    expect(writtenRecord).toEqual(
+      expect.objectContaining({ acceptanceId: write.record?.acceptanceId }),
+    );
+    expect(existsSync(path.join(workspaceRoot, "runtime", "dispatch", "proposals"))).toBe(false);
   });
 
   it("blocks dispatch recall acceptance when selected candidates have no recall hits", async () => {
@@ -2700,6 +2747,44 @@ describe("server KB API", () => {
         }),
         constraintsVerified: expect.objectContaining({
           stateWritten: "no",
+          acceptanceRecordWritten: "no",
+          recordWritten: "no",
+          dispatchTriggered: "no",
+          sessionsSpawnCalled: "no",
+          applied: "no",
+        }),
+      }),
+    );
+    expect(
+      existsSync(path.join(workspaceRoot, "runtime", "dispatch", "recall-acceptance-records")),
+    ).toBe(false);
+  });
+
+  it("serves dispatch recall acceptance writes over HTTP and blocks empty previews", async () => {
+    const workspaceRoot = makeWorkspace();
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/dispatch-recall-preview/acceptance?limit=1&recallLimit=1", "POST"),
+      response.res,
+      workspaceRoot,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(409);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        mode: "dispatch-recall-acceptance-record-write",
+        status: "blocked",
+        readyForHumanGate: false,
+        wrote: false,
+        recordPath: null,
+        record: null,
+        acceptance: expect.objectContaining({
+          blockReasons: ["no_selected_candidates"],
+        }),
+        constraintsVerified: expect.objectContaining({
+          stateWritten: "no",
+          artifactWritten: "no",
           acceptanceRecordWritten: "no",
           recordWritten: "no",
           dispatchTriggered: "no",
@@ -3141,10 +3226,10 @@ describe("server KB API", () => {
     expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "POST");
   });
 
-  it("rejects dispatch recall acceptance writes", async () => {
+  it("rejects unsupported dispatch recall acceptance methods", async () => {
     const response = makeResponse();
     const handled = await handleKbHttpRequest(
-      makeReq("/api/kb/dispatch-recall-preview/acceptance", "POST"),
+      makeReq("/api/kb/dispatch-recall-preview/acceptance", "PUT"),
       response.res,
       makeWorkspace(),
     );
@@ -3152,7 +3237,7 @@ describe("server KB API", () => {
     expect(handled).toBe(true);
     expect(response.res.statusCode).toBe(405);
     expect(response.text()).toBe("Method Not Allowed");
-    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET, POST");
   });
 
   it("rejects dispatch recall acceptance record dry-run writes", async () => {

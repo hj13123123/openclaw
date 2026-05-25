@@ -964,6 +964,34 @@ type DispatchRecallAcceptanceRecordDryRun = {
   constraintsVerified: ReturnType<typeof dispatchRecallAcceptanceRecordDryRunConstraints>;
 };
 
+type DispatchRecallAcceptanceRecord = {
+  mode: "dispatch-recall-acceptance-record";
+  acceptanceId: string;
+  createdAt: string;
+  status: "human_gate_ready";
+  requiredApproval: "human";
+  nextAction: "await_human_dispatch_approval";
+  approved: false;
+  dispatchTriggered: false;
+  selectedCandidateCount: number;
+  previewedCandidateCount: number;
+  taskIds: string[];
+  acceptance: DispatchRecallAcceptance;
+  constraintsVerified: ReturnType<typeof dispatchRecallAcceptanceRecordWriteConstraints>;
+};
+
+type DispatchRecallAcceptanceRecordWrite = {
+  mode: "dispatch-recall-acceptance-record-write";
+  checkedAt: string;
+  status: "human_gate_ready" | "blocked";
+  readyForHumanGate: boolean;
+  wrote: boolean;
+  recordPath: string | null;
+  acceptance: DispatchRecallAcceptance;
+  record: DispatchRecallAcceptanceRecord | null;
+  constraintsVerified: ReturnType<typeof dispatchRecallAcceptanceRecordWriteConstraints>;
+};
+
 type SemanticRebuildStatusStage =
   | "plan_missing"
   | "acceptance_blocked"
@@ -3533,6 +3561,31 @@ function dispatchRecallAcceptanceRecordDryRunConstraints(embeddingCalls: "no" | 
   };
 }
 
+function dispatchRecallAcceptanceRecordWriteConstraints(
+  embeddingCalls: "no" | "yes",
+  recordWritten: "no" | "yes",
+) {
+  return {
+    stateWritten: "no" as const,
+    artifactWritten:
+      recordWritten === "yes" ? ("acceptance-record-only" as const) : ("no" as const),
+    eventEmitted: "no" as const,
+    dispatchTriggered: "no" as const,
+    sessionsSpawnCalled: "no" as const,
+    taskGraphMutated: "no" as const,
+    returnConsumed: "no" as const,
+    receiptWritten: "no" as const,
+    embeddingCalls,
+    keywordIndexWritten: "no" as const,
+    semanticIndexWritten: "no" as const,
+    vectorIndexWritten: "no" as const,
+    realRebuildTriggered: "no" as const,
+    applied: "no" as const,
+    acceptanceRecordWritten: recordWritten,
+    recordWritten,
+  };
+}
+
 function dispatchRecallPreviewConstraintsValid(preview: DispatchRecallPreview): boolean {
   const constraints = preview.constraintsVerified;
   return (
@@ -3610,6 +3663,69 @@ export async function buildDispatchRecallAcceptanceRecordDryRun(
     constraintsVerified: dispatchRecallAcceptanceRecordDryRunConstraints(
       acceptance.constraintsVerified.embeddingCalls,
     ),
+  };
+}
+
+export async function writeDispatchRecallAcceptanceRecord(
+  workspaceRoot: string,
+  params: { limit?: number | null; recallLimit?: number | null } = {},
+  options?: KbHttpOptions,
+): Promise<DispatchRecallAcceptanceRecordWrite> {
+  const checkedAt = new Date().toISOString();
+  const acceptance = await checkDispatchRecallPreviewAcceptance(workspaceRoot, params, options);
+  const embeddingCalls = acceptance.constraintsVerified.embeddingCalls;
+  if (!acceptance.readyForHumanGate) {
+    return {
+      mode: "dispatch-recall-acceptance-record-write",
+      checkedAt,
+      status: "blocked",
+      readyForHumanGate: false,
+      wrote: false,
+      recordPath: null,
+      acceptance,
+      record: null,
+      constraintsVerified: dispatchRecallAcceptanceRecordWriteConstraints(embeddingCalls, "no"),
+    };
+  }
+
+  const acceptanceId = `dispatch-recall-acceptance-${randomUUID()}`;
+  const recordPath = [
+    "runtime",
+    "dispatch",
+    "recall-acceptance-records",
+    `${acceptanceId}.json`,
+  ].join("/");
+  const outputFile = path.join(workspaceRoot, ...recordPath.split("/"));
+  const constraintsVerified = dispatchRecallAcceptanceRecordWriteConstraints(embeddingCalls, "yes");
+  const record: DispatchRecallAcceptanceRecord = {
+    mode: "dispatch-recall-acceptance-record",
+    acceptanceId,
+    createdAt: checkedAt,
+    status: "human_gate_ready",
+    requiredApproval: "human",
+    nextAction: "await_human_dispatch_approval",
+    approved: false,
+    dispatchTriggered: false,
+    selectedCandidateCount: acceptance.previewSummary.selectedCandidateCount,
+    previewedCandidateCount: acceptance.previewSummary.previewedCandidateCount,
+    taskIds: acceptance.candidates.map((candidate) => candidate.taskId),
+    acceptance,
+    constraintsVerified,
+  };
+
+  await mkdir(path.dirname(outputFile), { recursive: true });
+  await writeFile(outputFile, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+
+  return {
+    mode: "dispatch-recall-acceptance-record-write",
+    checkedAt,
+    status: "human_gate_ready",
+    readyForHumanGate: true,
+    wrote: true,
+    recordPath,
+    acceptance,
+    record,
+    constraintsVerified,
   };
 }
 
@@ -4669,8 +4785,8 @@ export async function handleKbHttpRequest(
   }
 
   if (requestPath === KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_ROUTE) {
-    if (req.method !== "GET") {
-      sendMethodNotAllowed(res, "GET");
+    if (req.method !== "GET" && req.method !== "POST") {
+      sendMethodNotAllowed(res, "GET, POST");
       return true;
     }
 
@@ -4678,6 +4794,19 @@ export async function handleKbHttpRequest(
       const url = resolveRequestUrl(req);
       const rawLimit = url.searchParams.get("limit");
       const rawRecallLimit = url.searchParams.get("recallLimit");
+      if (req.method === "POST") {
+        const result = await writeDispatchRecallAcceptanceRecord(
+          workspaceRoot,
+          {
+            limit: rawLimit ? Number.parseInt(rawLimit, 10) : null,
+            recallLimit: rawRecallLimit ? Number.parseInt(rawRecallLimit, 10) : null,
+          },
+          options,
+        );
+        sendJson(res, result.wrote ? 201 : 409, result);
+        return true;
+      }
+
       const result = await checkDispatchRecallPreviewAcceptance(
         workspaceRoot,
         {
@@ -4689,12 +4818,19 @@ export async function handleKbHttpRequest(
       sendJson(res, result.readyForHumanGate ? 200 : 409, result);
     } catch (error) {
       sendJson(res, 500, {
-        mode: "dispatch-recall-acceptance-stub",
+        mode:
+          req.method === "POST"
+            ? "dispatch-recall-acceptance-record-write"
+            : "dispatch-recall-acceptance-stub",
         status: "blocked",
         readyForHumanGate: false,
+        wrote: false,
         blockReasons: ["preview_constraints_invalid"],
         error: `KB dispatch recall acceptance failed: ${error instanceof Error ? error.message : String(error)}`,
-        constraintsVerified: dispatchRecallAcceptanceConstraints("no"),
+        constraintsVerified:
+          req.method === "POST"
+            ? dispatchRecallAcceptanceRecordWriteConstraints("no", "no")
+            : dispatchRecallAcceptanceConstraints("no"),
       });
     }
     return true;

@@ -460,6 +460,39 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("routes KB dispatch recall acceptance writes through the HTTP fast path", async () => {
+    await withGatewayServer({
+      prefix: "kb-dispatch-recall-acceptance-write-fast-path",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = createRequest({
+          path: "/api/kb/dispatch-recall-preview/acceptance?limit=1&recallLimit=1",
+          method: "POST",
+        });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(409);
+        expect(JSON.parse(getBody())).toEqual(
+          expect.objectContaining({
+            mode: "dispatch-recall-acceptance-record-write",
+            status: "blocked",
+            readyForHumanGate: false,
+            wrote: false,
+            constraintsVerified: expect.objectContaining({
+              stateWritten: "no",
+              acceptanceRecordWritten: "no",
+              recordWritten: "no",
+              dispatchTriggered: "no",
+              sessionsSpawnCalled: "no",
+              applied: "no",
+            }),
+          }),
+        );
+      },
+    });
+  });
+
   it("routes KB dispatch recall acceptance record dry-run through the HTTP fast path", async () => {
     await withGatewayServer({
       prefix: "kb-dispatch-recall-acceptance-record-dry-run-fast-path",
