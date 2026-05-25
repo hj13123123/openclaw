@@ -1,6 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
   AUTH_TOKEN,
@@ -874,6 +876,56 @@ describe("gateway probe endpoints", () => {
                 rolledBack: "none",
                 autoPromote: "disabled",
               },
+            }),
+          }),
+        );
+      },
+    });
+  });
+
+  it("routes execution lease evaluation through the HTTP fast path", async () => {
+    await withGatewayServer({
+      prefix: "execution-lease-evaluate-fast-path",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = Readable.from([
+          JSON.stringify({
+            now: "2026-05-26T00:07:00.000Z",
+            transcriptLines: [
+              JSON.stringify({
+                type: "message",
+                timestamp: "2026-05-26T00:00:00.000Z",
+                message: { role: "user", content: "dispatch TASK-A" },
+              }),
+            ],
+            taskMetadata: { taskId: "TASK-A", taskType: "realTask" },
+            config: { noProgressTimeoutSec: 300, hardStopSec: 1800 },
+          }),
+        ]) as IncomingMessage;
+        req.url = "/api/execution-lease/evaluate";
+        req.method = "POST";
+        req.headers = { "content-type": "application/json" };
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual(
+          expect.objectContaining({
+            ok: true,
+            mode: "dry-run",
+            data: expect.objectContaining({
+              lease: expect.objectContaining({
+                leaseVerdict: "EXECUTION_STALLED",
+              }),
+              humanGatePlan: expect.objectContaining({
+                action: "create_dry_run_candidate",
+              }),
+            }),
+            constraintsVerified: expect.objectContaining({
+              readOnly: "yes",
+              humanGateCandidateWritten: "no",
+              sessionKilled: "no",
+              applied: "no",
             }),
           }),
         );

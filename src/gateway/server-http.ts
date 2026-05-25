@@ -99,6 +99,9 @@ let recoveryApiModulePromise: Promise<typeof import("./server-recovery-api.js")>
 let promotionCandidatesApiModulePromise:
   | Promise<typeof import("./server-promotion-candidates-api.js")>
   | undefined;
+let executionLeaseApiModulePromise:
+  | Promise<typeof import("./server-execution-lease-api.js")>
+  | undefined;
 let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefined;
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
 let hudApiModulePromise: Promise<typeof import("./server-hud-api.js")> | undefined;
@@ -163,6 +166,11 @@ function getRecoveryApiModule() {
 function getPromotionCandidatesApiModule() {
   promotionCandidatesApiModulePromise ??= import("./server-promotion-candidates-api.js");
   return promotionCandidatesApiModulePromise;
+}
+
+function getExecutionLeaseApiModule() {
+  executionLeaseApiModulePromise ??= import("./server-execution-lease-api.js");
+  return executionLeaseApiModulePromise;
 }
 
 function getOpenAiHttpModule() {
@@ -454,6 +462,10 @@ function isRecoveryStatePath(pathname: string): boolean {
 
 function isPromotionCandidatesStatePath(pathname: string): boolean {
   return pathname === "/api/promotion-candidates/scan";
+}
+
+function isExecutionLeaseStatePath(pathname: string): boolean {
+  return pathname === "/api/execution-lease/evaluate";
 }
 
 function isSessionKillPath(pathname: string): boolean {
@@ -1231,6 +1243,14 @@ export function createGatewayHttpServer(opts: {
         const handled = await (
           await getPromotionCandidatesApiModule()
         ).handlePromotionCandidatesHttpRequest(req, res, hudWorkspaceRoot);
+        if (handled) {
+          return;
+        }
+      }
+      if (isExecutionLeaseStatePath(requestPath)) {
+        const handled = await (
+          await getExecutionLeaseApiModule()
+        ).handleExecutionLeaseHttpRequest(req, res);
         if (handled) {
           return;
         }
