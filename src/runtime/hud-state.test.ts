@@ -371,6 +371,19 @@ describe("HUD state core", () => {
       skipCount: 0,
       warningCount: 0,
     });
+    expect(state.promotionCandidates).toMatchObject({
+      available: false,
+      status: "missing",
+      stats: {
+        total: 0,
+        byState: {},
+        byRisk: {},
+        byConsistency: {},
+        invalid: 0,
+        safeApplyEligible: 0,
+      },
+      errorCount: 0,
+    });
   });
 
   it("adds D7 control and recovery summaries to watchdog conditions", () => {
@@ -466,6 +479,67 @@ describe("HUD state core", () => {
         returnConsumerProcessable: 1,
         returnConsumerSkipped: 3,
         returnConsumerPlanWarning: 2,
+      },
+    });
+  });
+
+  it("adds D9 promotion candidate scan issues to watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      promotionCandidates: {
+        available: true,
+        status: "ok",
+        sourceFile: "evolution/promotion-candidates.json",
+        stateFile: "evolution/candidate-gate-state.json",
+        generatedAt,
+        lastSyncedAt: generatedAt,
+        stats: {
+          total: 4,
+          byState: {
+            pending: 2,
+            invalid: 1,
+            rejected: 1,
+          },
+          byRisk: {
+            low: 3,
+            high: 1,
+          },
+          byConsistency: {
+            ok: 2,
+            "orphan-write": 1,
+            invalid: 1,
+          },
+          invalid: 1,
+          safeApplyEligible: 3,
+        },
+        errorCount: 1,
+        constraintsVerified: {
+          readOnly: "yes",
+          candidateStateWritten: "no",
+          truthFilesWritten: "no",
+          applied: "none",
+          rolledBack: "none",
+          autoPromote: "disabled",
+        },
+      },
+    });
+
+    expect(state.promotionCandidates).toMatchObject({
+      available: true,
+      status: "ok",
+      stats: {
+        total: 4,
+        invalid: 1,
+        safeApplyEligible: 3,
+      },
+      errorCount: 1,
+    });
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 4,
+      byCondition: {
+        invalidPromotionCandidates: 1,
+        promotionCandidateConsistencyIssue: 2,
+        promotionCandidateScanError: 1,
       },
     });
   });

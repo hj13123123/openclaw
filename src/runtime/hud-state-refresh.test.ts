@@ -77,6 +77,23 @@ describe("HUD state refresh", () => {
         action: "pause",
         status: "pending",
       });
+      writeFileSync(path.join(workspaceRoot, "NEXT_ACTION.md"), "# Next Action\n", "utf8");
+      writeJson(workspaceRoot, "evolution/promotion-candidates.json", {
+        generatedAt: "2026-05-20T00:01:10.000Z",
+        candidates: [
+          {
+            targetFile: "NEXT_ACTION.md",
+            changeType: "append_staleness_note",
+            risk: "low",
+            proposedSnippet: "<!-- truth-crosscheck: hud -->",
+            rollback: "Remove the exact truth-crosscheck line",
+          },
+        ],
+      });
+      writeJson(workspaceRoot, "evolution/candidate-gate-state.json", {
+        lastSyncedAt: "2026-05-20T00:01:20.000Z",
+        candidates: [{ index: 0, approvedAt: "2026-05-20T00:01:21.000Z" }],
+      });
       writeJson(workspaceRoot, "runtime/main/tmp/v2-task-graph-01/task-graph-a.json", {
         graphId: "graph-a",
         parentTaskId: "TASK-PARENT",
@@ -281,6 +298,29 @@ describe("HUD state refresh", () => {
         byStatus: [{ status: "blocked", count: 1 }],
         bySuggestedAction: [{ action: "unblock", count: 1 }],
         errorCount: 0,
+      });
+      expect(written.promotionCandidates).toMatchObject({
+        available: true,
+        status: "ok",
+        generatedAt: "2026-05-20T00:01:10.000Z",
+        lastSyncedAt: "2026-05-20T00:01:20.000Z",
+        stats: {
+          total: 1,
+          byState: { approved: 1 },
+          byRisk: { low: 1 },
+          byConsistency: { ok: 1 },
+          invalid: 0,
+          safeApplyEligible: 1,
+        },
+        errorCount: 0,
+        constraintsVerified: {
+          readOnly: "yes",
+          candidateStateWritten: "no",
+          truthFilesWritten: "no",
+          applied: "none",
+          rolledBack: "none",
+          autoPromote: "disabled",
+        },
       });
       expect(written.mirrorObserve).toMatchObject({
         available: true,

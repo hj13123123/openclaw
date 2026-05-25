@@ -1,4 +1,5 @@
 import type { ControlSignalScanResult } from "./control-signals.js";
+import type { PromotionCandidatesScan } from "./distillation/promotion-candidates.js";
 import type { RecoveryCandidateScanResult } from "./recovery-candidates.js";
 import type { ReturnConsumerPlanScanResult } from "./returns/return-consumer-plan.js";
 
@@ -180,6 +181,18 @@ export type HudReturnConsumerPlanSummary = Pick<
   | "constraintsVerified"
 > & { warningCount: number };
 
+export type HudPromotionCandidatesSummary = Pick<
+  PromotionCandidatesScan,
+  | "available"
+  | "status"
+  | "sourceFile"
+  | "stateFile"
+  | "generatedAt"
+  | "lastSyncedAt"
+  | "stats"
+  | "constraintsVerified"
+> & { errorCount: number };
+
 export interface HudStateInput {
   generatedAt: string;
   positionStatesByAgentId?: Record<string, HudPositionState>;
@@ -194,6 +207,7 @@ export interface HudStateInput {
   semanticRebuild?: HudSemanticRebuildSummary;
   controlSignals?: HudControlSignalsSummary;
   recoveryCandidates?: HudRecoveryCandidatesSummary;
+  promotionCandidates?: HudPromotionCandidatesSummary;
   warnings?: string[];
   agentDefaults?: HudAgentDefault[];
 }
@@ -243,6 +257,7 @@ export interface HudState {
   semanticRebuild: HudSemanticRebuildSummary;
   controlSignals: HudControlSignalsSummary;
   recoveryCandidates: HudRecoveryCandidatesSummary;
+  promotionCandidates: HudPromotionCandidatesSummary;
   warnings: string[];
 }
 
@@ -484,6 +499,34 @@ function defaultReturnConsumerPlanSummary(scannedAt: string): HudReturnConsumerP
   };
 }
 
+function defaultPromotionCandidatesSummary(): HudPromotionCandidatesSummary {
+  return {
+    available: false,
+    status: "missing",
+    sourceFile: "evolution/promotion-candidates.json",
+    stateFile: "evolution/candidate-gate-state.json",
+    generatedAt: null,
+    lastSyncedAt: null,
+    stats: {
+      total: 0,
+      byState: {},
+      byRisk: {},
+      byConsistency: {},
+      invalid: 0,
+      safeApplyEligible: 0,
+    },
+    errorCount: 0,
+    constraintsVerified: {
+      readOnly: "yes",
+      candidateStateWritten: "no",
+      truthFilesWritten: "no",
+      applied: "none",
+      rolledBack: "none",
+      autoPromote: "disabled",
+    },
+  };
+}
+
 function buildWatchdogConditions(
   mirrorObserve: HudMirrorObserveSummary,
   autoEvolutionObserve: HudAutoEvolutionObserveSummary,
@@ -491,6 +534,7 @@ function buildWatchdogConditions(
   controlSignals: HudControlSignalsSummary,
   recoveryCandidates: HudRecoveryCandidatesSummary,
   returnConsumerPlan: HudReturnConsumerPlanSummary,
+  promotionCandidates: HudPromotionCandidatesSummary,
 ): Record<string, number> {
   const byCondition: Record<string, number> = {};
   const taskGraphValidationErrorCount = taskGraphItems.filter(
@@ -574,6 +618,19 @@ function buildWatchdogConditions(
   if (returnConsumerPlan.warningCount > 0) {
     byCondition.returnConsumerPlanWarning = returnConsumerPlan.warningCount;
   }
+  if (promotionCandidates.stats.invalid > 0) {
+    byCondition.invalidPromotionCandidates = promotionCandidates.stats.invalid;
+  }
+  const consistencyIssueCount = Object.entries(promotionCandidates.stats.byConsistency).reduce(
+    (sum, [key, count]) => (key === "ok" ? sum : sum + Math.max(0, count)),
+    0,
+  );
+  if (consistencyIssueCount > 0) {
+    byCondition.promotionCandidateConsistencyIssue = consistencyIssueCount;
+  }
+  if (promotionCandidates.errorCount > 0) {
+    byCondition.promotionCandidateScanError = promotionCandidates.errorCount;
+  }
   return byCondition;
 }
 
@@ -593,6 +650,7 @@ export function generateHudState(input: HudStateInput): HudState {
   const recoveryCandidates = input.recoveryCandidates ?? defaultRecoveryCandidatesSummary();
   const returnConsumerPlan =
     input.returnConsumerPlan ?? defaultReturnConsumerPlanSummary(input.generatedAt);
+  const promotionCandidates = input.promotionCandidates ?? defaultPromotionCandidatesSummary();
   const watchdogConditions = buildWatchdogConditions(
     mirrorObserve,
     autoEvolutionObserve,
@@ -600,6 +658,7 @@ export function generateHudState(input: HudStateInput): HudState {
     controlSignals,
     recoveryCandidates,
     returnConsumerPlan,
+    promotionCandidates,
   );
   const watchdogConditionAlertCount = Object.values(watchdogConditions).reduce(
     (sum, count) => sum + count,
@@ -663,6 +722,7 @@ export function generateHudState(input: HudStateInput): HudState {
     semanticRebuild,
     controlSignals,
     recoveryCandidates,
+    promotionCandidates,
     warnings,
   };
 }

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { scanControlSignals } from "./control-signals.js";
+import { scanPromotionCandidates } from "./distillation/promotion-candidates.js";
 import { readAutoEvolutionState } from "./evolution/auto-evolution-observe.js";
 import {
   generateHudState,
@@ -8,6 +9,7 @@ import {
   type HudPendingReturnItem,
   type HudMirrorObserveSummary,
   type HudPositionState,
+  type HudPromotionCandidatesSummary,
   type HudReturnConsumerPlanSummary,
   type HudState,
   type HudTaskGraphItem,
@@ -138,6 +140,21 @@ function readReturnConsumerPlan(workspaceRoot: string): HudReturnConsumerPlanSum
     skipCount: scan.skipCount,
     byReason: scan.byReason,
     warningCount: scan.warnings.length,
+    constraintsVerified: scan.constraintsVerified,
+  };
+}
+
+function readPromotionCandidates(workspaceRoot: string): HudPromotionCandidatesSummary {
+  const scan = scanPromotionCandidates(workspaceRoot);
+  return {
+    available: scan.available,
+    status: scan.status,
+    sourceFile: scan.sourceFile,
+    stateFile: scan.stateFile,
+    generatedAt: scan.generatedAt,
+    lastSyncedAt: scan.lastSyncedAt,
+    stats: scan.stats,
+    errorCount: scan.errors.length,
     constraintsVerified: scan.constraintsVerified,
   };
 }
@@ -345,6 +362,7 @@ export function generateHudStateFromWorkspace(
         constraintsVerified: scan.constraintsVerified,
       };
     })(),
+    promotionCandidates: readPromotionCandidates(workspaceRoot),
     warnings,
   });
 }
