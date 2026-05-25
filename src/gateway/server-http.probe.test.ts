@@ -685,6 +685,38 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("routes control signal scans through the HTTP fast path", async () => {
+    await withGatewayServer({
+      prefix: "control-signals-scan-fast-path",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = createRequest({
+          path: "/api/control-signals/scan",
+        });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual(
+          expect.objectContaining({
+            ok: true,
+            data: expect.objectContaining({
+              mode: "observe-only",
+              constraintsVerified: {
+                readOnly: "yes",
+                signalWritten: "no",
+                taskGraphMutated: "no",
+                sessionsSent: "no",
+                autoDispatchTriggered: "no",
+                applied: "no",
+              },
+            }),
+          }),
+        );
+      },
+    });
+  });
+
   it("returns detailed readiness payload for local /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: true,

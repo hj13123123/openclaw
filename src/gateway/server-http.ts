@@ -91,6 +91,9 @@ let autoEvolutionApiModulePromise:
   | Promise<typeof import("./server-auto-evolution-api.js")>
   | undefined;
 let taskGraphApiModulePromise: Promise<typeof import("./server-task-graph-api.js")> | undefined;
+let controlSignalsApiModulePromise:
+  | Promise<typeof import("./server-control-signals-api.js")>
+  | undefined;
 let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefined;
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
 let hudApiModulePromise: Promise<typeof import("./server-hud-api.js")> | undefined;
@@ -140,6 +143,11 @@ function getAutoEvolutionApiModule() {
 function getTaskGraphApiModule() {
   taskGraphApiModulePromise ??= import("./server-task-graph-api.js");
   return taskGraphApiModulePromise;
+}
+
+function getControlSignalsApiModule() {
+  controlSignalsApiModulePromise ??= import("./server-control-signals-api.js");
+  return controlSignalsApiModulePromise;
 }
 
 function getOpenAiHttpModule() {
@@ -332,6 +340,10 @@ function isAutoEvolutionStatePath(pathname: string): boolean {
 
 function isTaskGraphStatePath(pathname: string): boolean {
   return pathname === "/api/task-graph/validation" || pathname === "/api/task-graph/return-preview";
+}
+
+function isControlSignalsStatePath(pathname: string): boolean {
+  return pathname === "/api/control-signals/scan";
 }
 
 function isSessionKillPath(pathname: string): boolean {
@@ -1082,6 +1094,14 @@ export function createGatewayHttpServer(opts: {
         const handled = await (
           await getTaskGraphApiModule()
         ).handleTaskGraphHttpRequest(req, res, hudWorkspaceRoot);
+        if (handled) {
+          return;
+        }
+      }
+      if (isControlSignalsStatePath(requestPath)) {
+        const handled = await (
+          await getControlSignalsApiModule()
+        ).handleControlSignalsHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }
