@@ -94,6 +94,7 @@ let taskGraphApiModulePromise: Promise<typeof import("./server-task-graph-api.js
 let controlSignalsApiModulePromise:
   | Promise<typeof import("./server-control-signals-api.js")>
   | undefined;
+let recoveryApiModulePromise: Promise<typeof import("./server-recovery-api.js")> | undefined;
 let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefined;
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
 let hudApiModulePromise: Promise<typeof import("./server-hud-api.js")> | undefined;
@@ -148,6 +149,11 @@ function getTaskGraphApiModule() {
 function getControlSignalsApiModule() {
   controlSignalsApiModulePromise ??= import("./server-control-signals-api.js");
   return controlSignalsApiModulePromise;
+}
+
+function getRecoveryApiModule() {
+  recoveryApiModulePromise ??= import("./server-recovery-api.js");
+  return recoveryApiModulePromise;
 }
 
 function getOpenAiHttpModule() {
@@ -344,6 +350,10 @@ function isTaskGraphStatePath(pathname: string): boolean {
 
 function isControlSignalsStatePath(pathname: string): boolean {
   return pathname === "/api/control-signals/scan";
+}
+
+function isRecoveryStatePath(pathname: string): boolean {
+  return pathname === "/api/recovery-candidates/scan";
 }
 
 function isSessionKillPath(pathname: string): boolean {
@@ -1102,6 +1112,14 @@ export function createGatewayHttpServer(opts: {
         const handled = await (
           await getControlSignalsApiModule()
         ).handleControlSignalsHttpRequest(req, res, hudWorkspaceRoot);
+        if (handled) {
+          return;
+        }
+      }
+      if (isRecoveryStatePath(requestPath)) {
+        const handled = await (
+          await getRecoveryApiModule()
+        ).handleRecoveryHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }
