@@ -133,6 +133,21 @@ export interface TaskGraphValidationObserveResult {
   writtenReportPaths: string[];
 }
 
+export interface TaskGraphValidationSummary {
+  ok: true;
+  available: boolean;
+  mode: "observe-only";
+  observeOnly: true;
+  applied: false;
+  wouldDispatch: false;
+  sourcePath: string;
+  checkedAt: string;
+  total: number;
+  valid: boolean;
+  bySeverity: Record<TaskGraphValidationReportSeverity, number>;
+  reports: TaskGraphValidationReport[];
+}
+
 export type TaskGraphReturnNodeMatchStatus =
   | "declared_return_id"
   | "matched"
@@ -219,6 +234,10 @@ function safeFileSegment(value: string): string {
 
 function checkedAtFileSegment(checkedAt: string): string {
   return safeFileSegment(checkedAt.replace(/[:]/gu, "-"));
+}
+
+function relativeWorkspacePath(workspaceRoot: string, filePath: string): string {
+  return path.relative(workspaceRoot, filePath).replace(/\\/gu, "/");
 }
 
 function parseIssue(filePath: string, error: unknown): TaskGraphValidationIssue {
@@ -860,5 +879,45 @@ export function runTaskGraphValidationObserve(
     reportDir: path.join(workspaceRoot, TASK_GRAPH_VALIDATION_REPORT_DIR_RELATIVE_PATH),
     reports,
     writtenReportPaths,
+  };
+}
+
+function summarizeTaskGraphValidationSeverity(
+  reports: readonly TaskGraphValidationReport[],
+): Record<TaskGraphValidationReportSeverity, number> {
+  return reports.reduce<Record<TaskGraphValidationReportSeverity, number>>(
+    (summary, report) => {
+      summary[report.severity] += 1;
+      return summary;
+    },
+    { pass: 0, warning: 0, error: 0 },
+  );
+}
+
+export function buildTaskGraphValidationSummary(
+  workspaceRoot: string,
+  options: { checkedAt?: string } = {},
+): TaskGraphValidationSummary {
+  const checkedAt = options.checkedAt ?? new Date().toISOString();
+  const reports = listTaskGraphFiles(workspaceRoot)
+    .map((filePath) => validateTaskGraphFile(filePath, checkedAt))
+    .map((report) => ({
+      ...report,
+      graphPath: relativeWorkspacePath(workspaceRoot, report.graphPath),
+    }));
+
+  return {
+    ok: true,
+    available: reports.length > 0,
+    mode: "observe-only",
+    observeOnly: true,
+    applied: false,
+    wouldDispatch: false,
+    sourcePath: `${TASK_GRAPH_SOURCE_RELATIVE_PATH}/`,
+    checkedAt,
+    total: reports.length,
+    valid: reports.every((report) => report.valid),
+    bySeverity: summarizeTaskGraphValidationSeverity(reports),
+    reports,
   };
 }

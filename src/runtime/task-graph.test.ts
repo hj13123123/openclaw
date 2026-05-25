@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   TASK_GRAPH_SOURCE_RELATIVE_PATH,
   buildTaskGraphReturnPreview,
+  buildTaskGraphValidationSummary,
   listTaskGraphFiles,
   reconcileTaskGraph,
   resolveTaskGraphNextRunnable,
@@ -226,6 +227,39 @@ describe("task graph core", () => {
         applied: false,
       });
       expect(JSON.parse(readFileSync(graphPath, "utf8"))).toEqual(sourceGraph);
+    });
+  });
+
+  it("builds a relative observe-only validation summary for API consumers", () => {
+    withTempWorkspace((workspaceRoot) => {
+      writeJson(
+        path.join(workspaceRoot, TASK_GRAPH_SOURCE_RELATIVE_PATH, "task-graph-a.json"),
+        graph(),
+      );
+
+      const summary = buildTaskGraphValidationSummary(workspaceRoot, { checkedAt: timestamp });
+
+      expect(summary).toEqual(
+        expect.objectContaining({
+          ok: true,
+          available: true,
+          mode: "observe-only",
+          observeOnly: true,
+          applied: false,
+          wouldDispatch: false,
+          sourcePath: "runtime/main/tmp/v2-task-graph-01/",
+          checkedAt: timestamp,
+          total: 1,
+          valid: true,
+          bySeverity: { pass: 1, warning: 0, error: 0 },
+        }),
+      );
+      expect(summary.reports[0]).toEqual(
+        expect.objectContaining({
+          graphPath: "runtime/main/tmp/v2-task-graph-01/task-graph-a.json",
+          severity: "pass",
+        }),
+      );
     });
   });
 
