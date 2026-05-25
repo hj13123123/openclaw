@@ -36,6 +36,7 @@ const KB_SEMANTIC_REBUILD_EXECUTION_STAGE_ROUTE =
   "/api/kb/semantic-rebuild-plan/rebuild-execution-stage";
 const KB_SEMANTIC_REBUILD_EXECUTION_RUN_ROUTE =
   "/api/kb/semantic-rebuild-plan/rebuild-execution-run";
+const KB_SEMANTIC_SEARCH_ROUTE = "/api/kb/semantic-search";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
@@ -719,6 +720,56 @@ type SemanticRebuildExecutionRun = {
   constraintsVerified: SemanticRebuildExecutionRunConstraints;
 };
 
+type SemanticSearchConstraints = {
+  fileWrites: "no";
+  stateWritten: "no";
+  embeddingCalls: "no" | "yes";
+  keywordIndexWritten: "no";
+  semanticIndexWritten: "no";
+  vectorIndexWritten: "no";
+  realRebuildTriggered: "no";
+  applied: "no";
+};
+
+type SemanticSearchBlockReason =
+  | "query_missing"
+  | "semantic_index_missing"
+  | "semantic_index_invalid"
+  | "rebuild_report_missing"
+  | "rebuild_report_invalid"
+  | "vector_index_missing"
+  | "vector_index_invalid"
+  | "memory_search_disabled"
+  | "vector_store_disabled"
+  | "active_index_provider_mismatch"
+  | "active_index_model_mismatch"
+  | "embedding_provider_unavailable"
+  | "embedding_dimension_mismatch";
+
+type SemanticSearchResult = {
+  item: SemanticRebuildSemanticIndex["items"][number];
+  score: number;
+  vectorId: string;
+};
+
+type SemanticSearch = {
+  mode: "semantic-search";
+  checkedAt: string;
+  status: "ready" | "blocked";
+  ready: boolean;
+  query: string;
+  limit: number;
+  blockReasons: SemanticSearchBlockReason[];
+  provider: string | null;
+  model: string | null;
+  embeddingDimensions: number | null;
+  totalIndexed: number;
+  totalVectors: number;
+  returnedResults: number;
+  results: SemanticSearchResult[];
+  constraintsVerified: SemanticSearchConstraints;
+};
+
 type SemanticRebuildStatusStage =
   | "plan_missing"
   | "acceptance_blocked"
@@ -784,8 +835,12 @@ type SemanticRebuildStatus = {
   };
 };
 
+function resolveRequestUrl(req: IncomingMessage): URL {
+  return new URL(req.url ?? "/", "http://localhost");
+}
+
 function resolveRequestPath(req: IncomingMessage): string {
-  return new URL(req.url ?? "/", "http://localhost").pathname;
+  return resolveRequestUrl(req).pathname;
 }
 
 function summarizeIndex(value: unknown): KnowledgeIndexSummary {
@@ -2348,6 +2403,21 @@ function isAppliedExecutionRunReport(value: unknown): value is SemanticRebuildEx
   );
 }
 
+function isSemanticRebuildSemanticIndex(value: unknown): value is SemanticRebuildSemanticIndex {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const index = value as Record<string, unknown>;
+  return (
+    index.version === "v1" &&
+    typeof index.generatedAt === "string" &&
+    typeof index.idempotencyKey === "string" &&
+    typeof index.provider === "string" &&
+    typeof index.model === "string" &&
+    typeof index.dimensions === "number" &&
+    typeof index.totalItems === "number" &&
+    Array.isArray(index.items)
+  );
+}
+
 async function readJsonFile(filePath: string): Promise<unknown | null> {
   try {
     return JSON.parse(await readFile(filePath, "utf8")) as unknown;
@@ -2562,6 +2632,387 @@ async function writeJsonFile(
 
 function vectorToBlob(embedding: number[]): Buffer {
   return Buffer.from(new Float32Array(embedding).buffer);
+}
+
+function noSemanticSearchConstraints(): SemanticSearchConstraints {
+  return {
+    fileWrites: "no",
+    stateWritten: "no",
+    embeddingCalls: "no",
+    keywordIndexWritten: "no",
+    semanticIndexWritten: "no",
+    vectorIndexWritten: "no",
+    realRebuildTriggered: "no",
+    applied: "no",
+  };
+}
+
+function semanticSearchConstraintsWithEmbedding(): SemanticSearchConstraints {
+  return {
+    ...noSemanticSearchConstraints(),
+    embeddingCalls: "yes",
+  };
+}
+
+function blockedSemanticSearch(params: {
+  checkedAt: string;
+  query: string;
+  limit: number;
+  blockReasons: SemanticSearchBlockReason[];
+  provider?: string | null;
+  model?: string | null;
+  embeddingDimensions?: number | null;
+  totalIndexed?: number;
+  totalVectors?: number;
+}): SemanticSearch {
+  return {
+    mode: "semantic-search",
+    checkedAt: params.checkedAt,
+    status: "blocked",
+    ready: false,
+    query: params.query,
+    limit: params.limit,
+    blockReasons: [...new Set(params.blockReasons)],
+    provider: params.provider ?? null,
+    model: params.model ?? null,
+    embeddingDimensions: params.embeddingDimensions ?? null,
+    totalIndexed: params.totalIndexed ?? 0,
+    totalVectors: params.totalVectors ?? 0,
+    returnedResults: 0,
+    results: [],
+    constraintsVerified: noSemanticSearchConstraints(),
+  };
+}
+
+function normalizeSemanticSearchLimit(raw: number | null | undefined): number {
+  if (!Number.isFinite(raw)) return 5;
+  return Math.min(20, Math.max(1, Math.floor(raw ?? 5)));
+}
+
+function cosineSimilarity(left: number[], right: number[]): number {
+  let dot = 0;
+  let leftNorm = 0;
+  let rightNorm = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    const leftValue = left[index] ?? 0;
+    const rightValue = right[index] ?? 0;
+    dot += leftValue * rightValue;
+    leftNorm += leftValue * leftValue;
+    rightNorm += rightValue * rightValue;
+  }
+  if (leftNorm === 0 || rightNorm === 0) return 0;
+  return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
+}
+
+function parseEmbeddingJson(value: string): number[] | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      !Array.isArray(parsed) ||
+      !parsed.every((item) => typeof item === "number" && Number.isFinite(item))
+    ) {
+      return null;
+    }
+    return parsed as number[];
+  } catch {
+    return null;
+  }
+}
+
+async function readSemanticVectors(
+  workspaceRoot: string,
+  relativePath: string,
+): Promise<SemanticRebuildVectorRecord[] | null> {
+  const filePath = path.join(workspaceRoot, ...relativePath.split("/"));
+  try {
+    await readFile(filePath);
+  } catch {
+    return null;
+  }
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(filePath);
+  try {
+    const rows = db
+      .prepare(
+        `SELECT vector_id, item_id, source_type, source_path, text_hash, dimensions, embedding_json
+         FROM vectors`,
+      )
+      .all() as Array<{
+      vector_id: string;
+      item_id: string;
+      source_type: string;
+      source_path: string;
+      text_hash: string;
+      dimensions: number | bigint;
+      embedding_json: string;
+    }>;
+    return rows.map((row) => ({
+      vectorId: row.vector_id,
+      item: {
+        itemId: row.item_id,
+        sourceType: row.source_type === "skill" ? "skill" : "case",
+        sourcePath: row.source_path,
+        title: row.item_id,
+        summary: "",
+        tags: [],
+        keywords: [],
+        risk: "unknown",
+        createdAt: "",
+      },
+      embeddingText: "",
+      embeddingTextHash: row.text_hash,
+      embedding: parseEmbeddingJson(row.embedding_json) ?? [],
+    }));
+  } finally {
+    db.close();
+  }
+}
+
+export async function executeSemanticSearch(
+  workspaceRoot: string,
+  params: { query: string; limit?: number | null },
+  options?: KbHttpOptions,
+): Promise<SemanticSearch> {
+  const checkedAt = new Date().toISOString();
+  const query = params.query.trim();
+  const limit = normalizeSemanticSearchLimit(params.limit ?? null);
+  if (!query) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["query_missing"],
+    });
+  }
+
+  const reportPath = path.join(workspaceRoot, "system", "kb-index", "semantic-rebuild-report.json");
+  const report = await readJsonFile(reportPath);
+  if (!report) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["rebuild_report_missing"],
+    });
+  }
+  if (!isAppliedExecutionRunReport(report)) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["rebuild_report_invalid"],
+    });
+  }
+
+  const semanticIndexPath = path.join(
+    workspaceRoot,
+    ...report.outputs.semanticIndexPath.split("/"),
+  );
+  const semanticIndex = await readJsonFile(semanticIndexPath);
+  if (!semanticIndex) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["semantic_index_missing"],
+      provider: report.provider,
+      model: report.model,
+      embeddingDimensions: report.embeddingDimensions,
+    });
+  }
+  if (!isSemanticRebuildSemanticIndex(semanticIndex)) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["semantic_index_invalid"],
+      provider: report.provider,
+      model: report.model,
+      embeddingDimensions: report.embeddingDimensions,
+    });
+  }
+  if (semanticIndex.provider !== report.provider) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["active_index_provider_mismatch"],
+      provider: report.provider,
+      model: report.model,
+      embeddingDimensions: report.embeddingDimensions,
+      totalIndexed: semanticIndex.totalItems,
+    });
+  }
+  if (semanticIndex.model !== report.model) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["active_index_model_mismatch"],
+      provider: report.provider,
+      model: report.model,
+      embeddingDimensions: report.embeddingDimensions,
+      totalIndexed: semanticIndex.totalItems,
+    });
+  }
+
+  const vectors = await readSemanticVectors(workspaceRoot, report.outputs.vectorIndexPath);
+  if (!vectors) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["vector_index_missing"],
+      provider: report.provider,
+      model: report.model,
+      embeddingDimensions: report.embeddingDimensions,
+      totalIndexed: semanticIndex.totalItems,
+    });
+  }
+  const config = options?.config ?? (options?.loadConfig ?? loadConfig)();
+  const memorySearch = resolveMemorySearchConfig(config, "main");
+  if (!memorySearch) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["memory_search_disabled"],
+      provider: report.provider,
+      model: report.model,
+      embeddingDimensions: report.embeddingDimensions,
+      totalIndexed: semanticIndex.totalItems,
+      totalVectors: vectors.length,
+    });
+  }
+  if (!memorySearch.store.vector.enabled) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["vector_store_disabled"],
+      provider: report.provider,
+      model: report.model,
+      embeddingDimensions: report.embeddingDimensions,
+      totalIndexed: semanticIndex.totalItems,
+      totalVectors: vectors.length,
+    });
+  }
+  if (memorySearch.provider !== "auto" && memorySearch.provider !== report.provider) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["active_index_provider_mismatch"],
+      provider: report.provider,
+      model: report.model,
+      embeddingDimensions: report.embeddingDimensions,
+      totalIndexed: semanticIndex.totalItems,
+      totalVectors: vectors.length,
+    });
+  }
+  if (memorySearch.model && memorySearch.model !== report.model) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["active_index_model_mismatch"],
+      provider: report.provider,
+      model: report.model,
+      embeddingDimensions: report.embeddingDimensions,
+      totalIndexed: semanticIndex.totalItems,
+      totalVectors: vectors.length,
+    });
+  }
+
+  const providerResult = await createEmbeddingProvider({
+    config,
+    agentDir: resolveAgentDir(config, "main"),
+    provider: report.provider,
+    fallback: memorySearch.fallback,
+    model: report.model,
+    local: memorySearch.local,
+    remote: memorySearch.remote
+      ? {
+          baseUrl: memorySearch.remote.baseUrl,
+          apiKey: memorySearch.remote.apiKey,
+          headers: memorySearch.remote.headers,
+        }
+      : undefined,
+    outputDimensionality: memorySearch.outputDimensionality,
+  });
+  if (!providerResult.provider) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["embedding_provider_unavailable"],
+      provider: report.provider,
+      model: report.model,
+      embeddingDimensions: report.embeddingDimensions,
+      totalIndexed: semanticIndex.totalItems,
+      totalVectors: vectors.length,
+    });
+  }
+  const queryVector = await providerResult.provider.embedQuery(query);
+  if (queryVector.length !== report.embeddingDimensions) {
+    return blockedSemanticSearch({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["embedding_dimension_mismatch"],
+      provider: report.provider,
+      model: report.model,
+      embeddingDimensions: report.embeddingDimensions,
+      totalIndexed: semanticIndex.totalItems,
+      totalVectors: vectors.length,
+    });
+  }
+
+  const semanticItems = new Map(semanticIndex.items.map((item) => [item.vectorId, item]));
+  const results: SemanticSearchResult[] = [];
+  for (const vector of vectors) {
+    const item = semanticItems.get(vector.vectorId);
+    if (!item) continue;
+    if (vector.embedding.length !== queryVector.length) {
+      return blockedSemanticSearch({
+        checkedAt,
+        query,
+        limit,
+        blockReasons: ["embedding_dimension_mismatch"],
+        provider: report.provider,
+        model: report.model,
+        embeddingDimensions: report.embeddingDimensions,
+        totalIndexed: semanticIndex.totalItems,
+        totalVectors: vectors.length,
+      });
+    }
+    results.push({
+      item,
+      score: cosineSimilarity(queryVector, vector.embedding),
+      vectorId: vector.vectorId,
+    });
+  }
+
+  const sortedResults = results
+    .sort((left, right) => right.score - left.score || left.vectorId.localeCompare(right.vectorId))
+    .slice(0, limit);
+  return {
+    mode: "semantic-search",
+    checkedAt,
+    status: "ready",
+    ready: true,
+    query,
+    limit,
+    blockReasons: [],
+    provider: report.provider,
+    model: report.model,
+    embeddingDimensions: report.embeddingDimensions,
+    totalIndexed: semanticIndex.totalItems,
+    totalVectors: vectors.length,
+    returnedResults: sortedResults.length,
+    results: sortedResults,
+    constraintsVerified: semanticSearchConstraintsWithEmbedding(),
+  };
 }
 
 async function writeVectorIndexSqlite(params: {
@@ -3005,7 +3456,8 @@ export function isKbApiPath(pathname: string): boolean {
     pathname === KB_SEMANTIC_REBUILD_EXECUTION_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_EXECUTION_CONTRACT_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_EXECUTION_STAGE_ROUTE ||
-    pathname === KB_SEMANTIC_REBUILD_EXECUTION_RUN_ROUTE
+    pathname === KB_SEMANTIC_REBUILD_EXECUTION_RUN_ROUTE ||
+    pathname === KB_SEMANTIC_SEARCH_ROUTE
   );
 }
 
@@ -3395,6 +3847,41 @@ export async function handleKbHttpRequest(
         blockReasons: ["embedding_provider_unavailable"],
         error: `KB semantic rebuild execution failed: ${error instanceof Error ? error.message : String(error)}`,
         constraintsVerified: noExecutionRunConstraints(),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_SEMANTIC_SEARCH_ROUTE) {
+    if (req.method !== "GET") {
+      sendMethodNotAllowed(res, "GET");
+      return true;
+    }
+
+    try {
+      const url = resolveRequestUrl(req);
+      const query = url.searchParams.get("q") ?? url.searchParams.get("query") ?? "";
+      const rawLimit = url.searchParams.get("limit");
+      const result = await executeSemanticSearch(
+        workspaceRoot,
+        {
+          query,
+          limit: rawLimit ? Number.parseInt(rawLimit, 10) : null,
+        },
+        options,
+      );
+      sendJson(
+        res,
+        result.status === "ready" ? 200 : result.blockReasons.includes("query_missing") ? 400 : 409,
+        result,
+      );
+    } catch (error) {
+      sendJson(res, 500, {
+        mode: "semantic-search",
+        status: "blocked",
+        ready: false,
+        error: `KB semantic search failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: noSemanticSearchConstraints(),
       });
     }
     return true;

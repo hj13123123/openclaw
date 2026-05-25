@@ -18,6 +18,7 @@ import {
   checkSemanticRebuildExecutionEntry,
   checkSemanticRebuildPreflight,
   executeSemanticRebuild,
+  executeSemanticSearch,
   getSemanticRebuildStatus,
   handleKbHttpRequest,
   isKbApiPath,
@@ -54,19 +55,28 @@ function writeJson(filePath: string, value: unknown): void {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function registerTestEmbeddingProvider(calls: string[][]): void {
+function registerTestEmbeddingProvider(
+  calls: string[][],
+  overrides: {
+    embedQuery?: (text: string) => Promise<number[]>;
+    embedBatch?: (texts: string[]) => Promise<number[][]>;
+  } = {},
+): void {
   registerMemoryEmbeddingProvider({
     id: "test-embed",
     defaultModel: "test-model",
     transport: "remote",
-    create: async (options) => ({
+    create: async (createOptions) => ({
       provider: {
         id: "test-embed",
-        model: options.model,
-        embedQuery: async () => [1, 0, 0],
+        model: createOptions.model,
+        embedQuery: async (text) => overrides.embedQuery?.(text) ?? [1, 0, 0],
         embedBatch: async (texts) => {
           calls.push(texts);
-          return texts.map((_, index) => [index + 1, index + 2, index + 3]);
+          return (
+            overrides.embedBatch?.(texts) ??
+            texts.map((_, index) => [index + 1, index + 2, index + 3])
+          );
         },
       },
     }),
@@ -137,6 +147,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-execution-contract")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-execution-stage")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-execution-run")).toBe(true);
+    expect(isKbApiPath("/api/kb/semantic-search")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -2087,6 +2098,128 @@ describe("server KB API", () => {
       }),
     );
     expect(calls).toHaveLength(1);
+  });
+
+  it("runs read-only semantic search against active vector outputs", async () => {
+    const workspaceRoot = makeWorkspace();
+    const calls: string[][] = [];
+    const config = semanticRebuildConfig();
+    registerTestEmbeddingProvider(calls, {
+      embedQuery: async () => [1, 0, 0],
+      embedBatch: async (texts) =>
+        texts.map((text) => (text.includes("Task graph recovery") ? [1, 0, 0] : [0, 1, 0])),
+    });
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+      summary: "Recover task graph state",
+    });
+    writeJson(path.join(workspaceRoot, "system", "skill-library", "skill-a.json"), {
+      skillId: "skill-a",
+      title: "KB refresh",
+      trigger: "refresh keyword index",
+      sourceCases: ["case-a"],
+    });
+    await prepareApprovedSemanticRebuild(workspaceRoot, config);
+    await executeSemanticRebuild(workspaceRoot, { config });
+
+    const search = await executeSemanticSearch(
+      workspaceRoot,
+      { query: "graph recovery", limit: 1 },
+      { config },
+    );
+
+    expect(search).toEqual(
+      expect.objectContaining({
+        mode: "semantic-search",
+        status: "ready",
+        ready: true,
+        provider: "test-embed",
+        model: "test-model",
+        embeddingDimensions: 3,
+        totalIndexed: 2,
+        totalVectors: 2,
+        returnedResults: 1,
+        constraintsVerified: {
+          fileWrites: "no",
+          stateWritten: "no",
+          embeddingCalls: "yes",
+          keywordIndexWritten: "no",
+          semanticIndexWritten: "no",
+          vectorIndexWritten: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        },
+      }),
+    );
+    expect(search.results[0]).toEqual(
+      expect.objectContaining({
+        vectorId: "case:case-a",
+        item: expect.objectContaining({ itemId: "case-a" }),
+        score: 1,
+      }),
+    );
+  });
+
+  it("serves read-only semantic search over HTTP query params", async () => {
+    const workspaceRoot = makeWorkspace();
+    const calls: string[][] = [];
+    const config = semanticRebuildConfig();
+    registerTestEmbeddingProvider(calls, {
+      embedQuery: async () => [1, 0, 0],
+      embedBatch: async () => [[1, 0, 0]],
+    });
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+    });
+    await prepareApprovedSemanticRebuild(workspaceRoot, config);
+    await executeSemanticRebuild(workspaceRoot, { config });
+
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-search?q=graph&limit=1", "GET"),
+      response.res,
+      workspaceRoot,
+      { config },
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        mode: "semantic-search",
+        status: "ready",
+        query: "graph",
+        limit: 1,
+        returnedResults: 1,
+      }),
+    );
+  });
+
+  it("blocks semantic search when the query is missing", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-search", "GET"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(400);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        mode: "semantic-search",
+        status: "blocked",
+        ready: false,
+        blockReasons: ["query_missing"],
+        constraintsVerified: expect.objectContaining({
+          fileWrites: "no",
+          embeddingCalls: "no",
+          realRebuildTriggered: "no",
+        }),
+      }),
+    );
   });
 
   it("blocks real semantic rebuild execution when gate records are missing", async () => {
