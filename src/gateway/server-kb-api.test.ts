@@ -15,6 +15,7 @@ import {
   buildSemanticRebuildExecutionDryRun,
   buildSemanticRebuildPlan,
   checkSemanticRebuildProposalAcceptance,
+  checkDispatchRecallPreviewAcceptance,
   checkSemanticRebuildExecutionEntry,
   checkSemanticRebuildPreflight,
   executeDispatchRecallPreview,
@@ -152,6 +153,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/semantic-search")).toBe(true);
     expect(isKbApiPath("/api/kb/hybrid-recall")).toBe(true);
     expect(isKbApiPath("/api/kb/dispatch-recall-preview")).toBe(true);
+    expect(isKbApiPath("/api/kb/dispatch-recall-preview/acceptance")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -2453,6 +2455,121 @@ describe("server KB API", () => {
     expect(
       existsSync(path.join(workspaceRoot, "runtime", "main", "tmp", "runtime-loop-state.json")),
     ).toBe(false);
+
+    const acceptance = await checkDispatchRecallPreviewAcceptance(
+      workspaceRoot,
+      { limit: 1, recallLimit: 1 },
+      { config },
+    );
+
+    expect(acceptance).toEqual(
+      expect.objectContaining({
+        mode: "dispatch-recall-acceptance-stub",
+        status: "ready_for_human_gate",
+        readyForHumanGate: true,
+        blockReasons: [],
+        previewSummary: expect.objectContaining({
+          selectedCandidateCount: 1,
+          previewedCandidateCount: 1,
+        }),
+        candidates: [
+          expect.objectContaining({
+            taskId: "DISPATCH-RECALL-A",
+            dispatchTarget: "/engineering-executive",
+            recallReady: true,
+            returnedResults: 1,
+            topResultIds: ["case-a"],
+          }),
+        ],
+        constraintsVerified: expect.objectContaining({
+          stateWritten: "no",
+          artifactWritten: "no",
+          acceptanceRecordWritten: "no",
+          dispatchTriggered: "no",
+          sessionsSpawnCalled: "no",
+          taskGraphMutated: "no",
+          applied: "no",
+        }),
+      }),
+    );
+  });
+
+  it("blocks dispatch recall acceptance when selected candidates have no recall hits", async () => {
+    const workspaceRoot = makeWorkspace();
+    const tasksPath = path.join(workspaceRoot, "runtime", "tasks", "tasks.jsonl");
+    mkdirSync(path.dirname(tasksPath), { recursive: true });
+    writeFileSync(
+      tasksPath,
+      `${JSON.stringify({
+        taskId: "DISPATCH-RECALL-NO-HIT",
+        status: "queued",
+        sourceRole: "engineering-executive",
+        createdAt: "2026-05-22T08:00:00.000Z",
+        updatedAt: "2026-05-22T08:00:00.000Z",
+        summary: "No matching KB material",
+        metadata: { dispatchTarget: "/engineering-executive" },
+        policyDecision: {
+          decisionId: "decision-1",
+          ruleId: "R001",
+          riskLevel: "L0",
+          action: "auto_close",
+          reason: "unit test",
+          timestamp: "2026-05-22T08:00:00.000Z",
+        },
+      })}\n`,
+      "utf8",
+    );
+    writeJson(path.join(workspaceRoot, "runtime", "main", "tmp", "task-scheduler-state.json"), {
+      enabled: true,
+      mode: "observe",
+      status: "idle",
+    });
+    writeJson(path.join(workspaceRoot, "runtime", "policy", "policy-rules.json"), {
+      $schema: "policy-rules-v1",
+      schedulerPolicy: {
+        runtimeLoopMode: "observe",
+        maxDispatchesPerTick: 1,
+        disableOldTrigger: true,
+        enableContinuousApply: false,
+      },
+      rules: [],
+    });
+
+    const acceptance = await checkDispatchRecallPreviewAcceptance(workspaceRoot, {
+      limit: 1,
+      recallLimit: 1,
+    });
+
+    expect(acceptance).toEqual(
+      expect.objectContaining({
+        mode: "dispatch-recall-acceptance-stub",
+        status: "blocked",
+        readyForHumanGate: false,
+        blockReasons: ["candidate_recall_blocked", "candidate_recall_missing"],
+        previewSummary: expect.objectContaining({
+          selectedCandidateCount: 1,
+          previewedCandidateCount: 1,
+        }),
+        candidates: [
+          expect.objectContaining({
+            taskId: "DISPATCH-RECALL-NO-HIT",
+            recallReady: false,
+            returnedResults: 0,
+            topResultIds: [],
+          }),
+        ],
+        constraintsVerified: expect.objectContaining({
+          stateWritten: "no",
+          acceptanceRecordWritten: "no",
+          dispatchTriggered: "no",
+          sessionsSpawnCalled: "no",
+          taskGraphMutated: "no",
+          embeddingCalls: "no",
+          applied: "no",
+        }),
+      }),
+    );
+    expect(existsSync(path.join(workspaceRoot, "runtime", "dispatch", "proposals"))).toBe(false);
   });
 
   it("serves dispatch recall previews over HTTP without selected candidates", async () => {
@@ -2476,6 +2593,38 @@ describe("server KB API", () => {
         constraintsVerified: expect.objectContaining({
           stateWritten: "no",
           embeddingCalls: "no",
+          dispatchTriggered: "no",
+          sessionsSpawnCalled: "no",
+          applied: "no",
+        }),
+      }),
+    );
+  });
+
+  it("serves dispatch recall acceptance over HTTP and blocks empty previews", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/dispatch-recall-preview/acceptance?limit=1&recallLimit=1", "GET"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(409);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        mode: "dispatch-recall-acceptance-stub",
+        status: "blocked",
+        readyForHumanGate: false,
+        blockReasons: ["no_selected_candidates"],
+        previewSummary: expect.objectContaining({
+          selectedCandidateCount: 0,
+          previewedCandidateCount: 0,
+          warnings: ["no_selected_candidates"],
+        }),
+        constraintsVerified: expect.objectContaining({
+          stateWritten: "no",
+          acceptanceRecordWritten: "no",
           dispatchTriggered: "no",
           sessionsSpawnCalled: "no",
           applied: "no",
@@ -2910,5 +3059,19 @@ describe("server KB API", () => {
     expect(response.res.statusCode).toBe(405);
     expect(response.text()).toBe("Method Not Allowed");
     expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "POST");
+  });
+
+  it("rejects dispatch recall acceptance writes", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/dispatch-recall-preview/acceptance", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
   });
 });

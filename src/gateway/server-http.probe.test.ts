@@ -429,6 +429,37 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("routes KB dispatch recall acceptance through the HTTP fast path", async () => {
+    await withGatewayServer({
+      prefix: "kb-dispatch-recall-acceptance-fast-path",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = createRequest({
+          path: "/api/kb/dispatch-recall-preview/acceptance?limit=1&recallLimit=1",
+        });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(409);
+        expect(JSON.parse(getBody())).toEqual(
+          expect.objectContaining({
+            mode: "dispatch-recall-acceptance-stub",
+            status: "blocked",
+            readyForHumanGate: false,
+            blockReasons: ["no_selected_candidates"],
+            constraintsVerified: expect.objectContaining({
+              stateWritten: "no",
+              acceptanceRecordWritten: "no",
+              dispatchTriggered: "no",
+              sessionsSpawnCalled: "no",
+              applied: "no",
+            }),
+          }),
+        );
+      },
+    });
+  });
+
   it("routes KB semantic rebuild status through the HTTP fast path", async () => {
     await withGatewayServer({
       prefix: "kb-semantic-rebuild-status-fast-path",
