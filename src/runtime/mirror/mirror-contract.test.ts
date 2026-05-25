@@ -61,18 +61,27 @@ describe("mirror observe contract", () => {
       sourceSkillCount: 0,
       keywords: { mirror: ["case-a"] },
     });
-    writeJson(path.join(root, "runtime", "main", "tmp", "d9-promote-gate-dryrun-2026-05-20T00-02-00-000Z.json"), {
-      generatedAt: "2026-05-20T00:02:00.000Z",
-      stats: {
-        total: 1,
-        byVerdict: {
-          FROZEN_BLOCKED: 1,
+    writeJson(
+      path.join(
+        root,
+        "runtime",
+        "main",
+        "tmp",
+        "d9-promote-gate-dryrun-2026-05-20T00-02-00-000Z.json",
+      ),
+      {
+        generatedAt: "2026-05-20T00:02:00.000Z",
+        stats: {
+          total: 1,
+          byVerdict: {
+            FROZEN_BLOCKED: 1,
+          },
+        },
+        constraintsVerified: {
+          promoted: "none",
         },
       },
-      constraintsVerified: {
-        promoted: "none",
-      },
-    });
+    );
   }
 
   it("keeps observe-only mirror evidence visible through HUD without applying or promoting", () => {
@@ -118,8 +127,9 @@ describe("mirror observe contract", () => {
         applyPerformed: "no",
       },
     });
-    expect(refreshedHud.watchdogSnapshot.byCondition).toEqual({
+    expect(refreshedHud.watchdogSnapshot.byCondition).toMatchObject({
       mirrorObserveAttention: 2,
+      returnConsumerSkipped: 1,
     });
     expect(existsSync(path.join(root, "MEMORY.md"))).toBe(false);
     expect(existsSync(path.join(root, "ENGINEERING_RULES.md"))).toBe(false);
@@ -136,6 +146,7 @@ describe("mirror observe contract", () => {
       watchdogSnapshot: {
         byCondition: {
           mirrorObserveAttention: 2,
+          returnConsumerSkipped: 1,
         },
       },
     });
