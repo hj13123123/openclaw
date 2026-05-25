@@ -20,6 +20,8 @@ const KB_SEMANTIC_REBUILD_ACCEPTANCE_RECORDS_ROUTE =
 const KB_SEMANTIC_REBUILD_PREFLIGHT_ROUTE = "/api/kb/semantic-rebuild-plan/rebuild-preflight";
 const KB_SEMANTIC_REBUILD_DRY_RUN_ROUTE = "/api/kb/semantic-rebuild-plan/rebuild-dry-run";
 const KB_SEMANTIC_REBUILD_APPROVAL_ROUTE = "/api/kb/semantic-rebuild-plan/rebuild-approval";
+const KB_SEMANTIC_REBUILD_APPROVAL_RECORDS_ROUTE =
+  "/api/kb/semantic-rebuild-plan/rebuild-approval-records";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
@@ -383,6 +385,45 @@ type SemanticRebuildApprovalRecordWrite = {
   };
 };
 
+type SemanticRebuildApprovalRecordSummary = {
+  recordPath: string;
+  approvalId: string;
+  createdAt: string;
+  status: "rebuild_human_approved";
+  acceptanceId: string;
+  proposalId: string;
+  proposalPath: string;
+  acceptanceRecordPath: string;
+  plannedBatches: number;
+  totalItems: number;
+  requiredApproval: "human";
+  nextAction: "await_rebuild_execution";
+  approved: true;
+  rebuildTriggered: false;
+  constraintsVerified: SemanticRebuildApprovalRecord["constraintsVerified"];
+};
+
+type SemanticRebuildApprovalRecordList = {
+  available: boolean;
+  mode: "rebuild-approval-record-list";
+  reportDir: string;
+  reportPrefix: string;
+  totalRecords: number;
+  returnedRecords: number;
+  invalidRecords: number;
+  latestRecord: SemanticRebuildApprovalRecordSummary | null;
+  records: SemanticRebuildApprovalRecordSummary[];
+  constraintsVerified: {
+    fileWrites: "no";
+    stateWritten: "no";
+    embeddingCalls: "no";
+    keywordIndexWritten: "no";
+    vectorIndexWritten: "no";
+    realRebuildTriggered: "no";
+    applied: "no";
+  };
+};
+
 function resolveRequestPath(req: IncomingMessage): string {
   return new URL(req.url ?? "/", "http://localhost").pathname;
 }
@@ -680,6 +721,38 @@ function isSemanticRebuildAcceptanceRecord(
   );
 }
 
+function isSemanticRebuildApprovalRecord(value: unknown): value is SemanticRebuildApprovalRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const constraints = record.constraintsVerified;
+  return (
+    record.mode === "rebuild-approval-record" &&
+    typeof record.approvalId === "string" &&
+    typeof record.createdAt === "string" &&
+    record.status === "rebuild_human_approved" &&
+    typeof record.acceptanceId === "string" &&
+    typeof record.proposalId === "string" &&
+    typeof record.proposalPath === "string" &&
+    typeof record.acceptanceRecordPath === "string" &&
+    typeof record.plannedBatches === "number" &&
+    typeof record.totalItems === "number" &&
+    record.requiredApproval === "human" &&
+    record.nextAction === "await_rebuild_execution" &&
+    record.approved === true &&
+    record.rebuildTriggered === false &&
+    Boolean(constraints) &&
+    typeof constraints === "object" &&
+    !Array.isArray(constraints) &&
+    (constraints as Record<string, unknown>).approvalRecordWritten === "yes" &&
+    (constraints as Record<string, unknown>).stateWritten === "no" &&
+    (constraints as Record<string, unknown>).embeddingCalls === "no" &&
+    (constraints as Record<string, unknown>).keywordIndexWritten === "no" &&
+    (constraints as Record<string, unknown>).vectorIndexWritten === "no" &&
+    (constraints as Record<string, unknown>).realRebuildTriggered === "no" &&
+    (constraints as Record<string, unknown>).applied === "no"
+  );
+}
+
 function summarizeAcceptanceRecord(
   recordPath: string,
   record: SemanticRebuildAcceptanceRecord,
@@ -691,6 +764,29 @@ function summarizeAcceptanceRecord(
     status: record.status,
     proposalId: record.proposalId,
     proposalPath: record.proposalPath,
+    plannedBatches: record.plannedBatches,
+    totalItems: record.totalItems,
+    requiredApproval: record.requiredApproval,
+    nextAction: record.nextAction,
+    approved: record.approved,
+    rebuildTriggered: record.rebuildTriggered,
+    constraintsVerified: record.constraintsVerified,
+  };
+}
+
+function summarizeApprovalRecord(
+  recordPath: string,
+  record: SemanticRebuildApprovalRecord,
+): SemanticRebuildApprovalRecordSummary {
+  return {
+    recordPath,
+    approvalId: record.approvalId,
+    createdAt: record.createdAt,
+    status: record.status,
+    acceptanceId: record.acceptanceId,
+    proposalId: record.proposalId,
+    proposalPath: record.proposalPath,
+    acceptanceRecordPath: record.acceptanceRecordPath,
     plannedBatches: record.plannedBatches,
     totalItems: record.totalItems,
     requiredApproval: record.requiredApproval,
@@ -1285,6 +1381,75 @@ export async function writeSemanticRebuildApprovalRecord(
   };
 }
 
+export async function listSemanticRebuildApprovalRecords(
+  workspaceRoot: string,
+): Promise<SemanticRebuildApprovalRecordList> {
+  const reportDir = path.join(workspaceRoot, ...SEMANTIC_REBUILD_PLAN_REPORT_DIR.split("/"));
+  const constraintsVerified = {
+    fileWrites: "no" as const,
+    stateWritten: "no" as const,
+    embeddingCalls: "no" as const,
+    keywordIndexWritten: "no" as const,
+    vectorIndexWritten: "no" as const,
+    realRebuildTriggered: "no" as const,
+    applied: "no" as const,
+  };
+  let entries: string[];
+  try {
+    entries = await readdir(reportDir);
+  } catch {
+    return {
+      available: false,
+      mode: "rebuild-approval-record-list",
+      reportDir: SEMANTIC_REBUILD_PLAN_REPORT_DIR,
+      reportPrefix: SEMANTIC_REBUILD_APPROVAL_PREFIX,
+      totalRecords: 0,
+      returnedRecords: 0,
+      invalidRecords: 0,
+      latestRecord: null,
+      records: [],
+      constraintsVerified,
+    };
+  }
+
+  const recordFiles = entries
+    .filter(
+      (entry) =>
+        entry.startsWith(SEMANTIC_REBUILD_APPROVAL_PREFIX) &&
+        entry.endsWith(SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX),
+    )
+    .sort()
+    .reverse();
+  const records: SemanticRebuildApprovalRecordSummary[] = [];
+  let invalidRecords = 0;
+  for (const entry of recordFiles.slice(0, 20)) {
+    const recordPath = [SEMANTIC_REBUILD_PLAN_REPORT_DIR, entry].join("/");
+    try {
+      const parsed = JSON.parse(await readFile(path.join(reportDir, entry), "utf8")) as unknown;
+      if (!isSemanticRebuildApprovalRecord(parsed)) {
+        invalidRecords += 1;
+        continue;
+      }
+      records.push(summarizeApprovalRecord(recordPath, parsed));
+    } catch {
+      invalidRecords += 1;
+    }
+  }
+
+  return {
+    available: records.length > 0,
+    mode: "rebuild-approval-record-list",
+    reportDir: SEMANTIC_REBUILD_PLAN_REPORT_DIR,
+    reportPrefix: SEMANTIC_REBUILD_APPROVAL_PREFIX,
+    totalRecords: recordFiles.length,
+    returnedRecords: records.length,
+    invalidRecords,
+    latestRecord: records[0] ?? null,
+    records,
+    constraintsVerified,
+  };
+}
+
 export function isKbApiPath(pathname: string): boolean {
   return (
     pathname === KB_STATE_ROUTE ||
@@ -1295,7 +1460,8 @@ export function isKbApiPath(pathname: string): boolean {
     pathname === KB_SEMANTIC_REBUILD_ACCEPTANCE_RECORDS_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_PREFLIGHT_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_DRY_RUN_ROUTE ||
-    pathname === KB_SEMANTIC_REBUILD_APPROVAL_ROUTE
+    pathname === KB_SEMANTIC_REBUILD_APPROVAL_ROUTE ||
+    pathname === KB_SEMANTIC_REBUILD_APPROVAL_RECORDS_ROUTE
   );
 }
 
@@ -1528,6 +1694,33 @@ export async function handleKbHttpRequest(
         wrote: false,
         error: `KB semantic rebuild approval check failed: ${error instanceof Error ? error.message : String(error)}`,
         constraintsVerified: approvalRecordConstraints("no"),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_SEMANTIC_REBUILD_APPROVAL_RECORDS_ROUTE) {
+    if (req.method !== "GET") {
+      sendMethodNotAllowed(res, "GET");
+      return true;
+    }
+
+    try {
+      sendJson(res, 200, await listSemanticRebuildApprovalRecords(workspaceRoot));
+    } catch (error) {
+      sendJson(res, 500, {
+        available: false,
+        mode: "rebuild-approval-record-list",
+        error: `KB semantic rebuild approval records read failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: {
+          fileWrites: "no",
+          stateWritten: "no",
+          embeddingCalls: "no",
+          keywordIndexWritten: "no",
+          vectorIndexWritten: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        },
       });
     }
     return true;
