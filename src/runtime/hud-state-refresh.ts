@@ -19,15 +19,14 @@ import { scanReturnConsumerPlan } from "./returns/return-consumer-plan.js";
 import { scanReturnInbox } from "./returns/return-inbox.js";
 import {
   TASK_GRAPH_SOURCE_RELATIVE_PATH,
-  TASK_GRAPH_VALIDATION_REPORT_DIR_RELATIVE_PATH,
-  runTaskGraphValidationObserve,
+  buildTaskGraphValidationSummary,
+  type TaskGraphValidationReport,
 } from "./task-graph.js";
 
 export const HUD_STATE_RELATIVE_PATH = "runtime/main/tmp/task-hud-state.json";
 const POSITIONS_STATE_REL = "system/positions/state";
 const CASE_LIBRARY_REL = "system/case-library";
 const TASK_GRAPH_SOURCE_REL = TASK_GRAPH_SOURCE_RELATIVE_PATH;
-const TASK_GRAPH_VALIDATION_REL = TASK_GRAPH_VALIDATION_REPORT_DIR_RELATIVE_PATH;
 const SEMANTIC_REBUILD_REPORT_REL = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_ACCEPTANCE_PREFIX = "kb-semantic-rebuild-acceptance-";
@@ -170,27 +169,20 @@ function readCaseLibraryState(
   return { totalCaseFiles: files.length, lastCaseAt };
 }
 
-function readValidationReports(
-  workspaceRoot: string,
-  warnings: string[],
+function validationReportMap(
+  validationReports: readonly TaskGraphValidationReport[],
 ): Map<string, { checkedAt: string; severity: string | null }> {
-  const validationDir = path.join(workspaceRoot, TASK_GRAPH_VALIDATION_REL);
   const reports = new Map<string, { checkedAt: string; severity: string | null }>();
-  for (const filePath of listFiles(validationDir, (name) =>
-    /^task-graph-validation-.*\.json$/u.test(name),
-  )) {
-    const report = readJsonFile(filePath);
-    const graphId = firstString(report, ["graphId"]);
-    const checkedAt = firstString(report, ["checkedAt"]);
-    if (!graphId || !checkedAt) continue;
+  for (const report of validationReports) {
+    const graphId = report.graphId;
+    if (!graphId) continue;
     const current = reports.get(graphId);
-    if (current && Date.parse(current.checkedAt) >= Date.parse(checkedAt)) continue;
+    if (current && Date.parse(current.checkedAt) >= Date.parse(report.checkedAt)) continue;
     reports.set(graphId, {
-      checkedAt,
-      severity: firstString(report, ["severity"]),
+      checkedAt: report.checkedAt,
+      severity: report.severity,
     });
   }
-  if (!existsSync(validationDir)) warnings.push("task graph validation directory missing");
   return reports;
 }
 
@@ -213,11 +205,15 @@ function nodeStatusSummary(nodes: unknown[]): HudTaskGraphItem["nodeSummary"] {
   return summary;
 }
 
-function readTaskGraphs(workspaceRoot: string, warnings: string[]): HudTaskGraphItem[] {
+function readTaskGraphs(
+  workspaceRoot: string,
+  warnings: string[],
+  validationReports: readonly TaskGraphValidationReport[],
+): HudTaskGraphItem[] {
   const taskGraphDir = path.join(workspaceRoot, TASK_GRAPH_SOURCE_REL);
   if (!existsSync(taskGraphDir)) return [];
 
-  const validationReports = readValidationReports(workspaceRoot, warnings);
+  const validationReportsByGraphId = validationReportMap(validationReports);
   return listFiles(taskGraphDir, (name) => /^task-graph-.*\.json$/u.test(name))
     .map((filePath) => {
       const graph = readJsonFile(filePath);
@@ -227,7 +223,7 @@ function readTaskGraphs(workspaceRoot: string, warnings: string[]): HudTaskGraph
       }
       const graphId = firstString(graph, ["graphId"]);
       const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
-      const matchedValidation = graphId ? validationReports.get(graphId) : undefined;
+      const matchedValidation = graphId ? validationReportsByGraphId.get(graphId) : undefined;
       return {
         graphId,
         title: firstString(graph, ["title"]),
@@ -242,19 +238,6 @@ function readTaskGraphs(workspaceRoot: string, warnings: string[]): HudTaskGraph
       } satisfies HudTaskGraphItem;
     })
     .filter((item): item is HudTaskGraphItem => item !== null);
-}
-
-function refreshTaskGraphValidationReports(
-  workspaceRoot: string,
-  checkedAt: string,
-  warnings: string[],
-): void {
-  try {
-    runTaskGraphValidationObserve(workspaceRoot, { checkedAt, writeReports: true });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    warnings.push(`Failed to refresh task graph validation reports: ${message}`);
-  }
 }
 
 function readLatestMirrorObserve(
@@ -415,7 +398,9 @@ export function generateHudStateFromWorkspace(
   generatedAt = new Date().toISOString(),
 ): HudState {
   const warnings: string[] = [];
-  refreshTaskGraphValidationReports(workspaceRoot, generatedAt, warnings);
+  const taskGraphValidationSummary = buildTaskGraphValidationSummary(workspaceRoot, {
+    checkedAt: generatedAt,
+  });
   const { totalCaseFiles, lastCaseAt } = readCaseLibraryState(workspaceRoot, warnings);
   return generateHudState({
     generatedAt,
@@ -424,7 +409,7 @@ export function generateHudStateFromWorkspace(
     returnConsumerPlan: readReturnConsumerPlan(workspaceRoot),
     totalCaseFiles,
     lastCaseAt,
-    taskGraphItems: readTaskGraphs(workspaceRoot, warnings),
+    taskGraphItems: readTaskGraphs(workspaceRoot, warnings, taskGraphValidationSummary.reports),
     taskGraphSourcePath: `${TASK_GRAPH_SOURCE_REL}/`,
     mirrorObserve: readLatestMirrorObserve(workspaceRoot, warnings),
     autoEvolutionObserve: readLatestAutoEvolutionObserve(workspaceRoot, warnings),

@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -252,6 +260,11 @@ describe("HUD state refresh", () => {
         },
         nextRunnable: ["c"],
       });
+      expect(
+        readdirSync(path.join(workspaceRoot, "runtime/main/tmp")).some((name) =>
+          name.startsWith("task-graph-validation-"),
+        ),
+      ).toBe(false);
       expect(written.controlSignals).toMatchObject({
         mode: "observe-only",
         status: "ok",
