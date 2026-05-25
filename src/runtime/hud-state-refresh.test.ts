@@ -201,16 +201,16 @@ describe("HUD state refresh", () => {
       expect(written.agentGroups.map((agent) => agent.agentId)).toEqual([
         "main",
         "engineering-executive",
-        "evolution-curator",
+        "patrol",
       ]);
+      expect(written.agentGroups.find((agent) => agent.agentId === "patrol")).toMatchObject({
+        role: "observability",
+        status: "unknown",
+        source: "configured",
+      });
       expect(
         written.agentGroups.find((agent) => agent.agentId === "evolution-curator"),
-      ).toMatchObject({
-        role: "observability",
-        status: "completed",
-        source: "position-state",
-      });
-      expect(written.agentGroups.find((agent) => agent.agentId === "patrol")).toBeUndefined();
+      ).toBeUndefined();
       expect(written.returnInbox.pendingCount).toBe(1);
       expect(written.returnInbox.pendingItems[0]).toMatchObject({
         returnId: "return-a.json",

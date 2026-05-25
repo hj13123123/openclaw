@@ -1012,8 +1012,10 @@ export class TaskHUD extends LitElement {
                         >
                       </div>
                       <div class="meta">
-                        ${labelStatus(agent.status)} · 真实状态 ·
-                        ${formatRelative(agent.lastProgressAt)}
+                        ${agent.source === "configured"
+                          ? "待接入"
+                          : html`${labelStatus(agent.status)} · 真实状态 ·
+                            ${formatRelative(agent.lastProgressAt)}`}
                       </div>
                       <div
                         class="secondary"

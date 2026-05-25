@@ -68,6 +68,7 @@ describe("HUD state core", () => {
       "main",
       "engineering-executive",
       "front-end-executive",
+      "patrol",
     ]);
     expect(state.globalStatus).toMatchObject({
       status: "healthy",
@@ -83,7 +84,12 @@ describe("HUD state core", () => {
       source: "position-state",
       progressDerivation: "position-state",
     });
-    expect(state.agentGroups.find((agent) => agent.agentId === "patrol")).toBeUndefined();
+    expect(state.agentGroups.find((agent) => agent.agentId === "patrol")).toMatchObject({
+      role: "observability",
+      status: "unknown",
+      source: "configured",
+      progressDerivation: "unknown",
+    });
   });
 
   it("marks pending returns as attention_required", () => {

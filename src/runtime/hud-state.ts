@@ -48,7 +48,7 @@ export interface HudAgentGroup {
   currentTask: string | null;
   currentTaskTitle: string | null;
   progressPct: number;
-  source: "position-state";
+  source: "position-state" | "configured";
   progressDerivation: "position-state" | "unknown";
   hasAlerts: boolean;
   lastProgressAt: string | null;
@@ -234,9 +234,10 @@ export const DEFAULT_HUD_AGENT_DEFAULTS: HudAgentDefault[] = [
   { agentId: "main", displayName: "main", role: "orchestrator" },
   { agentId: "engineering-executive", displayName: "Engineering Executive", role: "execution" },
   { agentId: "front-end-executive", displayName: "Front-End Executive", role: "execution" },
-  { agentId: "evolution-curator", displayName: "Evolution Curator", role: "observability" },
   { agentId: "patrol", displayName: "Patrol", role: "observability" },
 ];
+
+const HUD_CONFIGURED_AGENT_IDS = new Set(["patrol"]);
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
@@ -303,7 +304,10 @@ function buildAgentGroups(input: HudStateInput): HudAgentGroup[] {
   const statesByAgentId = input.positionStatesByAgentId ?? {};
   const defaultsById = new Map(defaults.map((item) => [item.agentId, item]));
   const defaultOrderById = new Map(defaults.map((item, index) => [item.agentId, index]));
-  const agentIds = Object.keys(statesByAgentId).sort((a, b) => {
+  const configuredIds = defaults
+    .map((item) => item.agentId)
+    .filter((agentId) => statesByAgentId[agentId] || HUD_CONFIGURED_AGENT_IDS.has(agentId));
+  const agentIds = configuredIds.sort((a, b) => {
     const aOrder = defaultOrderById.get(a) ?? Number.MAX_SAFE_INTEGER;
     const bOrder = defaultOrderById.get(b) ?? Number.MAX_SAFE_INTEGER;
     return aOrder === bOrder ? a.localeCompare(b) : aOrder - bOrder;
@@ -312,7 +316,10 @@ function buildAgentGroups(input: HudStateInput): HudAgentGroup[] {
   return agentIds.map((agentId) => {
     const state = statesByAgentId[agentId];
     const defaultValue = defaultsById.get(agentId);
-    const status = normalizeHudAgentStatus(firstString(state, ["status", "currentState", "state"]));
+    const source = state ? "position-state" : "configured";
+    const status = state
+      ? normalizeHudAgentStatus(firstString(state, ["status", "currentState", "state"]))
+      : "unknown";
     return {
       agentId,
       displayName: defaultValue?.displayName ?? agentId,
@@ -332,8 +339,8 @@ function buildAgentGroups(input: HudStateInput): HudAgentGroup[] {
           Math.floor(firstNumber(state, ["progressPct", "progress", "completionPct"]) ?? 0),
         ),
       ),
-      source: "position-state",
-      progressDerivation: "position-state",
+      source,
+      progressDerivation: state ? "position-state" : "unknown",
       hasAlerts: status === "failed" || status === "attention_required",
       lastProgressAt: firstString(state, [
         "lastProgressAt",
@@ -552,7 +559,10 @@ export function generateHudState(input: HudStateInput): HudState {
   let globalStatus: HudState["globalStatus"]["status"] = "healthy";
   if (failedCount > 0 || pendingReturnItems.length > 0) {
     globalStatus = "attention_required";
-  } else if (warnings.length > 0 || agentGroups.some((agent) => agent.status === "unknown")) {
+  } else if (
+    warnings.length > 0 ||
+    agentGroups.some((agent) => agent.status === "unknown" && agent.source === "position-state")
+  ) {
     globalStatus = "degraded";
   }
 
