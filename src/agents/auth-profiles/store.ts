@@ -35,6 +35,7 @@ import type { AuthProfileStore } from "./types.js";
 
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
+  overlayExternalAuthProfiles?: boolean;
   readOnly?: boolean;
   syncExternalCli?: boolean;
 };
@@ -172,6 +173,12 @@ function shouldSyncExternalCliCredentials(options?: { syncExternalCli?: boolean 
   return options?.syncExternalCli !== false;
 }
 
+function shouldOverlayExternalAuthProfiles(
+  options?: Pick<LoadAuthProfileStoreOptions, "overlayExternalAuthProfiles">,
+): boolean {
+  return options?.overlayExternalAuthProfiles !== false;
+}
+
 export function loadAuthProfileStore(): AuthProfileStore {
   const asStore = loadPersistedAuthProfileStore();
   if (asStore) {
@@ -305,18 +312,22 @@ export function loadAuthProfileStoreForRuntime(
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
+  const overlayExternal = shouldOverlayExternalAuthProfiles(options);
   if (!agentDir || authPath === mainAuthPath) {
-    return overlayExternalAuthProfiles(store, { agentDir });
+    return overlayExternal ? overlayExternalAuthProfiles(store, { agentDir }) : store;
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
-  return overlayExternalAuthProfiles(mergeAuthProfileStores(mainStore, store), {
-    agentDir,
-  });
+  const merged = mergeAuthProfileStores(mainStore, store);
+  return overlayExternal ? overlayExternalAuthProfiles(merged, { agentDir }) : merged;
 }
 
 export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthProfileStore {
-  return loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, allowKeychainPrompt: false });
+  return loadAuthProfileStoreForRuntime(agentDir, {
+    readOnly: true,
+    allowKeychainPrompt: false,
+    overlayExternalAuthProfiles: false,
+  });
 }
 
 export function ensureAuthProfileStore(

@@ -2,10 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderExternalAuthProfile } from "../plugins/types.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 const mocks = vi.hoisted(() => ({
+  resolveExternalAuthProfilesWithPlugins: vi.fn<() => ProviderExternalAuthProfile[]>(() => []),
   syncExternalCliCredentials: vi.fn((store: AuthProfileStore) => {
     store.profiles["minimax-portal:default"] = {
       type: "oauth",
@@ -23,18 +25,23 @@ vi.mock("./auth-profiles/external-cli-sync.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveExternalAuthProfilesWithPlugins: () => [],
+  resolveExternalAuthProfilesWithPlugins: mocks.resolveExternalAuthProfilesWithPlugins,
 }));
 
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
 let loadAuthProfileStoreForRuntime: typeof import("./auth-profiles.js").loadAuthProfileStoreForRuntime;
+let loadAuthProfileStoreForSecretsRuntime: typeof import("./auth-profiles.js").loadAuthProfileStoreForSecretsRuntime;
 
 describe("auth profiles read-only external CLI sync", () => {
   beforeEach(async () => {
     vi.resetModules();
-    ({ clearRuntimeAuthProfileStoreSnapshots, loadAuthProfileStoreForRuntime } =
-      await import("./auth-profiles.js"));
+    ({
+      clearRuntimeAuthProfileStoreSnapshots,
+      loadAuthProfileStoreForRuntime,
+      loadAuthProfileStoreForSecretsRuntime,
+    } = await import("./auth-profiles.js"));
     clearRuntimeAuthProfileStoreSnapshots();
+    mocks.resolveExternalAuthProfilesWithPlugins.mockClear();
     mocks.syncExternalCliCredentials.mockClear();
   });
 
@@ -77,6 +84,49 @@ describe("auth profiles read-only external CLI sync", () => {
         provider: "openai",
         key: "sk-test",
       });
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips plugin external auth overlays for secrets runtime read-only loads", () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-secrets-runtime-"));
+    try {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const baseline: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {},
+      };
+      fs.writeFileSync(authPath, `${JSON.stringify(baseline, null, 2)}\n`, "utf8");
+      mocks.resolveExternalAuthProfilesWithPlugins.mockReturnValueOnce([
+        {
+          profileId: "openai-codex:default",
+          credential: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "plugin-access-token",
+            refresh: "plugin-refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      ]);
+
+      const loaded = loadAuthProfileStoreForSecretsRuntime(agentDir);
+
+      expect(mocks.syncExternalCliCredentials).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({ log: false }),
+      );
+      expect(loaded.profiles["minimax-portal:default"]).toMatchObject({
+        type: "oauth",
+        provider: "minimax-portal",
+      });
+      expect(loaded.profiles["openai-codex:default"]).toBeUndefined();
+      expect(mocks.resolveExternalAuthProfilesWithPlugins).not.toHaveBeenCalled();
+
+      const persisted = JSON.parse(fs.readFileSync(authPath, "utf8")) as AuthProfileStore;
+      expect(persisted.profiles["minimax-portal:default"]).toBeUndefined();
+      expect(persisted.profiles["openai-codex:default"]).toBeUndefined();
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }

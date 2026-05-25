@@ -256,6 +256,22 @@ function hasConfiguredPluginConfigEntry(cfg: OpenClawConfig): boolean {
   );
 }
 
+function hasSetupRelevantPluginConfigEntry(cfg: OpenClawConfig): boolean {
+  const entries = cfg.plugins?.entries;
+  if (!entries || typeof entries !== "object") {
+    return false;
+  }
+  return Object.values(entries).some((entry) => {
+    if (!isRecord(entry) || !isRecord(entry.config)) {
+      return false;
+    }
+    if (entry.enabled !== undefined) {
+      return false;
+    }
+    return Object.keys(entry.config).some((key) => key !== "webSearch" && key !== "webFetch");
+  });
+}
+
 function listContainsNormalized(value: unknown, expected: string): boolean {
   return (
     Array.isArray(value) &&
@@ -292,7 +308,7 @@ function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
   if (isRecord(cfg.tools?.web) && isRecord((cfg.tools.web as Record<string, unknown>).x_search)) {
     return true;
   }
-  return hasConfiguredPluginConfigEntry(cfg);
+  return hasSetupRelevantPluginConfigEntry(cfg);
 }
 
 function hasPluginEntries(cfg: OpenClawConfig): boolean {
