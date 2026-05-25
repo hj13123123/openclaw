@@ -45,7 +45,14 @@ describe("TaskHUD task graph validation", () => {
                 applied: "no",
               },
             },
-            watchdogSnapshot: { totalAlerts: 4 },
+            watchdogSnapshot: {
+              totalAlerts: 4,
+              healthyCount: 2,
+              byCondition: {
+                returnConsumerSkipped: 2,
+                mirrorObserveAttention: 2,
+              },
+            },
             taskGraphs: {
               items: [
                 {
@@ -289,6 +296,10 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("跳过 2");
     expect(compactText).toContain("schema-invalid · 2");
     expect(compactText).toContain("receiptWritten · no");
+    expect(compactText).toContain("健康巡检");
+    expect(compactText).toContain("警告 4");
+    expect(compactText).toContain("returnConsumerSkipped");
+    expect(compactText).toContain("mirrorObserveAttention");
     expect(compactText).toContain("任务图验真");
     expect(compactText).toContain("错误 0");
     expect(compactText).toContain("警告 1");

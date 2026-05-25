@@ -367,6 +367,8 @@ type HUDState = {
   returnConsumerPlan?: ReturnConsumerPlanState;
   watchdogSnapshot?: {
     totalAlerts?: number;
+    healthyCount?: number;
+    byCondition?: Record<string, number>;
   };
   taskGraphs?: {
     items?: TaskGraphItem[];
@@ -999,7 +1001,7 @@ export class TaskHUD extends LitElement {
       </div>
 
       ${this.renderAgents(this.hud?.agentGroups ?? [])} ${this.renderActiveTasks(runningTasks)}
-      ${this.renderReviews(reviews)} ${this.renderReturnConsumerPlan()}
+      ${this.renderReviews(reviews)} ${this.renderReturnConsumerPlan()} ${this.renderWatchdog()}
       ${this.renderTaskGraphs(this.hud?.taskGraphs?.items ?? [])}
       ${this.renderRecentCompletions(this.hud?.recentCompletions?.items ?? [])}
       ${this.renderScheduler()} ${this.renderRuntimeLoop()} ${this.renderTaskState()}
@@ -1150,6 +1152,36 @@ export class TaskHUD extends LitElement {
           </div>
           <span class="badge">只读</span>
         </div>
+      </section>
+    `;
+  }
+
+  private renderWatchdog() {
+    const snapshot = this.hud?.watchdogSnapshot;
+    const entries = Object.entries(snapshot?.byCondition ?? {})
+      .filter(([, count]) => Number(count) > 0)
+      .sort(([left], [right]) => left.localeCompare(right));
+    if (!snapshot || (Number(snapshot.totalAlerts ?? 0) <= 0 && entries.length === 0)) {
+      return nothing;
+    }
+    return html`
+      <section class="section">
+        <h4 class="section-title">健康巡检</h4>
+        <div class="row">
+          <div>
+            <div class="primary">警告 ${snapshot.totalAlerts ?? 0}</div>
+            <div class="secondary">健康岗位 ${snapshot.healthyCount ?? 0}</div>
+          </div>
+          <span class="badge">watchdog</span>
+        </div>
+        ${entries.slice(0, 6).map(
+          ([condition, count]) => html`
+            <div class="row">
+              <div class="primary">${condition}</div>
+              <span class="badge">${count}</span>
+            </div>
+          `,
+        )}
       </section>
     `;
   }
