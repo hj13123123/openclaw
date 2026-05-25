@@ -96,6 +96,9 @@ let controlSignalsApiModulePromise:
   | Promise<typeof import("./server-control-signals-api.js")>
   | undefined;
 let recoveryApiModulePromise: Promise<typeof import("./server-recovery-api.js")> | undefined;
+let promotionCandidatesApiModulePromise:
+  | Promise<typeof import("./server-promotion-candidates-api.js")>
+  | undefined;
 let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefined;
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
 let hudApiModulePromise: Promise<typeof import("./server-hud-api.js")> | undefined;
@@ -155,6 +158,11 @@ function getControlSignalsApiModule() {
 function getRecoveryApiModule() {
   recoveryApiModulePromise ??= import("./server-recovery-api.js");
   return recoveryApiModulePromise;
+}
+
+function getPromotionCandidatesApiModule() {
+  promotionCandidatesApiModulePromise ??= import("./server-promotion-candidates-api.js");
+  return promotionCandidatesApiModulePromise;
 }
 
 function getOpenAiHttpModule() {
@@ -442,6 +450,10 @@ function isControlSignalsStatePath(pathname: string): boolean {
 
 function isRecoveryStatePath(pathname: string): boolean {
   return pathname === "/api/recovery-candidates/scan";
+}
+
+function isPromotionCandidatesStatePath(pathname: string): boolean {
+  return pathname === "/api/promotion-candidates/scan";
 }
 
 function isSessionKillPath(pathname: string): boolean {
@@ -1211,6 +1223,14 @@ export function createGatewayHttpServer(opts: {
         const handled = await (
           await getRecoveryApiModule()
         ).handleRecoveryHttpRequest(req, res, hudWorkspaceRoot);
+        if (handled) {
+          return;
+        }
+      }
+      if (isPromotionCandidatesStatePath(requestPath)) {
+        const handled = await (
+          await getPromotionCandidatesApiModule()
+        ).handlePromotionCandidatesHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }

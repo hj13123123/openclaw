@@ -850,6 +850,37 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("routes promotion candidate scans through the HTTP fast path", async () => {
+    await withGatewayServer({
+      prefix: "promotion-candidates-scan-fast-path",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = createRequest({
+          path: "/api/promotion-candidates/scan",
+        });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual(
+          expect.objectContaining({
+            ok: true,
+            data: expect.objectContaining({
+              constraintsVerified: {
+                readOnly: "yes",
+                candidateStateWritten: "no",
+                truthFilesWritten: "no",
+                applied: "none",
+                rolledBack: "none",
+                autoPromote: "disabled",
+              },
+            }),
+          }),
+        );
+      },
+    });
+  });
+
   it("returns detailed readiness payload for local /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: true,
