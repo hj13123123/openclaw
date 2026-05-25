@@ -1,7 +1,11 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   AUTH_TOKEN,
   AUTH_NONE,
+  createTestGatewayServer,
   createRequest,
   createResponse,
   dispatchRequest,
@@ -9,6 +13,11 @@ import {
 } from "./server-http.test-harness.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import { withTempConfig } from "./test-temp-config.js";
+
+function writeJson(filePath: string, value: unknown): void {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
 
 describe("gateway OpenAI-compatible disabled HTTP routes", () => {
   it("returns 404 when compat endpoints are disabled", async () => {
@@ -685,6 +694,96 @@ describe("gateway probe endpoints", () => {
         );
       },
     });
+  });
+
+  it("serves applied KB semantic rebuild status from the lightweight HTTP fast path", async () => {
+    const workspaceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-kb-status-fast-path-"));
+    try {
+      writeJson(
+        path.join(
+          workspaceRoot,
+          "runtime",
+          "main",
+          "tmp",
+          "kb-semantic-rebuild-plan-2026-05-20T00-01-50-000Z.json",
+        ),
+        {
+          status: "ready",
+          source: { totalItems: 2 },
+          plannedBatches: 1,
+        },
+      );
+      writeJson(
+        path.join(
+          workspaceRoot,
+          "runtime",
+          "main",
+          "tmp",
+          "kb-semantic-rebuild-acceptance-2026-05-20T00-01-55-000Z.json",
+        ),
+        {},
+      );
+      writeJson(
+        path.join(
+          workspaceRoot,
+          "runtime",
+          "main",
+          "tmp",
+          "kb-semantic-rebuild-approval-2026-05-20T00-02-00-000Z.json",
+        ),
+        {},
+      );
+      writeJson(
+        path.join(
+          workspaceRoot,
+          "runtime",
+          "main",
+          "tmp",
+          "kb-semantic-rebuild-execution-run-semantic-rebuild-a.json",
+        ),
+        {
+          status: "applied",
+          totalItems: 2,
+        },
+      );
+
+      await withTempConfig({
+        prefix: "kb-semantic-rebuild-applied-fast-path",
+        cfg: {
+          agents: {
+            list: [{ id: "main", workspace: workspaceRoot }],
+          },
+          gateway: { trustedProxies: [] },
+        },
+        run: async () => {
+          const server = createTestGatewayServer({ resolvedAuth: AUTH_NONE });
+          const req = createRequest({ path: "/api/kb/semantic-rebuild-plan/status" });
+          const { res, getBody } = createResponse();
+          await dispatchRequest(server, req, res);
+
+          expect(res.statusCode).toBe(200);
+          expect(JSON.parse(getBody())).toEqual(
+            expect.objectContaining({
+              mode: "semantic-rebuild-status",
+              stage: "applied",
+              status: "applied",
+              nextAction: "no_action_required",
+              plan: expect.objectContaining({
+                totalItems: 2,
+                plannedBatches: 1,
+              }),
+              constraintsVerified: expect.objectContaining({
+                embeddingCalls: "yes",
+                realRebuildTriggered: "yes",
+                applied: "yes",
+              }),
+            }),
+          );
+        },
+      });
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
   });
 
   it("routes control signal scans through the HTTP fast path", async () => {

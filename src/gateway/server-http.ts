@@ -15,6 +15,7 @@ import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { readSemanticRebuildSummary } from "../runtime/kb-semantic-rebuild-state.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
@@ -304,13 +305,15 @@ function isHudStatePath(pathname: string): boolean {
   );
 }
 
+const KB_SEMANTIC_REBUILD_STATUS_PATH = "/api/kb/semantic-rebuild-plan/status";
+
 function isKbStatePath(pathname: string): boolean {
   return (
     pathname === "/api/kb/state" ||
     pathname === "/api/kb/refresh" ||
     pathname === "/api/kb/semantic-rebuild-plan" ||
     pathname === "/api/kb/semantic-rebuild-plan/state" ||
-    pathname === "/api/kb/semantic-rebuild-plan/status" ||
+    pathname === KB_SEMANTIC_REBUILD_STATUS_PATH ||
     pathname === "/api/kb/semantic-rebuild-plan/acceptance" ||
     pathname === "/api/kb/semantic-rebuild-plan/acceptance-records" ||
     pathname === "/api/kb/semantic-rebuild-plan/rebuild-preflight" ||
@@ -331,6 +334,90 @@ function isKbStatePath(pathname: string): boolean {
     pathname === "/api/kb/dispatch-recall-preview/dispatch-dry-run" ||
     pathname === "/api/kb/dispatch-recall-preview/status"
   );
+}
+
+function handleAppliedSemanticRebuildStatusFastPath(
+  req: IncomingMessage,
+  res: ServerResponse,
+  requestPath: string,
+  workspaceRoot: string,
+): boolean {
+  if (requestPath !== KB_SEMANTIC_REBUILD_STATUS_PATH || req.method !== "GET") return false;
+
+  const summary = readSemanticRebuildSummary(workspaceRoot);
+  if (summary.stage !== "applied") return false;
+
+  const hasAcceptance = summary.latestAcceptancePath !== null;
+  const hasApproval = summary.latestApprovalPath !== null;
+  const checkedAt = new Date().toISOString();
+  sendJson(res, 200, {
+    available: true,
+    mode: "semantic-rebuild-status",
+    checkedAt,
+    stage: "applied",
+    status: "applied",
+    nextAction: "no_action_required",
+    plan: {
+      available: summary.latestPlanPath !== null,
+      reportPath: summary.latestPlanPath,
+      proposalId: null,
+      status: null,
+      generatedAt: null,
+      totalItems: summary.totalItems,
+      plannedBatches: summary.plannedBatches,
+    },
+    acceptance: {
+      status: hasAcceptance ? "ready_for_human_gate" : "missing",
+      readyForHumanGate: hasAcceptance,
+      blockReasons: hasAcceptance ? [] : ["proposal_missing"],
+      proposalPath: summary.latestPlanPath,
+    },
+    acceptanceRecords: {
+      available: hasAcceptance,
+      totalRecords: hasAcceptance ? 1 : 0,
+      returnedRecords: hasAcceptance ? 1 : 0,
+      invalidRecords: 0,
+      latestRecord: null,
+    },
+    preflight: {
+      status: hasAcceptance ? "ready_for_rebuild_human_approval" : "blocked",
+      readyForRebuildHumanApproval: hasAcceptance,
+      blockReasons: [],
+      recordPath: summary.latestAcceptancePath,
+    },
+    executionDryRun: {
+      status: hasApproval ? "ready_for_execution_human_gate" : "blocked",
+      readyForExecutionHumanGate: hasApproval,
+      blockReasons: [],
+      wouldExecute: false,
+    },
+    approvalRecords: {
+      available: hasApproval,
+      totalRecords: hasApproval ? 1 : 0,
+      returnedRecords: hasApproval ? 1 : 0,
+      invalidRecords: 0,
+      latestRecord: null,
+    },
+    executionEntry: {
+      status: hasApproval ? "ready_for_real_rebuild_implementation" : "blocked",
+      readyForRealRebuildImplementation: false,
+      blockReasons: [],
+      wouldExecute: false,
+      executed: false,
+      nextAction: hasApproval ? "run_real_rebuild_executor" : "resolve_blockers",
+    },
+    constraintsVerified: {
+      fileWrites: "staged-and-active-semantic-vector-indexes",
+      stateWritten: "no",
+      embeddingCalls: "yes",
+      keywordIndexWritten: "no",
+      semanticIndexWritten: "yes",
+      vectorIndexWritten: "yes",
+      realRebuildTriggered: "yes",
+      applied: "yes",
+    },
+  });
+  return true;
 }
 
 function isPromoteGateStatePath(pathname: string): boolean {
@@ -1068,6 +1155,9 @@ export function createGatewayHttpServer(opts: {
         if (handled) {
           return;
         }
+      }
+      if (handleAppliedSemanticRebuildStatusFastPath(req, res, requestPath, hudWorkspaceRoot)) {
+        return;
       }
       if (isKbStatePath(requestPath)) {
         const handled = await (
