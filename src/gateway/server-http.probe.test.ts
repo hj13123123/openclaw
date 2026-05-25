@@ -62,6 +62,32 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("routes KB semantic rebuild acceptance records through the HTTP fast path", async () => {
+    await withGatewayServer({
+      prefix: "kb-semantic-acceptance-records-fast-path",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = createRequest({ path: "/api/kb/semantic-rebuild-plan/acceptance-records" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual(
+          expect.objectContaining({
+            available: expect.any(Boolean),
+            mode: "acceptance-record-list",
+            reportPrefix: "kb-semantic-rebuild-acceptance-",
+            constraintsVerified: expect.objectContaining({
+              fileWrites: "no",
+              realRebuildTriggered: "no",
+              applied: "no",
+            }),
+          }),
+        );
+      },
+    });
+  });
+
   it("returns detailed readiness payload for local /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: true,

@@ -9,6 +9,7 @@ import {
   checkSemanticRebuildProposalAcceptance,
   handleKbHttpRequest,
   isKbApiPath,
+  listSemanticRebuildAcceptanceRecords,
   summarizeSemanticBoundary,
   writeSemanticRebuildAcceptanceRecord,
 } from "./server-kb-api.js";
@@ -59,6 +60,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/state")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/acceptance")).toBe(true);
+    expect(isKbApiPath("/api/kb/semantic-rebuild-plan/acceptance-records")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -610,6 +612,122 @@ describe("server KB API", () => {
     );
   });
 
+  it("lists semantic rebuild acceptance records without mutating rebuild state", async () => {
+    const workspaceRoot = makeWorkspace();
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+    });
+
+    const planResponse = makeResponse();
+    await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan", "POST"),
+      planResponse.res,
+      workspaceRoot,
+      {
+        config: {
+          agents: {
+            defaults: {
+              memorySearch: {
+                provider: "volcengine",
+                model: "doubao-embedding",
+                store: { vector: { enabled: true } },
+              },
+            },
+          },
+        },
+      },
+    );
+    const write = await writeSemanticRebuildAcceptanceRecord(workspaceRoot, {
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "volcengine",
+              model: "doubao-embedding",
+              store: { vector: { enabled: true } },
+            },
+          },
+        },
+      },
+    });
+
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/acceptance-records", "GET"),
+      response.res,
+      workspaceRoot,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        available: true,
+        mode: "acceptance-record-list",
+        reportDir: "runtime/main/tmp",
+        reportPrefix: "kb-semantic-rebuild-acceptance-",
+        totalRecords: 1,
+        returnedRecords: 1,
+        invalidRecords: 0,
+        records: [
+          expect.objectContaining({
+            recordPath: write.recordPath,
+            acceptanceId: write.record?.acceptanceId,
+            status: "human_gate_ready",
+            proposalPath: write.proposalPath,
+            plannedBatches: 1,
+            totalItems: 1,
+            requiredApproval: "human",
+            nextAction: "await_human_approval",
+            approved: false,
+            rebuildTriggered: false,
+            constraintsVerified: expect.objectContaining({
+              recordWritten: "yes",
+              realRebuildTriggered: "no",
+              applied: "no",
+            }),
+          }),
+        ],
+        constraintsVerified: {
+          fileWrites: "no",
+          embeddingCalls: "no",
+          keywordIndexWritten: "no",
+          vectorIndexWritten: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        },
+      }),
+    );
+    expect(() =>
+      readFileSync(path.join(workspaceRoot, "system", "kb-index", "semantic-index.json"), "utf8"),
+    ).toThrow();
+    expect(() =>
+      readFileSync(path.join(workspaceRoot, "system", "kb-index", "vector-index.sqlite"), "utf8"),
+    ).toThrow();
+  });
+
+  it("returns an empty semantic rebuild acceptance record list when no records exist", async () => {
+    expect(await listSemanticRebuildAcceptanceRecords(makeWorkspace())).toEqual({
+      available: false,
+      mode: "acceptance-record-list",
+      reportDir: "runtime/main/tmp",
+      reportPrefix: "kb-semantic-rebuild-acceptance-",
+      totalRecords: 0,
+      returnedRecords: 0,
+      invalidRecords: 0,
+      records: [],
+      constraintsVerified: {
+        fileWrites: "no",
+        embeddingCalls: "no",
+        keywordIndexWritten: "no",
+        vectorIndexWritten: "no",
+        realRebuildTriggered: "no",
+        applied: "no",
+      },
+    });
+  });
+
   it("blocks semantic rebuild planning when vector search is disabled", () => {
     const workspaceRoot = makeWorkspace();
     writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
@@ -702,5 +820,19 @@ describe("server KB API", () => {
     expect(response.res.statusCode).toBe(405);
     expect(response.text()).toBe("Method Not Allowed");
     expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET, POST");
+  });
+
+  it("rejects semantic rebuild acceptance record list writes", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/acceptance-records", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
   });
 });
