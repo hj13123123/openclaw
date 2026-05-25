@@ -311,7 +311,8 @@ function isKbStatePath(pathname: string): boolean {
     pathname === "/api/kb/dispatch-recall-preview" ||
     pathname === "/api/kb/dispatch-recall-preview/acceptance" ||
     pathname === "/api/kb/dispatch-recall-preview/acceptance-record-dry-run" ||
-    pathname === "/api/kb/dispatch-recall-preview/acceptance-records"
+    pathname === "/api/kb/dispatch-recall-preview/acceptance-records" ||
+    pathname === "/api/kb/dispatch-recall-preview/preflight"
   );
 }
 

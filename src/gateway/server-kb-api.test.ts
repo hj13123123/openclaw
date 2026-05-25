@@ -15,6 +15,7 @@ import {
   buildSemanticRebuildExecutionDryRun,
   buildSemanticRebuildPlan,
   buildDispatchRecallAcceptanceRecordDryRun,
+  checkDispatchRecallPreflight,
   checkSemanticRebuildProposalAcceptance,
   checkDispatchRecallPreviewAcceptance,
   checkSemanticRebuildExecutionEntry,
@@ -159,6 +160,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/dispatch-recall-preview/acceptance")).toBe(true);
     expect(isKbApiPath("/api/kb/dispatch-recall-preview/acceptance-record-dry-run")).toBe(true);
     expect(isKbApiPath("/api/kb/dispatch-recall-preview/acceptance-records")).toBe(true);
+    expect(isKbApiPath("/api/kb/dispatch-recall-preview/preflight")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -2612,6 +2614,125 @@ describe("server KB API", () => {
         }),
       }),
     );
+
+    const preflight = await checkDispatchRecallPreflight(
+      workspaceRoot,
+      { limit: 1, recallLimit: 1 },
+      { config },
+    );
+
+    expect(preflight).toEqual(
+      expect.objectContaining({
+        available: true,
+        mode: "dispatch-recall-preflight",
+        status: "ready_for_dispatch_human_approval",
+        readyForDispatchHumanApproval: true,
+        blockReasons: [],
+        recordPath: write.recordPath,
+        acceptanceRecord: expect.objectContaining({
+          recordPath: write.recordPath,
+          taskIds: ["DISPATCH-RECALL-A"],
+        }),
+        acceptance: expect.objectContaining({
+          readyForHumanGate: true,
+        }),
+        constraintsVerified: expect.objectContaining({
+          fileWrites: "no",
+          dispatchTriggered: "no",
+          sessionsSpawnCalled: "no",
+          taskGraphMutated: "no",
+          applied: "no",
+        }),
+      }),
+    );
+    expect(existsSync(path.join(workspaceRoot, "runtime", "dispatch", "proposals"))).toBe(false);
+  });
+
+  it("blocks dispatch recall preflight when the latest record drifts from current candidates", async () => {
+    const workspaceRoot = makeWorkspace();
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+      summary: "Recover task graph state",
+      tags: ["D7"],
+    });
+    const tasksPath = path.join(workspaceRoot, "runtime", "tasks", "tasks.jsonl");
+    mkdirSync(path.dirname(tasksPath), { recursive: true });
+    const writeTask = (taskId: string) =>
+      writeFileSync(
+        tasksPath,
+        `${JSON.stringify({
+          taskId,
+          status: "queued",
+          sourceRole: "engineering-executive",
+          createdAt: "2026-05-22T08:00:00.000Z",
+          updatedAt: "2026-05-22T08:00:00.000Z",
+          summary: "Task graph recovery follow-up",
+          metadata: {
+            dispatchTarget: "/engineering-executive",
+            goal: "Recover task graph state",
+          },
+          policyDecision: {
+            decisionId: "decision-1",
+            ruleId: "R001",
+            riskLevel: "L0",
+            action: "auto_close",
+            reason: "unit test",
+            timestamp: "2026-05-22T08:00:00.000Z",
+          },
+        })}\n`,
+        "utf8",
+      );
+    writeTask("DISPATCH-RECALL-A");
+    writeJson(path.join(workspaceRoot, "runtime", "main", "tmp", "task-scheduler-state.json"), {
+      enabled: true,
+      mode: "observe",
+      status: "idle",
+    });
+    writeJson(path.join(workspaceRoot, "runtime", "policy", "policy-rules.json"), {
+      $schema: "policy-rules-v1",
+      schedulerPolicy: {
+        runtimeLoopMode: "observe",
+        maxDispatchesPerTick: 1,
+        disableOldTrigger: true,
+        enableContinuousApply: false,
+      },
+      rules: [],
+    });
+    await handleKbHttpRequest(
+      makeReq("/api/kb/refresh", "POST"),
+      makeResponse().res,
+      workspaceRoot,
+    );
+    const write = await writeDispatchRecallAcceptanceRecord(workspaceRoot, {
+      limit: 1,
+      recallLimit: 1,
+    });
+    expect(write.wrote).toBe(true);
+
+    writeTask("DISPATCH-RECALL-B");
+    const preflight = await checkDispatchRecallPreflight(workspaceRoot, {
+      limit: 1,
+      recallLimit: 1,
+    });
+
+    expect(preflight).toEqual(
+      expect.objectContaining({
+        available: true,
+        mode: "dispatch-recall-preflight",
+        status: "blocked",
+        readyForDispatchHumanApproval: false,
+        blockReasons: expect.arrayContaining(["task_ids_drift", "recall_results_drift"]),
+        recordPath: write.recordPath,
+        acceptanceRecord: expect.objectContaining({
+          taskIds: ["DISPATCH-RECALL-A"],
+        }),
+        acceptance: expect.objectContaining({
+          readyForHumanGate: true,
+          candidates: [expect.objectContaining({ taskId: "DISPATCH-RECALL-B" })],
+        }),
+      }),
+    );
     expect(existsSync(path.join(workspaceRoot, "runtime", "dispatch", "proposals"))).toBe(false);
   });
 
@@ -2832,6 +2953,43 @@ describe("server KB API", () => {
         applied: "no",
       },
     });
+    expect(
+      existsSync(path.join(workspaceRoot, "runtime", "dispatch", "recall-acceptance-records")),
+    ).toBe(false);
+  });
+
+  it("serves dispatch recall preflight and blocks missing records", async () => {
+    const workspaceRoot = makeWorkspace();
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/dispatch-recall-preview/preflight?limit=1&recallLimit=1", "GET"),
+      response.res,
+      workspaceRoot,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(409);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        available: false,
+        mode: "dispatch-recall-preflight",
+        status: "blocked",
+        readyForDispatchHumanApproval: false,
+        blockReasons: ["acceptance_record_missing", "current_acceptance_blocked"],
+        recordPath: null,
+        acceptanceRecord: null,
+        acceptance: expect.objectContaining({
+          blockReasons: ["no_selected_candidates"],
+        }),
+        constraintsVerified: expect.objectContaining({
+          fileWrites: "no",
+          dispatchTriggered: "no",
+          sessionsSpawnCalled: "no",
+          taskGraphMutated: "no",
+          applied: "no",
+        }),
+      }),
+    );
     expect(
       existsSync(path.join(workspaceRoot, "runtime", "dispatch", "recall-acceptance-records")),
     ).toBe(false);
@@ -3335,6 +3493,20 @@ describe("server KB API", () => {
     const response = makeResponse();
     const handled = await handleKbHttpRequest(
       makeReq("/api/kb/dispatch-recall-preview/acceptance-records", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
+  });
+
+  it("rejects dispatch recall preflight writes", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/dispatch-recall-preview/preflight", "POST"),
       response.res,
       makeWorkspace(),
     );
