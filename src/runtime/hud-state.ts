@@ -2,6 +2,7 @@ import type { ControlSignalScanResult } from "./control-signals.js";
 import type { PromotionCandidatesScan } from "./distillation/promotion-candidates.js";
 import type { RecoveryCandidateScanResult } from "./recovery-candidates.js";
 import type { ReturnConsumerPlanScanResult } from "./returns/return-consumer-plan.js";
+import type { SchedulerTickPlan } from "./scheduler-tick-plan.js";
 
 export type HudAgentStatus =
   | "completed"
@@ -193,6 +194,23 @@ export type HudPromotionCandidatesSummary = Pick<
   | "constraintsVerified"
 > & { errorCount: number };
 
+export type HudSchedulerTickPlanSummary = Pick<
+  SchedulerTickPlan,
+  | "mode"
+  | "plannedAt"
+  | "decision"
+  | "reason"
+  | "enabled"
+  | "markerMode"
+  | "stateStatus"
+  | "running"
+  | "totalTicks"
+  | "nextTickIndex"
+  | "maxTicks"
+  | "sourceFiles"
+  | "constraintsVerified"
+> & { warningCount: number };
+
 export interface HudStateInput {
   generatedAt: string;
   positionStatesByAgentId?: Record<string, HudPositionState>;
@@ -208,6 +226,7 @@ export interface HudStateInput {
   controlSignals?: HudControlSignalsSummary;
   recoveryCandidates?: HudRecoveryCandidatesSummary;
   promotionCandidates?: HudPromotionCandidatesSummary;
+  schedulerTickPlan?: HudSchedulerTickPlanSummary;
   warnings?: string[];
   agentDefaults?: HudAgentDefault[];
 }
@@ -258,6 +277,7 @@ export interface HudState {
   controlSignals: HudControlSignalsSummary;
   recoveryCandidates: HudRecoveryCandidatesSummary;
   promotionCandidates: HudPromotionCandidatesSummary;
+  schedulerTickPlan: HudSchedulerTickPlanSummary;
   warnings: string[];
 }
 
@@ -527,6 +547,47 @@ function defaultPromotionCandidatesSummary(): HudPromotionCandidatesSummary {
   };
 }
 
+function defaultSchedulerTickPlanSummary(generatedAt: string): HudSchedulerTickPlanSummary {
+  return {
+    mode: "observe-only",
+    plannedAt: generatedAt,
+    decision: "disabled",
+    reason: "scheduler marker is disabled",
+    enabled: false,
+    markerMode: "observe",
+    stateStatus: "idle",
+    running: false,
+    totalTicks: 0,
+    nextTickIndex: null,
+    maxTicks: {
+      effective: 5,
+      reason: "global_max_ticks",
+      global: 5,
+      perTask: null,
+      perTaskId: null,
+      reached: false,
+    },
+    sourceFiles: {
+      marker: "runtime/main/tmp/task-scheduler-enabled.json",
+      state: "runtime/main/tmp/task-scheduler-state.json",
+      policy: "runtime/scheduler/scheduler-policy.json",
+      tickScript: "evolution/run-auto-progress-tick.ps1",
+      tickScriptExists: false,
+    },
+    warningCount: 0,
+    constraintsVerified: {
+      readOnly: "yes",
+      markerWritten: "no",
+      stateWritten: "no",
+      eventEmitted: "no",
+      scriptInvoked: "no",
+      childProcessSpawned: "no",
+      autoDispatchTriggered: "no",
+      applied: "no",
+    },
+  };
+}
+
 function buildWatchdogConditions(
   mirrorObserve: HudMirrorObserveSummary,
   autoEvolutionObserve: HudAutoEvolutionObserveSummary,
@@ -535,6 +596,7 @@ function buildWatchdogConditions(
   recoveryCandidates: HudRecoveryCandidatesSummary,
   returnConsumerPlan: HudReturnConsumerPlanSummary,
   promotionCandidates: HudPromotionCandidatesSummary,
+  schedulerTickPlan: HudSchedulerTickPlanSummary,
 ): Record<string, number> {
   const byCondition: Record<string, number> = {};
   const taskGraphValidationErrorCount = taskGraphItems.filter(
@@ -631,6 +693,15 @@ function buildWatchdogConditions(
   if (promotionCandidates.errorCount > 0) {
     byCondition.promotionCandidateScanError = promotionCandidates.errorCount;
   }
+  if (schedulerTickPlan.decision === "would_spawn_apply_tick") {
+    byCondition.schedulerWouldSpawnApplyTick = 1;
+  }
+  if (schedulerTickPlan.decision === "max_ticks_reached") {
+    byCondition.schedulerMaxTicksReached = 1;
+  }
+  if (schedulerTickPlan.decision === "already_running") {
+    byCondition.schedulerAlreadyRunning = 1;
+  }
   return byCondition;
 }
 
@@ -651,6 +722,8 @@ export function generateHudState(input: HudStateInput): HudState {
   const returnConsumerPlan =
     input.returnConsumerPlan ?? defaultReturnConsumerPlanSummary(input.generatedAt);
   const promotionCandidates = input.promotionCandidates ?? defaultPromotionCandidatesSummary();
+  const schedulerTickPlan =
+    input.schedulerTickPlan ?? defaultSchedulerTickPlanSummary(input.generatedAt);
   const watchdogConditions = buildWatchdogConditions(
     mirrorObserve,
     autoEvolutionObserve,
@@ -659,6 +732,7 @@ export function generateHudState(input: HudStateInput): HudState {
     recoveryCandidates,
     returnConsumerPlan,
     promotionCandidates,
+    schedulerTickPlan,
   );
   const watchdogConditionAlertCount = Object.values(watchdogConditions).reduce(
     (sum, count) => sum + count,
@@ -723,6 +797,7 @@ export function generateHudState(input: HudStateInput): HudState {
     controlSignals,
     recoveryCandidates,
     promotionCandidates,
+    schedulerTickPlan,
     warnings,
   };
 }

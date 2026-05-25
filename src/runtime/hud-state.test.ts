@@ -384,6 +384,20 @@ describe("HUD state core", () => {
       },
       errorCount: 0,
     });
+    expect(state.schedulerTickPlan).toMatchObject({
+      mode: "observe-only",
+      decision: "disabled",
+      enabled: false,
+      markerMode: "observe",
+      warningCount: 0,
+      constraintsVerified: {
+        readOnly: "yes",
+        scriptInvoked: "no",
+        childProcessSpawned: "no",
+        autoDispatchTriggered: "no",
+        applied: "no",
+      },
+    });
   });
 
   it("adds D7 control and recovery summaries to watchdog conditions", () => {
@@ -540,6 +554,61 @@ describe("HUD state core", () => {
         invalidPromotionCandidates: 1,
         promotionCandidateConsistencyIssue: 2,
         promotionCandidateScanError: 1,
+      },
+    });
+  });
+
+  it("adds scheduler tick plan safety states to watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      schedulerTickPlan: {
+        mode: "observe-only",
+        plannedAt: generatedAt,
+        decision: "would_spawn_apply_tick",
+        reason: "scheduler would spawn the apply tick script in current legacy runtime",
+        enabled: true,
+        markerMode: "apply",
+        stateStatus: "idle",
+        running: false,
+        totalTicks: 1,
+        nextTickIndex: 2,
+        maxTicks: {
+          effective: 5,
+          reason: "global_max_ticks",
+          global: 5,
+          perTask: null,
+          perTaskId: null,
+          reached: false,
+        },
+        sourceFiles: {
+          marker: "runtime/main/tmp/task-scheduler-enabled.json",
+          state: "runtime/main/tmp/task-scheduler-state.json",
+          policy: "runtime/scheduler/scheduler-policy.json",
+          tickScript: "evolution/run-auto-progress-tick.ps1",
+          tickScriptExists: true,
+        },
+        warningCount: 0,
+        constraintsVerified: {
+          readOnly: "yes",
+          markerWritten: "no",
+          stateWritten: "no",
+          eventEmitted: "no",
+          scriptInvoked: "no",
+          childProcessSpawned: "no",
+          autoDispatchTriggered: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.schedulerTickPlan).toMatchObject({
+      decision: "would_spawn_apply_tick",
+      nextTickIndex: 2,
+    });
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 1,
+      byCondition: {
+        schedulerWouldSpawnApplyTick: 1,
       },
     });
   });

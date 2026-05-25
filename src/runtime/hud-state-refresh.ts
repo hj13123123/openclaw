@@ -10,6 +10,7 @@ import {
   type HudMirrorObserveSummary,
   type HudPositionState,
   type HudPromotionCandidatesSummary,
+  type HudSchedulerTickPlanSummary,
   type HudReturnConsumerPlanSummary,
   type HudState,
   type HudTaskGraphItem,
@@ -19,6 +20,7 @@ import { readMirrorObserveState } from "./mirror/mirror-observe.js";
 import { scanRecoveryCandidates } from "./recovery-candidates.js";
 import { scanReturnConsumerPlan } from "./returns/return-consumer-plan.js";
 import { scanReturnInbox } from "./returns/return-inbox.js";
+import { buildSchedulerTickPlan } from "./scheduler-tick-plan.js";
 import {
   TASK_GRAPH_SOURCE_RELATIVE_PATH,
   buildTaskGraphValidationSummary,
@@ -156,6 +158,29 @@ function readPromotionCandidates(workspaceRoot: string): HudPromotionCandidatesS
     stats: scan.stats,
     errorCount: scan.errors.length,
     constraintsVerified: scan.constraintsVerified,
+  };
+}
+
+function readSchedulerTickPlan(
+  workspaceRoot: string,
+  generatedAt: string,
+): HudSchedulerTickPlanSummary {
+  const plan = buildSchedulerTickPlan(workspaceRoot, { plannedAt: generatedAt });
+  return {
+    mode: plan.mode,
+    plannedAt: plan.plannedAt,
+    decision: plan.decision,
+    reason: plan.reason,
+    enabled: plan.enabled,
+    markerMode: plan.markerMode,
+    stateStatus: plan.stateStatus,
+    running: plan.running,
+    totalTicks: plan.totalTicks,
+    nextTickIndex: plan.nextTickIndex,
+    maxTicks: plan.maxTicks,
+    sourceFiles: plan.sourceFiles,
+    warningCount: plan.warnings.length,
+    constraintsVerified: plan.constraintsVerified,
   };
 }
 
@@ -363,6 +388,7 @@ export function generateHudStateFromWorkspace(
       };
     })(),
     promotionCandidates: readPromotionCandidates(workspaceRoot),
+    schedulerTickPlan: readSchedulerTickPlan(workspaceRoot, generatedAt),
     warnings,
   });
 }

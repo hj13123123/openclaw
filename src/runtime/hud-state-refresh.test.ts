@@ -94,6 +94,15 @@ describe("HUD state refresh", () => {
         lastSyncedAt: "2026-05-20T00:01:20.000Z",
         candidates: [{ index: 0, approvedAt: "2026-05-20T00:01:21.000Z" }],
       });
+      writeJson(workspaceRoot, "runtime/main/tmp/task-scheduler-enabled.json", {
+        enabled: true,
+        mode: "observe",
+      });
+      writeJson(workspaceRoot, "runtime/main/tmp/task-scheduler-state.json", {
+        status: "idle",
+        running: false,
+        totalTicks: 0,
+      });
       writeJson(workspaceRoot, "runtime/main/tmp/v2-task-graph-01/task-graph-a.json", {
         graphId: "graph-a",
         parentTaskId: "TASK-PARENT",
@@ -320,6 +329,26 @@ describe("HUD state refresh", () => {
           applied: "none",
           rolledBack: "none",
           autoPromote: "disabled",
+        },
+      });
+      expect(written.schedulerTickPlan).toMatchObject({
+        mode: "observe-only",
+        plannedAt: "2026-05-20T00:02:00.000Z",
+        decision: "observe_only",
+        enabled: true,
+        markerMode: "observe",
+        stateStatus: "idle",
+        totalTicks: 0,
+        warningCount: 1,
+        constraintsVerified: {
+          readOnly: "yes",
+          markerWritten: "no",
+          stateWritten: "no",
+          eventEmitted: "no",
+          scriptInvoked: "no",
+          childProcessSpawned: "no",
+          autoDispatchTriggered: "no",
+          applied: "no",
         },
       });
       expect(written.mirrorObserve).toMatchObject({
