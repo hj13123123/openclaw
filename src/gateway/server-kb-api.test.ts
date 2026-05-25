@@ -25,6 +25,7 @@ import {
   executeHybridRecall,
   executeSemanticRebuild,
   executeSemanticSearch,
+  getDispatchRecallStatus,
   getSemanticRebuildStatus,
   handleKbHttpRequest,
   isKbApiPath,
@@ -163,6 +164,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/dispatch-recall-preview/acceptance-records")).toBe(true);
     expect(isKbApiPath("/api/kb/dispatch-recall-preview/preflight")).toBe(true);
     expect(isKbApiPath("/api/kb/dispatch-recall-preview/dispatch-dry-run")).toBe(true);
+    expect(isKbApiPath("/api/kb/dispatch-recall-preview/status")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -2679,6 +2681,69 @@ describe("server KB API", () => {
         }),
       }),
     );
+
+    const status = await getDispatchRecallStatus(
+      workspaceRoot,
+      { limit: 1, recallLimit: 1 },
+      { config },
+    );
+
+    expect(status).toEqual(
+      expect.objectContaining({
+        available: true,
+        mode: "dispatch-recall-status",
+        stage: "ready_for_dispatch_human_gate",
+        status: "ready_for_dispatch_human_gate",
+        nextAction: "await_human_dispatch_gate",
+        preview: expect.objectContaining({
+          status: "ready",
+          ready: true,
+          selectedCandidateCount: 1,
+          previewedCandidateCount: 1,
+        }),
+        acceptance: expect.objectContaining({
+          status: "ready_for_human_gate",
+          readyForHumanGate: true,
+          candidates: [
+            expect.objectContaining({
+              taskId: "DISPATCH-RECALL-A",
+              topResultIds: ["case-a"],
+            }),
+          ],
+        }),
+        acceptanceRecords: expect.objectContaining({
+          totalRecords: 1,
+          latestRecord: expect.objectContaining({
+            recordPath: write.recordPath,
+          }),
+        }),
+        preflight: expect.objectContaining({
+          status: "ready_for_dispatch_human_approval",
+          readyForDispatchHumanApproval: true,
+          recordPath: write.recordPath,
+        }),
+        dispatchDryRun: expect.objectContaining({
+          status: "ready_for_dispatch_human_gate",
+          readyForDispatchHumanGate: true,
+          wouldDispatch: false,
+          plannedDispatches: [
+            {
+              taskId: "DISPATCH-RECALL-A",
+              dispatchTarget: "/engineering-executive",
+              recallResultIds: ["case-a"],
+            },
+          ],
+        }),
+        constraintsVerified: expect.objectContaining({
+          fileWrites: "no",
+          dispatchTriggered: "no",
+          wouldDispatch: false,
+          sessionsSpawnCalled: "no",
+          taskGraphMutated: "no",
+          applied: "no",
+        }),
+      }),
+    );
     expect(existsSync(path.join(workspaceRoot, "runtime", "dispatch", "proposals"))).toBe(false);
   });
 
@@ -3065,6 +3130,54 @@ describe("server KB API", () => {
     expect(
       existsSync(path.join(workspaceRoot, "runtime", "dispatch", "recall-acceptance-records")),
     ).toBe(false);
+  });
+
+  it("serves dispatch recall status summaries over HTTP", async () => {
+    const workspaceRoot = makeWorkspace();
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/dispatch-recall-preview/status?limit=1&recallLimit=1", "GET"),
+      response.res,
+      workspaceRoot,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        available: true,
+        mode: "dispatch-recall-status",
+        stage: "acceptance_blocked",
+        status: "blocked",
+        nextAction: "resolve_blockers",
+        preview: expect.objectContaining({
+          status: "ready",
+          ready: true,
+          selectedCandidateCount: 0,
+        }),
+        acceptance: expect.objectContaining({
+          status: "blocked",
+          readyForHumanGate: false,
+          blockReasons: ["no_selected_candidates"],
+        }),
+        acceptanceRecords: expect.objectContaining({
+          totalRecords: 0,
+          latestRecord: null,
+        }),
+        dispatchDryRun: expect.objectContaining({
+          status: "blocked",
+          readyForDispatchHumanGate: false,
+          wouldDispatch: false,
+          plannedDispatches: [],
+        }),
+        constraintsVerified: expect.objectContaining({
+          fileWrites: "no",
+          dispatchTriggered: "no",
+          wouldDispatch: false,
+          applied: "no",
+        }),
+      }),
+    );
   });
 
   it("serves dispatch recall acceptance writes over HTTP and blocks empty previews", async () => {
@@ -3593,6 +3706,20 @@ describe("server KB API", () => {
     const response = makeResponse();
     const handled = await handleKbHttpRequest(
       makeReq("/api/kb/dispatch-recall-preview/dispatch-dry-run", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
+  });
+
+  it("rejects dispatch recall status writes", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/dispatch-recall-preview/status", "POST"),
       response.res,
       makeWorkspace(),
     );

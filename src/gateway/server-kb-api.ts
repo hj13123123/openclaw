@@ -57,6 +57,7 @@ const KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_RECORDS_ROUTE =
 const KB_DISPATCH_RECALL_PREVIEW_PREFLIGHT_ROUTE = "/api/kb/dispatch-recall-preview/preflight";
 const KB_DISPATCH_RECALL_PREVIEW_DISPATCH_DRY_RUN_ROUTE =
   "/api/kb/dispatch-recall-preview/dispatch-dry-run";
+const KB_DISPATCH_RECALL_PREVIEW_STATUS_ROUTE = "/api/kb/dispatch-recall-preview/status";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
@@ -1066,6 +1067,51 @@ type DispatchRecallDispatchDryRun = {
     recallResultIds: string[];
   }>;
   constraintsVerified: ReturnType<typeof dispatchRecallDispatchDryRunConstraints>;
+};
+
+type DispatchRecallStatusStage =
+  | "preview_blocked"
+  | "acceptance_blocked"
+  | "acceptance_record_required"
+  | "preflight_blocked"
+  | "dispatch_dry_run_blocked"
+  | "ready_for_dispatch_human_gate"
+  | "blocked";
+
+type DispatchRecallStatus = {
+  available: boolean;
+  mode: "dispatch-recall-status";
+  checkedAt: string;
+  stage: DispatchRecallStatusStage;
+  status: DispatchRecallDispatchDryRun["status"];
+  nextAction: "write_acceptance_record" | "await_human_dispatch_gate" | "resolve_blockers";
+  preview: Pick<
+    DispatchRecallPreview,
+    | "status"
+    | "ready"
+    | "blockReasons"
+    | "warnings"
+    | "selectedCandidateCount"
+    | "previewedCandidateCount"
+    | "recallLimit"
+  >;
+  acceptance: Pick<
+    DispatchRecallAcceptance,
+    "status" | "readyForHumanGate" | "blockReasons" | "candidates"
+  >;
+  acceptanceRecords: Pick<
+    DispatchRecallAcceptanceRecordList,
+    "available" | "totalRecords" | "returnedRecords" | "invalidRecords" | "latestRecord"
+  >;
+  preflight: Pick<
+    DispatchRecallPreflight,
+    "status" | "readyForDispatchHumanApproval" | "blockReasons" | "recordPath"
+  >;
+  dispatchDryRun: Pick<
+    DispatchRecallDispatchDryRun,
+    "status" | "readyForDispatchHumanGate" | "blockReasons" | "wouldDispatch" | "plannedDispatches"
+  >;
+  constraintsVerified: ReturnType<typeof dispatchRecallStatusConstraints>;
 };
 
 type SemanticRebuildStatusStage =
@@ -3720,6 +3766,26 @@ function dispatchRecallDispatchDryRunConstraints() {
   };
 }
 
+function dispatchRecallStatusConstraints(embeddingCalls: "no" | "yes") {
+  return {
+    fileWrites: "no" as const,
+    stateWritten: "no" as const,
+    eventEmitted: "no" as const,
+    dispatchTriggered: "no" as const,
+    wouldDispatch: false as const,
+    sessionsSpawnCalled: "no" as const,
+    taskGraphMutated: "no" as const,
+    returnConsumed: "no" as const,
+    receiptWritten: "no" as const,
+    embeddingCalls,
+    keywordIndexWritten: "no" as const,
+    semanticIndexWritten: "no" as const,
+    vectorIndexWritten: "no" as const,
+    realRebuildTriggered: "no" as const,
+    applied: "no" as const,
+  };
+}
+
 function dispatchRecallPreviewConstraintsValid(preview: DispatchRecallPreview): boolean {
   const constraints = preview.constraintsVerified;
   return (
@@ -4111,6 +4177,96 @@ export async function buildDispatchRecallDispatchDryRun(
     preflight,
     plannedDispatches,
     constraintsVerified: dispatchRecallDispatchDryRunConstraints(),
+  };
+}
+
+function resolveDispatchRecallStatusStage(
+  preview: DispatchRecallPreview,
+  acceptance: DispatchRecallAcceptance,
+  records: DispatchRecallAcceptanceRecordList,
+  preflight: DispatchRecallPreflight,
+  dispatchDryRun: DispatchRecallDispatchDryRun,
+): DispatchRecallStatusStage {
+  if (!preview.ready) return "preview_blocked";
+  if (!acceptance.readyForHumanGate) return "acceptance_blocked";
+  if (!records.latestRecord) return "acceptance_record_required";
+  if (!preflight.readyForDispatchHumanApproval) return "preflight_blocked";
+  if (!dispatchDryRun.readyForDispatchHumanGate) return "dispatch_dry_run_blocked";
+  return "ready_for_dispatch_human_gate";
+}
+
+function dispatchRecallStatusNextAction(
+  stage: DispatchRecallStatusStage,
+): DispatchRecallStatus["nextAction"] {
+  if (stage === "acceptance_record_required") return "write_acceptance_record";
+  if (stage === "ready_for_dispatch_human_gate") return "await_human_dispatch_gate";
+  return "resolve_blockers";
+}
+
+export async function getDispatchRecallStatus(
+  workspaceRoot: string,
+  params: { limit?: number | null; recallLimit?: number | null } = {},
+  options?: KbHttpOptions,
+): Promise<DispatchRecallStatus> {
+  const checkedAt = new Date().toISOString();
+  const preview = await executeDispatchRecallPreview(workspaceRoot, params, options);
+  const acceptance = await checkDispatchRecallPreviewAcceptance(workspaceRoot, params, options);
+  const records = await listDispatchRecallAcceptanceRecords(workspaceRoot);
+  const preflight = await checkDispatchRecallPreflight(workspaceRoot, params, options);
+  const dispatchDryRun = await buildDispatchRecallDispatchDryRun(workspaceRoot, params, options);
+  const stage = resolveDispatchRecallStatusStage(
+    preview,
+    acceptance,
+    records,
+    preflight,
+    dispatchDryRun,
+  );
+
+  return {
+    available: preview.ready || records.latestRecord !== null,
+    mode: "dispatch-recall-status",
+    checkedAt,
+    stage,
+    status: dispatchDryRun.status,
+    nextAction: dispatchRecallStatusNextAction(stage),
+    preview: {
+      status: preview.status,
+      ready: preview.ready,
+      blockReasons: preview.blockReasons,
+      warnings: preview.warnings,
+      selectedCandidateCount: preview.selectedCandidateCount,
+      previewedCandidateCount: preview.previewedCandidateCount,
+      recallLimit: preview.recallLimit,
+    },
+    acceptance: {
+      status: acceptance.status,
+      readyForHumanGate: acceptance.readyForHumanGate,
+      blockReasons: acceptance.blockReasons,
+      candidates: acceptance.candidates,
+    },
+    acceptanceRecords: {
+      available: records.available,
+      totalRecords: records.totalRecords,
+      returnedRecords: records.returnedRecords,
+      invalidRecords: records.invalidRecords,
+      latestRecord: records.latestRecord,
+    },
+    preflight: {
+      status: preflight.status,
+      readyForDispatchHumanApproval: preflight.readyForDispatchHumanApproval,
+      blockReasons: preflight.blockReasons,
+      recordPath: preflight.recordPath,
+    },
+    dispatchDryRun: {
+      status: dispatchDryRun.status,
+      readyForDispatchHumanGate: dispatchDryRun.readyForDispatchHumanGate,
+      blockReasons: dispatchDryRun.blockReasons,
+      wouldDispatch: dispatchDryRun.wouldDispatch,
+      plannedDispatches: dispatchDryRun.plannedDispatches,
+    },
+    constraintsVerified: dispatchRecallStatusConstraints(
+      preview.constraintsVerified.embeddingCalls,
+    ),
   };
 }
 
@@ -4676,7 +4832,8 @@ export function isKbApiPath(pathname: string): boolean {
     pathname === KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_RECORD_DRY_RUN_ROUTE ||
     pathname === KB_DISPATCH_RECALL_PREVIEW_ACCEPTANCE_RECORDS_ROUTE ||
     pathname === KB_DISPATCH_RECALL_PREVIEW_PREFLIGHT_ROUTE ||
-    pathname === KB_DISPATCH_RECALL_PREVIEW_DISPATCH_DRY_RUN_ROUTE
+    pathname === KB_DISPATCH_RECALL_PREVIEW_DISPATCH_DRY_RUN_ROUTE ||
+    pathname === KB_DISPATCH_RECALL_PREVIEW_STATUS_ROUTE
   );
 }
 
@@ -5339,6 +5496,42 @@ export async function handleKbHttpRequest(
         blockReasons: ["acceptance_record_invalid"],
         error: `KB dispatch recall dry-run failed: ${error instanceof Error ? error.message : String(error)}`,
         constraintsVerified: dispatchRecallDispatchDryRunConstraints(),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_DISPATCH_RECALL_PREVIEW_STATUS_ROUTE) {
+    if (req.method !== "GET") {
+      sendMethodNotAllowed(res, "GET");
+      return true;
+    }
+
+    try {
+      const url = resolveRequestUrl(req);
+      const rawLimit = url.searchParams.get("limit");
+      const rawRecallLimit = url.searchParams.get("recallLimit");
+      sendJson(
+        res,
+        200,
+        await getDispatchRecallStatus(
+          workspaceRoot,
+          {
+            limit: rawLimit ? Number.parseInt(rawLimit, 10) : null,
+            recallLimit: rawRecallLimit ? Number.parseInt(rawRecallLimit, 10) : null,
+          },
+          options,
+        ),
+      );
+    } catch (error) {
+      sendJson(res, 500, {
+        available: false,
+        mode: "dispatch-recall-status",
+        status: "blocked",
+        stage: "blocked",
+        nextAction: "resolve_blockers",
+        error: `KB dispatch recall status failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: dispatchRecallStatusConstraints("no"),
       });
     }
     return true;
