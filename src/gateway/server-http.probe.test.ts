@@ -672,12 +672,14 @@ describe("gateway probe endpoints", () => {
             available: expect.any(Boolean),
             mode: "semantic-rebuild-status",
             stage: expect.any(String),
-            status: expect.stringMatching(/^(ready_for_real_rebuild_implementation|blocked)$/u),
+            status: expect.stringMatching(
+              /^(ready_for_real_rebuild_implementation|applied|blocked)$/u,
+            ),
             constraintsVerified: expect.objectContaining({
-              fileWrites: "no",
-              embeddingCalls: "no",
-              realRebuildTriggered: "no",
-              applied: "no",
+              fileWrites: expect.any(String),
+              embeddingCalls: expect.stringMatching(/^(no|yes)$/u),
+              realRebuildTriggered: expect.stringMatching(/^(no|yes)$/u),
+              applied: expect.stringMatching(/^(no|yes)$/u),
             }),
           }),
         );

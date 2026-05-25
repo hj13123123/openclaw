@@ -2076,6 +2076,24 @@ describe("server KB API", () => {
         totalItems: 2,
       }),
     );
+    await expect(getSemanticRebuildStatus(workspaceRoot, { config })).resolves.toEqual(
+      expect.objectContaining({
+        mode: "semantic-rebuild-status",
+        stage: "applied",
+        status: "applied",
+        nextAction: "no_action_required",
+        constraintsVerified: {
+          fileWrites: "staged-and-active-semantic-vector-indexes",
+          stateWritten: "no",
+          embeddingCalls: "yes",
+          keywordIndexWritten: "no",
+          semanticIndexWritten: "yes",
+          vectorIndexWritten: "yes",
+          realRebuildTriggered: "yes",
+          applied: "yes",
+        },
+      }),
+    );
 
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(

@@ -33,6 +33,7 @@ import {
   type KnowledgeIndexItem,
   type KnowledgeMatchResult,
 } from "../runtime/kb-index.js";
+import { readSemanticRebuildSummary } from "../runtime/kb-semantic-rebuild-state.js";
 import { buildRuntimeLoopPreflight } from "../runtime/runtime-loop.js";
 import { getTaskState } from "../runtime/task-state-machine.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
@@ -1132,6 +1133,7 @@ type SemanticRebuildStatusStage =
   | "execution_dry_run_blocked"
   | "rebuild_approval_required"
   | "ready_for_real_rebuild_implementation"
+  | "applied"
   | "blocked";
 
 type SemanticRebuildStatus = {
@@ -1139,8 +1141,8 @@ type SemanticRebuildStatus = {
   mode: "semantic-rebuild-status";
   checkedAt: string;
   stage: SemanticRebuildStatusStage;
-  status: "ready_for_real_rebuild_implementation" | "blocked";
-  nextAction: "run_real_rebuild_executor" | "resolve_blockers";
+  status: "ready_for_real_rebuild_implementation" | "applied" | "blocked";
+  nextAction: "run_real_rebuild_executor" | "no_action_required" | "resolve_blockers";
   plan: {
     available: boolean;
     reportPath: string | null;
@@ -1179,15 +1181,9 @@ type SemanticRebuildStatus = {
     | "executed"
     | "nextAction"
   >;
-  constraintsVerified: {
-    fileWrites: "no";
-    stateWritten: "no";
-    embeddingCalls: "no";
-    keywordIndexWritten: "no";
-    vectorIndexWritten: "no";
-    realRebuildTriggered: "no";
-    applied: "no";
-  };
+  constraintsVerified:
+    | ReturnType<typeof preflightConstraints>
+    | SemanticRebuildExecutionRunConstraints;
 };
 
 function resolveRequestUrl(req: IncomingMessage): URL {
@@ -4554,6 +4550,8 @@ export async function getSemanticRebuildStatus(
   options?: KbHttpOptions,
 ): Promise<SemanticRebuildStatus> {
   const checkedAt = new Date().toISOString();
+  const semanticRebuildSummary = readSemanticRebuildSummary(workspaceRoot);
+  const executionApplied = semanticRebuildSummary.stage === "applied";
   const latestPlan = await readLatestSemanticRebuildPlanReportEntry(workspaceRoot);
   const acceptance = await checkSemanticRebuildProposalAcceptance(workspaceRoot, options);
   const acceptanceRecords = await listSemanticRebuildAcceptanceRecords(workspaceRoot);
@@ -4561,22 +4559,24 @@ export async function getSemanticRebuildStatus(
   const executionDryRun = await buildSemanticRebuildExecutionDryRun(workspaceRoot, options);
   const approvalRecords = await listSemanticRebuildApprovalRecords(workspaceRoot);
   const executionEntry = await checkSemanticRebuildExecutionEntry(workspaceRoot, options);
-  const stage = resolveSemanticRebuildStatusStage(
-    latestPlan,
-    acceptance,
-    preflight,
-    executionDryRun,
-    approvalRecords,
-    executionEntry,
-  );
+  const stage = executionApplied
+    ? "applied"
+    : resolveSemanticRebuildStatusStage(
+        latestPlan,
+        acceptance,
+        preflight,
+        executionDryRun,
+        approvalRecords,
+        executionEntry,
+      );
 
   return {
-    available: latestPlan !== null,
+    available: latestPlan !== null || executionApplied,
     mode: "semantic-rebuild-status",
     checkedAt,
     stage,
-    status: executionEntry.status,
-    nextAction: executionEntry.nextAction,
+    status: executionApplied ? "applied" : executionEntry.status,
+    nextAction: executionApplied ? "no_action_required" : executionEntry.nextAction,
     plan: {
       available: latestPlan !== null,
       reportPath: latestPlan?.reportPath ?? null,
@@ -4626,7 +4626,9 @@ export async function getSemanticRebuildStatus(
       executed: executionEntry.executed,
       nextAction: executionEntry.nextAction,
     },
-    constraintsVerified: preflightConstraints(),
+    constraintsVerified: executionApplied
+      ? appliedExecutionRunConstraints()
+      : preflightConstraints(),
   };
 }
 
