@@ -1,4 +1,10 @@
-export type HudAgentStatus = "completed" | "running" | "failed" | "attention_required" | "unknown" | string;
+export type HudAgentStatus =
+  | "completed"
+  | "running"
+  | "failed"
+  | "attention_required"
+  | "unknown"
+  | string;
 
 export interface HudAgentDefault {
   agentId: string;
@@ -104,6 +110,26 @@ export interface HudAutoEvolutionObserveSummary {
   verdict: string | null;
 }
 
+export interface HudSemanticRebuildSummary {
+  available: boolean;
+  stage:
+    | "plan_missing"
+    | "plan_ready"
+    | "acceptance_ready"
+    | "rebuild_approval_required"
+    | "ready_for_real_rebuild_implementation"
+    | "blocked";
+  latestPlanPath: string | null;
+  latestAcceptancePath: string | null;
+  latestApprovalPath: string | null;
+  totalItems: number | null;
+  plannedBatches: number | null;
+  readyForHumanGate: boolean;
+  readyForExecution: boolean;
+  readyForRealRebuildImplementation: boolean;
+  constraintsVerified: Record<string, string> | null;
+}
+
 export interface HudStateInput {
   generatedAt: string;
   positionStatesByAgentId?: Record<string, HudPositionState>;
@@ -114,6 +140,7 @@ export interface HudStateInput {
   taskGraphSourcePath?: string;
   mirrorObserve?: HudMirrorObserveSummary;
   autoEvolutionObserve?: HudAutoEvolutionObserveSummary;
+  semanticRebuild?: HudSemanticRebuildSummary;
   warnings?: string[];
   agentDefaults?: HudAgentDefault[];
 }
@@ -159,6 +186,7 @@ export interface HudState {
   };
   mirrorObserve: HudMirrorObserveSummary;
   autoEvolutionObserve: HudAutoEvolutionObserveSummary;
+  semanticRebuild: HudSemanticRebuildSummary;
   warnings: string[];
 }
 
@@ -172,7 +200,10 @@ function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function firstString(record: HudPositionState | undefined, names: Array<keyof HudPositionState>): string | null {
+function firstString(
+  record: HudPositionState | undefined,
+  names: Array<keyof HudPositionState>,
+): string | null {
   if (!record) return null;
   for (const name of names) {
     const value = stringValue(record[name]);
@@ -190,7 +221,10 @@ function numberValue(value: unknown): number | null {
   return null;
 }
 
-function firstNumber(record: HudPositionState | undefined, names: Array<keyof HudPositionState>): number | null {
+function firstNumber(
+  record: HudPositionState | undefined,
+  names: Array<keyof HudPositionState>,
+): number | null {
   if (!record) return null;
   for (const name of names) {
     const value = numberValue(record[name]);
@@ -238,12 +272,28 @@ function buildAgentGroups(input: HudStateInput): HudAgentGroup[] {
       displayName: defaultValue?.displayName ?? agentId,
       role: defaultValue?.role ?? "execution",
       status,
-      currentTask: firstString(state, ["currentTask", "currentTaskId", "currentTicketId", "taskId"]),
+      currentTask: firstString(state, [
+        "currentTask",
+        "currentTaskId",
+        "currentTicketId",
+        "taskId",
+      ]),
       currentTaskTitle: firstString(state, ["currentTaskTitle", "currentTicketTitle", "taskTitle"]),
-      progressPct: Math.max(0, Math.min(100, Math.floor(firstNumber(state, ["progressPct", "progress", "completionPct"]) ?? 0))),
+      progressPct: Math.max(
+        0,
+        Math.min(
+          100,
+          Math.floor(firstNumber(state, ["progressPct", "progress", "completionPct"]) ?? 0),
+        ),
+      ),
       progressDerivation: state ? "position-state" : "unknown",
       hasAlerts: status === "failed" || status === "attention_required",
-      lastProgressAt: firstString(state, ["lastProgressAt", "lastActivityAt", "last_activity_at", "updatedAt"]),
+      lastProgressAt: firstString(state, [
+        "lastProgressAt",
+        "lastActivityAt",
+        "last_activity_at",
+        "updatedAt",
+      ]),
       lastCompletionAt: firstString(state, ["lastCompletionAt", "completedAt"]),
     };
   });
@@ -279,16 +329,38 @@ function defaultAutoEvolutionObserveSummary(): HudAutoEvolutionObserveSummary {
   };
 }
 
+function defaultSemanticRebuildSummary(): HudSemanticRebuildSummary {
+  return {
+    available: false,
+    stage: "plan_missing",
+    latestPlanPath: null,
+    latestAcceptancePath: null,
+    latestApprovalPath: null,
+    totalItems: null,
+    plannedBatches: null,
+    readyForHumanGate: false,
+    readyForExecution: false,
+    readyForRealRebuildImplementation: false,
+    constraintsVerified: null,
+  };
+}
+
 function buildWatchdogConditions(
   mirrorObserve: HudMirrorObserveSummary,
   autoEvolutionObserve: HudAutoEvolutionObserveSummary,
   taskGraphItems: readonly HudTaskGraphItem[],
 ): Record<string, number> {
   const byCondition: Record<string, number> = {};
-  const taskGraphValidationErrorCount = taskGraphItems.filter((item) => item.validationSeverity === "error").length;
-  const taskGraphValidationWarningCount = taskGraphItems.filter((item) => item.validationSeverity === "warning").length;
-  if (taskGraphValidationErrorCount > 0) byCondition.taskGraphValidationError = taskGraphValidationErrorCount;
-  if (taskGraphValidationWarningCount > 0) byCondition.taskGraphValidationWarning = taskGraphValidationWarningCount;
+  const taskGraphValidationErrorCount = taskGraphItems.filter(
+    (item) => item.validationSeverity === "error",
+  ).length;
+  const taskGraphValidationWarningCount = taskGraphItems.filter(
+    (item) => item.validationSeverity === "warning",
+  ).length;
+  if (taskGraphValidationErrorCount > 0)
+    byCondition.taskGraphValidationError = taskGraphValidationErrorCount;
+  if (taskGraphValidationWarningCount > 0)
+    byCondition.taskGraphValidationWarning = taskGraphValidationWarningCount;
 
   const bySeverity = mirrorObserve.stats?.bySeverity;
   const attentionCount = numberFromRecord(bySeverity, "attention");
@@ -306,9 +378,9 @@ function buildWatchdogConditions(
     autoLoopTriggered: "no",
     applyPerformed: "no",
   };
-  const violationCount = Object.entries(expectedConstraints)
-    .filter(([key, expected]) => constraints[key] !== undefined && constraints[key] !== expected)
-    .length;
+  const violationCount = Object.entries(expectedConstraints).filter(
+    ([key, expected]) => constraints[key] !== undefined && constraints[key] !== expected,
+  ).length;
   if (violationCount > 0) byCondition.mirrorObserveConstraintViolation = violationCount;
 
   const byPriority = autoEvolutionObserve.stats?.byPriority;
@@ -329,9 +401,10 @@ function buildWatchdogConditions(
     autoEvolutionApplied: "no",
     continuousAutoLoopTriggered: "no",
   };
-  const evolutionViolationCount = Object.entries(expectedEvolutionConstraints)
-    .filter(([key, expected]) => evolutionConstraints[key] !== undefined && evolutionConstraints[key] !== expected)
-    .length;
+  const evolutionViolationCount = Object.entries(expectedEvolutionConstraints).filter(
+    ([key, expected]) =>
+      evolutionConstraints[key] !== undefined && evolutionConstraints[key] !== expected,
+  ).length;
   if (evolutionViolationCount > 0) {
     byCondition.autoEvolutionObserveConstraintViolation = evolutionViolationCount;
   }
@@ -349,8 +422,16 @@ export function generateHudState(input: HudStateInput): HudState {
   const alertCount = agentGroups.filter((agent) => agent.hasAlerts).length;
   const mirrorObserve = input.mirrorObserve ?? defaultMirrorObserveSummary();
   const autoEvolutionObserve = input.autoEvolutionObserve ?? defaultAutoEvolutionObserveSummary();
-  const watchdogConditions = buildWatchdogConditions(mirrorObserve, autoEvolutionObserve, taskGraphItems);
-  const watchdogConditionAlertCount = Object.values(watchdogConditions).reduce((sum, count) => sum + count, 0);
+  const semanticRebuild = input.semanticRebuild ?? defaultSemanticRebuildSummary();
+  const watchdogConditions = buildWatchdogConditions(
+    mirrorObserve,
+    autoEvolutionObserve,
+    taskGraphItems,
+  );
+  const watchdogConditionAlertCount = Object.values(watchdogConditions).reduce(
+    (sum, count) => sum + count,
+    0,
+  );
 
   let globalStatus: HudState["globalStatus"]["status"] = "healthy";
   if (failedCount > 0 || pendingReturnItems.length > 0) {
@@ -393,13 +474,16 @@ export function generateHudState(input: HudStateInput): HudState {
     },
     taskGraphs: {
       total: input.taskGraphItems?.length ?? 0,
-      active: (input.taskGraphItems ?? []).filter((item) => item.aggregateStatus !== "completed").length,
-      blocked: (input.taskGraphItems ?? []).filter((item) => item.aggregateStatus === "blocked").length,
+      active: (input.taskGraphItems ?? []).filter((item) => item.aggregateStatus !== "completed")
+        .length,
+      blocked: (input.taskGraphItems ?? []).filter((item) => item.aggregateStatus === "blocked")
+        .length,
       sourcePath: input.taskGraphSourcePath ?? "runtime/main/tmp/v2-task-graph-01/",
       items: taskGraphItems,
     },
     mirrorObserve,
     autoEvolutionObserve,
+    semanticRebuild,
     warnings,
   };
 }

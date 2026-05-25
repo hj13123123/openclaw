@@ -12,6 +12,7 @@ import {
   type HudPendingReturnItem,
   type HudMirrorObserveSummary,
   type HudPositionState,
+  type HudSemanticRebuildSummary,
   type HudState,
   type HudTaskGraphItem,
 } from "./hud-state.js";
@@ -33,6 +34,10 @@ const POSITIONS_STATE_REL = "system/positions/state";
 const CASE_LIBRARY_REL = "system/case-library";
 const TASK_GRAPH_SOURCE_REL = TASK_GRAPH_SOURCE_RELATIVE_PATH;
 const TASK_GRAPH_VALIDATION_REL = TASK_GRAPH_VALIDATION_REPORT_DIR_RELATIVE_PATH;
+const SEMANTIC_REBUILD_REPORT_REL = "runtime/main/tmp";
+const SEMANTIC_REBUILD_PLAN_PREFIX = "kb-semantic-rebuild-plan-";
+const SEMANTIC_REBUILD_ACCEPTANCE_PREFIX = "kb-semantic-rebuild-acceptance-";
+const SEMANTIC_REBUILD_APPROVAL_PREFIX = "kb-semantic-rebuild-approval-";
 const REPORT_FILE_SUFFIX = ".json";
 
 export interface HudStateRefreshResult {
@@ -364,6 +369,86 @@ function readLatestAutoEvolutionObserve(
   }
 }
 
+function latestSemanticRebuildReport(
+  workspaceRoot: string,
+  prefix: string,
+): { reportPath: string; report: Record<string, unknown> } | null {
+  const reportDir = path.join(workspaceRoot, SEMANTIC_REBUILD_REPORT_REL);
+  const latestReport = listFiles(
+    reportDir,
+    (name) => name.startsWith(prefix) && name.endsWith(REPORT_FILE_SUFFIX),
+  ).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+  if (!latestReport) return null;
+
+  const report = readJsonFile(latestReport);
+  if (!report) return null;
+  return {
+    reportPath: path.relative(workspaceRoot, latestReport).replace(/\\/gu, "/"),
+    report,
+  };
+}
+
+function numberFromRecordValue(record: Record<string, unknown>, key: string): number | null {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
+}
+
+function semanticRebuildConstraints(
+  approval: Record<string, unknown> | null,
+  acceptance: Record<string, unknown> | null,
+  plan: Record<string, unknown> | null,
+): Record<string, string> | null {
+  const constraints =
+    recordValue(approval?.constraintsVerified) ??
+    recordValue(acceptance?.constraintsVerified) ??
+    recordValue(plan?.constraintsVerified);
+  if (!constraints) return null;
+  return Object.fromEntries(
+    Object.entries(constraints).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+}
+
+function readSemanticRebuildSummary(workspaceRoot: string): HudSemanticRebuildSummary {
+  const plan = latestSemanticRebuildReport(workspaceRoot, SEMANTIC_REBUILD_PLAN_PREFIX);
+  const acceptance = latestSemanticRebuildReport(workspaceRoot, SEMANTIC_REBUILD_ACCEPTANCE_PREFIX);
+  const approval = latestSemanticRebuildReport(workspaceRoot, SEMANTIC_REBUILD_APPROVAL_PREFIX);
+  const planSource = recordValue(plan?.report.source);
+  const stage: HudSemanticRebuildSummary["stage"] = !plan
+    ? "plan_missing"
+    : plan.report.status !== "ready"
+      ? "blocked"
+      : !acceptance
+        ? "plan_ready"
+        : !approval
+          ? "rebuild_approval_required"
+          : "ready_for_real_rebuild_implementation";
+
+  return {
+    available: Boolean(plan),
+    stage,
+    latestPlanPath: plan?.reportPath ?? null,
+    latestAcceptancePath: acceptance?.reportPath ?? null,
+    latestApprovalPath: approval?.reportPath ?? null,
+    totalItems: planSource ? numberFromRecordValue(planSource, "totalItems") : null,
+    plannedBatches: plan ? numberFromRecordValue(plan.report, "plannedBatches") : null,
+    readyForHumanGate: Boolean(acceptance),
+    readyForExecution: Boolean(acceptance),
+    readyForRealRebuildImplementation:
+      Boolean(approval) && stage === "ready_for_real_rebuild_implementation",
+    constraintsVerified: semanticRebuildConstraints(
+      approval?.report ?? null,
+      acceptance?.report ?? null,
+      plan?.report ?? null,
+    ),
+  };
+}
+
 export function generateHudStateFromWorkspace(
   workspaceRoot: string,
   generatedAt = new Date().toISOString(),
@@ -381,6 +466,7 @@ export function generateHudStateFromWorkspace(
     taskGraphSourcePath: `${TASK_GRAPH_SOURCE_REL}/`,
     mirrorObserve: readLatestMirrorObserve(workspaceRoot, warnings),
     autoEvolutionObserve: readLatestAutoEvolutionObserve(workspaceRoot, warnings),
+    semanticRebuild: readSemanticRebuildSummary(workspaceRoot),
     warnings,
   });
 }

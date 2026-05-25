@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { generateHudState, normalizeHudAgentStatus, type HudPendingReturnItem, type HudTaskGraphItem } from "./hud-state.js";
+import {
+  generateHudState,
+  normalizeHudAgentStatus,
+  type HudPendingReturnItem,
+  type HudTaskGraphItem,
+} from "./hud-state.js";
 
 const generatedAt = "2026-05-20T00:00:00.000Z";
 
@@ -115,7 +120,13 @@ describe("HUD state core", () => {
     expect(state.taskGraphs.total).toBe(6);
     expect(state.taskGraphs.active).toBe(5);
     expect(state.taskGraphs.blocked).toBe(1);
-    expect(state.taskGraphs.items.map((item) => item.graphId)).toEqual(["graph-a", "graph-b", "graph-c", "graph-d", "graph-e"]);
+    expect(state.taskGraphs.items.map((item) => item.graphId)).toEqual([
+      "graph-a",
+      "graph-b",
+      "graph-c",
+      "graph-d",
+      "graph-e",
+    ]);
   });
 
   it("aggregates task graph validation severity into watchdog conditions", () => {
@@ -261,6 +272,66 @@ describe("HUD state core", () => {
       byCondition: {
         autoEvolutionObserveP1: 2,
       },
+    });
+  });
+
+  it("carries semantic rebuild visibility without changing global health", () => {
+    const state = generateHudState({
+      generatedAt,
+      semanticRebuild: {
+        available: true,
+        stage: "ready_for_real_rebuild_implementation",
+        latestPlanPath: "runtime/main/tmp/kb-semantic-rebuild-plan-a.json",
+        latestAcceptancePath: "runtime/main/tmp/kb-semantic-rebuild-acceptance-a.json",
+        latestApprovalPath: "runtime/main/tmp/kb-semantic-rebuild-approval-a.json",
+        totalItems: 2,
+        plannedBatches: 1,
+        readyForHumanGate: true,
+        readyForExecution: true,
+        readyForRealRebuildImplementation: true,
+        constraintsVerified: {
+          embeddingCalls: "no",
+          vectorIndexWritten: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.globalStatus.status).toBe("degraded");
+    expect(state.semanticRebuild).toMatchObject({
+      available: true,
+      stage: "ready_for_real_rebuild_implementation",
+      latestPlanPath: "runtime/main/tmp/kb-semantic-rebuild-plan-a.json",
+      latestAcceptancePath: "runtime/main/tmp/kb-semantic-rebuild-acceptance-a.json",
+      latestApprovalPath: "runtime/main/tmp/kb-semantic-rebuild-approval-a.json",
+      totalItems: 2,
+      plannedBatches: 1,
+      readyForRealRebuildImplementation: true,
+      constraintsVerified: {
+        embeddingCalls: "no",
+        vectorIndexWritten: "no",
+        realRebuildTriggered: "no",
+        applied: "no",
+      },
+    });
+  });
+
+  it("defaults semantic rebuild visibility to missing plan", () => {
+    const state = generateHudState({ generatedAt });
+
+    expect(state.semanticRebuild).toEqual({
+      available: false,
+      stage: "plan_missing",
+      latestPlanPath: null,
+      latestAcceptancePath: null,
+      latestApprovalPath: null,
+      totalItems: null,
+      plannedBatches: null,
+      readyForHumanGate: false,
+      readyForExecution: false,
+      readyForRealRebuildImplementation: false,
+      constraintsVerified: null,
     });
   });
 
