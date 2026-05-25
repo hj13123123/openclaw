@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -17,6 +17,7 @@ import {
   checkSemanticRebuildProposalAcceptance,
   checkSemanticRebuildExecutionEntry,
   checkSemanticRebuildPreflight,
+  executeDispatchRecallPreview,
   executeHybridRecall,
   executeSemanticRebuild,
   executeSemanticSearch,
@@ -150,6 +151,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-execution-run")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-search")).toBe(true);
     expect(isKbApiPath("/api/kb/hybrid-recall")).toBe(true);
+    expect(isKbApiPath("/api/kb/dispatch-recall-preview")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -2321,6 +2323,162 @@ describe("server KB API", () => {
           fileWrites: "no",
           embeddingCalls: "no",
           realRebuildTriggered: "no",
+        }),
+      }),
+    );
+  });
+
+  it("previews runtime-loop dispatch candidates with hybrid recall without dispatching", async () => {
+    const workspaceRoot = makeWorkspace();
+    const calls: string[][] = [];
+    const config = semanticRebuildConfig();
+    registerTestEmbeddingProvider(calls, {
+      embedQuery: async () => [1, 0, 0],
+      embedBatch: async (texts) =>
+        texts.map((text) => (text.includes("Task graph recovery") ? [1, 0, 0] : [0, 1, 0])),
+    });
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+      summary: "Recover task graph state",
+      tags: ["D7"],
+    });
+    const tasksPath = path.join(workspaceRoot, "runtime", "tasks", "tasks.jsonl");
+    mkdirSync(path.dirname(tasksPath), { recursive: true });
+    writeFileSync(
+      tasksPath,
+      `${JSON.stringify({
+        taskId: "DISPATCH-RECALL-A",
+        status: "queued",
+        sourceRole: "engineering-executive",
+        createdAt: "2026-05-22T08:00:00.000Z",
+        updatedAt: "2026-05-22T08:00:00.000Z",
+        summary: "Task graph recovery follow-up",
+        metadata: {
+          dispatchTarget: "/engineering-executive",
+          goal: "Recover task graph state",
+        },
+        policyDecision: {
+          decisionId: "decision-1",
+          ruleId: "R001",
+          riskLevel: "L0",
+          action: "auto_close",
+          reason: "unit test",
+          timestamp: "2026-05-22T08:00:00.000Z",
+        },
+      })}\n`,
+      "utf8",
+    );
+    writeJson(path.join(workspaceRoot, "runtime", "main", "tmp", "task-scheduler-state.json"), {
+      enabled: true,
+      mode: "observe",
+      status: "idle",
+    });
+    writeJson(path.join(workspaceRoot, "runtime", "policy", "policy-rules.json"), {
+      $schema: "policy-rules-v1",
+      schedulerPolicy: {
+        runtimeLoopMode: "observe",
+        maxDispatchesPerTick: 1,
+        disableOldTrigger: true,
+        enableContinuousApply: false,
+      },
+      rules: [],
+    });
+    await handleKbHttpRequest(
+      makeReq("/api/kb/refresh", "POST"),
+      makeResponse().res,
+      workspaceRoot,
+    );
+    await prepareApprovedSemanticRebuild(workspaceRoot, config);
+    await executeSemanticRebuild(workspaceRoot, { config });
+
+    const preview = await executeDispatchRecallPreview(
+      workspaceRoot,
+      { limit: 1, recallLimit: 1 },
+      { config },
+    );
+
+    expect(preview).toEqual(
+      expect.objectContaining({
+        mode: "dispatch-recall-preview",
+        status: "ready",
+        ready: true,
+        blockReasons: [],
+        warnings: [],
+        selectedCandidateCount: 1,
+        previewedCandidateCount: 1,
+        recallLimit: 1,
+        preflightSummary: expect.objectContaining({
+          queuedCandidates: 1,
+          policyEligibleCandidates: 1,
+          wouldDispatchIfApplyEnabled: 1,
+          wouldDispatch: 0,
+        }),
+        constraintsVerified: {
+          stateWritten: "no",
+          artifactWritten: "no",
+          eventEmitted: "no",
+          dispatchTriggered: "no",
+          sessionsSpawnCalled: "no",
+          taskGraphMutated: "no",
+          returnConsumed: "no",
+          receiptWritten: "no",
+          embeddingCalls: "yes",
+          keywordIndexWritten: "no",
+          semanticIndexWritten: "no",
+          vectorIndexWritten: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        },
+      }),
+    );
+    expect(preview.candidates[0]).toEqual(
+      expect.objectContaining({
+        taskId: "DISPATCH-RECALL-A",
+        dispatchTarget: "/engineering-executive",
+        recallStatus: "ready",
+        recallReady: true,
+        recallBlockReasons: [],
+        returnedResults: 1,
+        topResults: [
+          expect.objectContaining({
+            vectorId: "case:case-a",
+            sources: ["keyword", "semantic"],
+            item: expect.objectContaining({ itemId: "case-a" }),
+          }),
+        ],
+      }),
+    );
+    expect(existsSync(path.join(workspaceRoot, "runtime", "dispatch", "proposals"))).toBe(false);
+    expect(
+      existsSync(path.join(workspaceRoot, "runtime", "main", "tmp", "runtime-loop-state.json")),
+    ).toBe(false);
+  });
+
+  it("serves dispatch recall previews over HTTP without selected candidates", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/dispatch-recall-preview?limit=1&recallLimit=1", "GET"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        mode: "dispatch-recall-preview",
+        status: "ready",
+        ready: true,
+        warnings: ["no_selected_candidates"],
+        selectedCandidateCount: 0,
+        previewedCandidateCount: 0,
+        constraintsVerified: expect.objectContaining({
+          stateWritten: "no",
+          embeddingCalls: "no",
+          dispatchTriggered: "no",
+          sessionsSpawnCalled: "no",
+          applied: "no",
         }),
       }),
     );

@@ -19,6 +19,11 @@ import {
   type KnowledgeIndexItem,
   type KnowledgeMatchResult,
 } from "../runtime/kb-index.js";
+import {
+  buildRuntimeLoopPreflight,
+  type RuntimeLoopPreflightDispatchPlanEntry,
+} from "../runtime/runtime-loop.js";
+import { getTaskState, type TaskRecord } from "../runtime/task-state-machine.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 
 const KB_STATE_ROUTE = "/api/kb/state";
@@ -43,6 +48,7 @@ const KB_SEMANTIC_REBUILD_EXECUTION_RUN_ROUTE =
   "/api/kb/semantic-rebuild-plan/rebuild-execution-run";
 const KB_SEMANTIC_SEARCH_ROUTE = "/api/kb/semantic-search";
 const KB_HYBRID_RECALL_ROUTE = "/api/kb/hybrid-recall";
+const KB_DISPATCH_RECALL_PREVIEW_ROUTE = "/api/kb/dispatch-recall-preview";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
@@ -833,6 +839,69 @@ type HybridRecall = {
   returnedResults: number;
   results: HybridRecallResult[];
   constraintsVerified: SemanticSearchConstraints;
+};
+
+type DispatchRecallPreviewBlockReason = "candidate_recall_blocked";
+
+type DispatchRecallPreviewWarning = "no_selected_candidates";
+
+type DispatchRecallPreviewHit = {
+  vectorId: string;
+  score: number;
+  keywordScore: number;
+  semanticScore: number;
+  sources: HybridRecallSource[];
+  item: Pick<
+    HybridRecallItem,
+    "itemId" | "sourceType" | "sourcePath" | "title" | "risk" | "status"
+  >;
+};
+
+type DispatchRecallPreviewCandidate = {
+  taskId: string;
+  dispatchTarget: string;
+  query: string;
+  recallStatus: HybridRecall["status"];
+  recallReady: boolean;
+  recallBlockReasons: HybridRecall["blockReasons"];
+  semanticBlockReasons: HybridRecall["semanticBlockReasons"];
+  returnedResults: number;
+  topResults: DispatchRecallPreviewHit[];
+};
+
+type DispatchRecallPreview = {
+  mode: "dispatch-recall-preview";
+  checkedAt: string;
+  status: "ready" | "blocked";
+  ready: boolean;
+  blockReasons: DispatchRecallPreviewBlockReason[];
+  warnings: DispatchRecallPreviewWarning[];
+  preflightSummary: {
+    queuedCandidates: number;
+    policyEligibleCandidates: number;
+    wouldDispatchIfApplyEnabled: number;
+    wouldDispatch: 0;
+  };
+  selectedCandidateCount: number;
+  previewedCandidateCount: number;
+  recallLimit: number;
+  candidates: DispatchRecallPreviewCandidate[];
+  constraintsVerified: {
+    stateWritten: "no";
+    artifactWritten: "no";
+    eventEmitted: "no";
+    dispatchTriggered: "no";
+    sessionsSpawnCalled: "no";
+    taskGraphMutated: "no";
+    returnConsumed: "no";
+    receiptWritten: "no";
+    embeddingCalls: "no" | "yes";
+    keywordIndexWritten: "no";
+    semanticIndexWritten: "no";
+    vectorIndexWritten: "no";
+    realRebuildTriggered: "no";
+    applied: "no";
+  };
 };
 
 type SemanticRebuildStatusStage =
@@ -3333,6 +3402,142 @@ export async function executeHybridRecall(
   };
 }
 
+function normalizeDispatchRecallPreviewLimit(raw: number | null | undefined): number {
+  if (!Number.isFinite(raw)) return 5;
+  return Math.min(10, Math.max(0, Math.floor(raw ?? 5)));
+}
+
+function normalizeDispatchRecallResultLimit(raw: number | null | undefined): number {
+  if (!Number.isFinite(raw)) return 3;
+  return Math.min(10, Math.max(1, Math.floor(raw ?? 3)));
+}
+
+function optionalText(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function metadataText(task: TaskRecord | undefined, fields: string[]): string[] {
+  if (!task) return [];
+  return fields
+    .map((field) => optionalText(task.metadata[field]))
+    .filter((value): value is string => value !== null);
+}
+
+function dispatchRecallQuery(
+  candidate: RuntimeLoopPreflightDispatchPlanEntry,
+  task: TaskRecord | undefined,
+): string {
+  return [
+    task?.taskId ?? candidate.taskId,
+    task?.summary,
+    task?.sourceRole,
+    candidate.dispatchTarget,
+    candidate.policyDecision,
+    candidate.riskLevel,
+    ...metadataText(task, ["title", "summary", "description", "intent", "goal", "task"]),
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join("\n");
+}
+
+function dispatchRecallPreviewConstraints(embeddingCalls: "no" | "yes") {
+  return {
+    stateWritten: "no" as const,
+    artifactWritten: "no" as const,
+    eventEmitted: "no" as const,
+    dispatchTriggered: "no" as const,
+    sessionsSpawnCalled: "no" as const,
+    taskGraphMutated: "no" as const,
+    returnConsumed: "no" as const,
+    receiptWritten: "no" as const,
+    embeddingCalls,
+    keywordIndexWritten: "no" as const,
+    semanticIndexWritten: "no" as const,
+    vectorIndexWritten: "no" as const,
+    realRebuildTriggered: "no" as const,
+    applied: "no" as const,
+  };
+}
+
+function dispatchRecallHit(result: HybridRecallResult): DispatchRecallPreviewHit {
+  return {
+    vectorId: result.vectorId,
+    score: result.score,
+    keywordScore: result.keywordScore,
+    semanticScore: result.semanticScore,
+    sources: result.sources,
+    item: {
+      itemId: result.item.itemId,
+      sourceType: result.item.sourceType,
+      sourcePath: result.item.sourcePath,
+      title: result.item.title,
+      risk: result.item.risk,
+      ...(result.item.status ? { status: result.item.status } : {}),
+    },
+  };
+}
+
+export async function executeDispatchRecallPreview(
+  workspaceRoot: string,
+  params: { limit?: number | null; recallLimit?: number | null } = {},
+  options?: KbHttpOptions,
+): Promise<DispatchRecallPreview> {
+  const checkedAt = new Date().toISOString();
+  const limit = normalizeDispatchRecallPreviewLimit(params.limit ?? null);
+  const recallLimit = normalizeDispatchRecallResultLimit(params.recallLimit ?? null);
+  const preflight = buildRuntimeLoopPreflight(workspaceRoot);
+  const taskState = getTaskState(workspaceRoot);
+  const tasksById = new Map(taskState.tasks.map((task) => [task.taskId, task]));
+  const selectedCandidates = preflight.dispatch_plan
+    .filter((entry) => entry.would_dispatch_if_apply_enabled)
+    .slice(0, limit);
+
+  const candidates: DispatchRecallPreviewCandidate[] = [];
+  let embeddingCalls: "no" | "yes" = "no";
+  for (const candidate of selectedCandidates) {
+    const query = dispatchRecallQuery(candidate, tasksById.get(candidate.taskId));
+    const recall = await executeHybridRecall(workspaceRoot, { query, limit: recallLimit }, options);
+    if (recall.constraintsVerified.embeddingCalls === "yes") embeddingCalls = "yes";
+    candidates.push({
+      taskId: candidate.taskId,
+      dispatchTarget: candidate.dispatchTarget,
+      query,
+      recallStatus: recall.status,
+      recallReady: recall.ready,
+      recallBlockReasons: recall.blockReasons,
+      semanticBlockReasons: recall.semanticBlockReasons,
+      returnedResults: recall.returnedResults,
+      topResults: recall.results.map(dispatchRecallHit),
+    });
+  }
+
+  const blockReasons: DispatchRecallPreviewBlockReason[] = candidates.some(
+    (candidate) => !candidate.recallReady,
+  )
+    ? ["candidate_recall_blocked"]
+    : [];
+
+  return {
+    mode: "dispatch-recall-preview",
+    checkedAt,
+    status: blockReasons.length > 0 ? "blocked" : "ready",
+    ready: blockReasons.length === 0,
+    blockReasons,
+    warnings: selectedCandidates.length === 0 ? ["no_selected_candidates"] : [],
+    preflightSummary: {
+      queuedCandidates: preflight.tasks.queued_candidates,
+      policyEligibleCandidates: preflight.tasks.policy_eligible_candidates,
+      wouldDispatchIfApplyEnabled: preflight.tasks.would_dispatch_if_apply_enabled,
+      wouldDispatch: 0,
+    },
+    selectedCandidateCount: selectedCandidates.length,
+    previewedCandidateCount: candidates.length,
+    recallLimit,
+    candidates,
+    constraintsVerified: dispatchRecallPreviewConstraints(embeddingCalls),
+  };
+}
+
 async function writeVectorIndexSqlite(params: {
   workspaceRoot: string;
   relativePath: string;
@@ -3776,7 +3981,8 @@ export function isKbApiPath(pathname: string): boolean {
     pathname === KB_SEMANTIC_REBUILD_EXECUTION_STAGE_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_EXECUTION_RUN_ROUTE ||
     pathname === KB_SEMANTIC_SEARCH_ROUTE ||
-    pathname === KB_HYBRID_RECALL_ROUTE
+    pathname === KB_HYBRID_RECALL_ROUTE ||
+    pathname === KB_DISPATCH_RECALL_PREVIEW_ROUTE
   );
 }
 
@@ -4236,6 +4442,37 @@ export async function handleKbHttpRequest(
         ready: false,
         error: `KB hybrid recall failed: ${error instanceof Error ? error.message : String(error)}`,
         constraintsVerified: noSemanticSearchConstraints(),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_DISPATCH_RECALL_PREVIEW_ROUTE) {
+    if (req.method !== "GET") {
+      sendMethodNotAllowed(res, "GET");
+      return true;
+    }
+
+    try {
+      const url = resolveRequestUrl(req);
+      const rawLimit = url.searchParams.get("limit");
+      const rawRecallLimit = url.searchParams.get("recallLimit");
+      const result = await executeDispatchRecallPreview(
+        workspaceRoot,
+        {
+          limit: rawLimit ? Number.parseInt(rawLimit, 10) : null,
+          recallLimit: rawRecallLimit ? Number.parseInt(rawRecallLimit, 10) : null,
+        },
+        options,
+      );
+      sendJson(res, result.status === "ready" ? 200 : 409, result);
+    } catch (error) {
+      sendJson(res, 500, {
+        mode: "dispatch-recall-preview",
+        status: "blocked",
+        ready: false,
+        error: `KB dispatch recall preview failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: dispatchRecallPreviewConstraints("no"),
       });
     }
     return true;
