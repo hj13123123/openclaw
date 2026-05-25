@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
@@ -13,9 +14,11 @@ const KB_STATE_ROUTE = "/api/kb/state";
 const KB_REFRESH_ROUTE = "/api/kb/refresh";
 const KB_SEMANTIC_REBUILD_PLAN_ROUTE = "/api/kb/semantic-rebuild-plan";
 const KB_SEMANTIC_REBUILD_PLAN_STATE_ROUTE = "/api/kb/semantic-rebuild-plan/state";
+const KB_SEMANTIC_REBUILD_PLAN_ACCEPTANCE_ROUTE = "/api/kb/semantic-rebuild-plan/acceptance";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
+const SEMANTIC_REBUILD_ACCEPTANCE_PREFIX = "kb-semantic-rebuild-acceptance-";
 
 type KnowledgeIndexSummary = {
   generatedAt: string | null;
@@ -74,17 +77,96 @@ type KnowledgeSemanticRebuildPlan = {
   outputFile?: string;
 };
 
+type SemanticRebuildProposalAcceptanceBlockReason =
+  | "proposal_missing"
+  | "proposal_invalid_json"
+  | "proposal_not_ready"
+  | "proposal_constraints_invalid"
+  | "blocked_reasons_present"
+  | "semantic_boundary_drift"
+  | "source_summary_drift"
+  | "planned_batches_drift";
+
+type SemanticRebuildProposalAcceptance = {
+  mode: "acceptance-stub";
+  checkedAt: string;
+  proposalPath: string | null;
+  status: "ready_for_human_gate" | "blocked" | "missing" | "invalid";
+  readyForHumanGate: boolean;
+  blockReasons: SemanticRebuildProposalAcceptanceBlockReason[];
+  proposalSummary: {
+    proposalId: string;
+    status: KnowledgeSemanticRebuildPlan["status"];
+    generatedAt: string;
+    provider: string | null;
+    model: string | null;
+    totalItems: number;
+    plannedBatches: number;
+    blockedReasons: string[];
+  } | null;
+  currentSummary: {
+    status: KnowledgeSemanticRebuildPlan["status"];
+    provider: string | null;
+    model: string | null;
+    totalItems: number;
+    plannedBatches: number;
+    blockedReasons: string[];
+  } | null;
+  constraintsVerified: {
+    acceptanceRecordWritten: "no";
+    stateWritten: "no";
+    embeddingCalls: "no";
+    keywordIndexWritten: "no";
+    vectorIndexWritten: "no";
+    realRebuildTriggered: "no";
+    applied: "no";
+  };
+};
+
+type SemanticRebuildAcceptanceRecordDryRun = {
+  mode: "acceptance-record-dry-run";
+  checkedAt: string;
+  proposalPath: string | null;
+  wouldWrite: false;
+  wouldWritePath: string | null;
+  acceptance: SemanticRebuildProposalAcceptance;
+  recordPreview: {
+    acceptanceId: string;
+    createdAt: string;
+    status: "human_gate_ready";
+    proposalId: string;
+    proposalPath: string;
+    plannedBatches: number;
+    totalItems: number;
+    requiredApproval: "human";
+    nextAction: "await_human_approval";
+    approved: false;
+    rebuildTriggered: false;
+  } | null;
+  constraintsVerified: {
+    recordWritten: "no";
+    stateWritten: "no";
+    embeddingCalls: "no";
+    keywordIndexWritten: "no";
+    vectorIndexWritten: "no";
+    realRebuildTriggered: "no";
+    applied: "no";
+  };
+};
+
 function resolveRequestPath(req: IncomingMessage): string {
   return new URL(req.url ?? "/", "http://localhost").pathname;
 }
 
 function summarizeIndex(value: unknown): KnowledgeIndexSummary {
-  const record = value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-  const keywords = record.keywords && typeof record.keywords === "object" && !Array.isArray(record.keywords)
-    ? record.keywords as Record<string, unknown>
-    : {};
+  const record =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const keywords =
+    record.keywords && typeof record.keywords === "object" && !Array.isArray(record.keywords)
+      ? (record.keywords as Record<string, unknown>)
+      : {};
   return {
     generatedAt: typeof record.generatedAt === "string" ? record.generatedAt : null,
     totalItems: typeof record.totalItems === "number" ? record.totalItems : 0,
@@ -102,7 +184,10 @@ function firstString(values: Array<string | undefined>): string | null {
   return values.find((value) => typeof value === "string" && value.length > 0) ?? null;
 }
 
-function firstBoolean(values: Array<boolean | undefined>, fallback: boolean | null): boolean | null {
+function firstBoolean(
+  values: Array<boolean | undefined>,
+  fallback: boolean | null,
+): boolean | null {
   return values.find((value) => typeof value === "boolean") ?? fallback;
 }
 
@@ -110,15 +195,17 @@ export function summarizeSemanticBoundary(config: OpenClawConfig): KnowledgeSema
   const defaults = config.agents?.defaults?.memorySearch;
   const scoped = [
     ...(hasMemorySearchConfig(defaults)
-      ? [{
-          scope: "agents.defaults",
-          config: defaults,
-          effectiveEnabled: defaults.enabled ?? true,
-          provider: defaults.provider,
-          model: defaults.model,
-          vectorEnabled: defaults.store?.vector?.enabled,
-          hybridEnabled: defaults.query?.hybrid?.enabled,
-        }]
+      ? [
+          {
+            scope: "agents.defaults",
+            config: defaults,
+            effectiveEnabled: defaults.enabled ?? true,
+            provider: defaults.provider,
+            model: defaults.model,
+            vectorEnabled: defaults.store?.vector?.enabled,
+            hybridEnabled: defaults.query?.hybrid?.enabled,
+          },
+        ]
       : []),
     ...(config.agents?.list ?? [])
       .filter((agent) => hasMemorySearchConfig(agent.memorySearch))
@@ -128,8 +215,10 @@ export function summarizeSemanticBoundary(config: OpenClawConfig): KnowledgeSema
         effectiveEnabled: agent.memorySearch?.enabled ?? defaults?.enabled ?? true,
         provider: agent.memorySearch?.provider ?? defaults?.provider,
         model: agent.memorySearch?.model ?? defaults?.model,
-        vectorEnabled: agent.memorySearch?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled,
-        hybridEnabled: agent.memorySearch?.query?.hybrid?.enabled ?? defaults?.query?.hybrid?.enabled,
+        vectorEnabled:
+          agent.memorySearch?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled,
+        hybridEnabled:
+          agent.memorySearch?.query?.hybrid?.enabled ?? defaults?.query?.hybrid?.enabled,
       })),
   ];
   const hasConfiguredScope = scoped.length > 0;
@@ -141,14 +230,23 @@ export function summarizeSemanticBoundary(config: OpenClawConfig): KnowledgeSema
     source: "agents.memorySearch",
     rebuild: "disabled",
     reason: "semantic_vector_refresh_deferred",
-    provider: status === "disabled" ? null : firstString(scoped.map((entry) => entry.provider)) ?? "auto",
+    provider:
+      status === "disabled" ? null : (firstString(scoped.map((entry) => entry.provider)) ?? "auto"),
     model: status === "disabled" ? null : firstString(scoped.map((entry) => entry.model)),
-    vectorEnabled: status === "disabled"
-      ? false
-      : firstBoolean(scoped.map((entry) => entry.vectorEnabled), true),
-    hybridEnabled: status === "disabled"
-      ? false
-      : firstBoolean(scoped.map((entry) => entry.hybridEnabled), true),
+    vectorEnabled:
+      status === "disabled"
+        ? false
+        : firstBoolean(
+            scoped.map((entry) => entry.vectorEnabled),
+            true,
+          ),
+    hybridEnabled:
+      status === "disabled"
+        ? false
+        : firstBoolean(
+            scoped.map((entry) => entry.hybridEnabled),
+            true,
+          ),
     configuredScopes: scoped.map((entry) => entry.scope),
   };
 }
@@ -181,7 +279,9 @@ export function buildSemanticRebuildPlan(
   const { index, sources } = buildKnowledgeIndexFromWorkspace(workspaceRoot, generatedAt);
   const blockedReasons = [
     ...(semantic.status === "disabled" ? ["semantic memorySearch is disabled"] : []),
-    ...(semantic.status === "config_error" ? ["semantic memorySearch config could not be resolved"] : []),
+    ...(semantic.status === "config_error"
+      ? ["semantic memorySearch config could not be resolved"]
+      : []),
     ...(semantic.vectorEnabled === false ? ["vector store is disabled"] : []),
     ...(index.totalItems === 0 ? ["no KB items available for semantic rebuild"] : []),
   ];
@@ -258,6 +358,13 @@ async function writeSemanticRebuildPlanReport(
 async function readLatestSemanticRebuildPlanReport(
   workspaceRoot: string,
 ): Promise<KnowledgeSemanticRebuildPlan | null> {
+  const latest = await readLatestSemanticRebuildPlanReportEntry(workspaceRoot);
+  return latest?.plan ?? null;
+}
+
+async function readLatestSemanticRebuildPlanReportEntry(
+  workspaceRoot: string,
+): Promise<{ reportPath: string; plan: KnowledgeSemanticRebuildPlan } | null> {
   const reportDir = path.join(workspaceRoot, ...SEMANTIC_REBUILD_PLAN_REPORT_DIR.split("/"));
   let entries: string[];
   try {
@@ -266,21 +373,221 @@ async function readLatestSemanticRebuildPlanReport(
     return null;
   }
   const latest = entries
-    .filter((entry) => entry.startsWith(SEMANTIC_REBUILD_PLAN_REPORT_PREFIX)
-      && entry.endsWith(SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX))
+    .filter(
+      (entry) =>
+        entry.startsWith(SEMANTIC_REBUILD_PLAN_REPORT_PREFIX) &&
+        entry.endsWith(SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX),
+    )
     .sort()
     .at(-1);
   if (!latest) {
     return null;
   }
-  return JSON.parse(await readFile(path.join(reportDir, latest), "utf8")) as KnowledgeSemanticRebuildPlan;
+  const reportPath = [SEMANTIC_REBUILD_PLAN_REPORT_DIR, latest].join("/");
+  return {
+    reportPath,
+    plan: JSON.parse(
+      await readFile(path.join(reportDir, latest), "utf8"),
+    ) as KnowledgeSemanticRebuildPlan,
+  };
+}
+
+function proposalIdForSemanticRebuildPlan(plan: KnowledgeSemanticRebuildPlan): string {
+  return `kb-semantic-rebuild-${toReportTimestamp(plan.generatedAt)}`;
+}
+
+function semanticSummaryForAcceptance(plan: KnowledgeSemanticRebuildPlan) {
+  return {
+    status: plan.status,
+    provider: plan.semantic.provider,
+    model: plan.semantic.model,
+    totalItems: plan.source.totalItems,
+    plannedBatches: plan.plannedBatches,
+    blockedReasons: plan.blockedReasons,
+  };
+}
+
+function semanticPlanConstraintsValid(plan: KnowledgeSemanticRebuildPlan): boolean {
+  return (
+    plan.mode === "dry-run" &&
+    plan.dryRun === true &&
+    plan.action === "PLAN_ONLY_NO_EMBEDDING_NO_WRITE" &&
+    plan.constraintsVerified.embeddingCalls === "no" &&
+    plan.constraintsVerified.keywordIndexWritten === "no" &&
+    plan.constraintsVerified.vectorIndexWritten === "no" &&
+    plan.constraintsVerified.applied === "no" &&
+    plan.constraintsVerified.fileWrites === "dry-run-report-only" &&
+    plan.constraintsVerified.dryRunReportWritten === "yes"
+  );
+}
+
+function sameSemanticBoundary(
+  left: KnowledgeSemanticRebuildPlan,
+  right: KnowledgeSemanticRebuildPlan,
+): boolean {
+  return (
+    left.semantic.status === right.semantic.status &&
+    left.semantic.provider === right.semantic.provider &&
+    left.semantic.model === right.semantic.model &&
+    left.semantic.vectorEnabled === right.semantic.vectorEnabled &&
+    left.semantic.hybridEnabled === right.semantic.hybridEnabled &&
+    JSON.stringify(left.semantic.configuredScopes) ===
+      JSON.stringify(right.semantic.configuredScopes)
+  );
+}
+
+function sameSourceSummary(
+  left: KnowledgeSemanticRebuildPlan,
+  right: KnowledgeSemanticRebuildPlan,
+): boolean {
+  return (
+    left.source.totalItems === right.source.totalItems &&
+    left.source.sourceCaseCount === right.source.sourceCaseCount &&
+    left.source.sourceSkillCount === right.source.sourceSkillCount &&
+    left.source.keywordCount === right.source.keywordCount &&
+    JSON.stringify(left.source.warnings) === JSON.stringify(right.source.warnings)
+  );
+}
+
+function acceptanceConstraints() {
+  return {
+    acceptanceRecordWritten: "no" as const,
+    stateWritten: "no" as const,
+    embeddingCalls: "no" as const,
+    keywordIndexWritten: "no" as const,
+    vectorIndexWritten: "no" as const,
+    realRebuildTriggered: "no" as const,
+    applied: "no" as const,
+  };
+}
+
+export async function checkSemanticRebuildProposalAcceptance(
+  workspaceRoot: string,
+  options?: KbHttpOptions,
+): Promise<SemanticRebuildProposalAcceptance> {
+  const checkedAt = new Date().toISOString();
+  const latest = await readLatestSemanticRebuildPlanReportEntry(workspaceRoot);
+  const base = {
+    mode: "acceptance-stub" as const,
+    checkedAt,
+    proposalPath: latest?.reportPath ?? null,
+    constraintsVerified: acceptanceConstraints(),
+  };
+  if (!latest) {
+    return {
+      ...base,
+      status: "missing",
+      readyForHumanGate: false,
+      blockReasons: ["proposal_missing"],
+      proposalSummary: null,
+      currentSummary: null,
+    };
+  }
+
+  const proposal = latest.plan;
+  if (
+    !proposal ||
+    proposal.mode !== "dry-run" ||
+    proposal.dryRun !== true ||
+    !proposal.semantic ||
+    !proposal.source
+  ) {
+    return {
+      ...base,
+      status: "invalid",
+      readyForHumanGate: false,
+      blockReasons: ["proposal_invalid_json"],
+      proposalSummary: null,
+      currentSummary: null,
+    };
+  }
+
+  const current = buildSemanticRebuildPlan(
+    workspaceRoot,
+    resolveSemanticBoundary(options),
+    proposal.generatedAt,
+  );
+  const blockReasons: SemanticRebuildProposalAcceptanceBlockReason[] = [];
+  if (proposal.status !== "ready") blockReasons.push("proposal_not_ready");
+  if (!semanticPlanConstraintsValid(proposal)) blockReasons.push("proposal_constraints_invalid");
+  if (proposal.blockedReasons.length > 0) blockReasons.push("blocked_reasons_present");
+  if (!sameSemanticBoundary(proposal, current)) blockReasons.push("semantic_boundary_drift");
+  if (!sameSourceSummary(proposal, current)) blockReasons.push("source_summary_drift");
+  if (proposal.plannedBatches !== current.plannedBatches)
+    blockReasons.push("planned_batches_drift");
+  const readyForHumanGate = blockReasons.length === 0;
+
+  return {
+    ...base,
+    status: readyForHumanGate ? "ready_for_human_gate" : "blocked",
+    readyForHumanGate,
+    blockReasons,
+    proposalSummary: {
+      proposalId: proposalIdForSemanticRebuildPlan(proposal),
+      generatedAt: proposal.generatedAt,
+      ...semanticSummaryForAcceptance(proposal),
+    },
+    currentSummary: semanticSummaryForAcceptance(current),
+  };
+}
+
+export async function buildSemanticRebuildAcceptanceRecordDryRun(
+  workspaceRoot: string,
+  options?: KbHttpOptions,
+): Promise<SemanticRebuildAcceptanceRecordDryRun> {
+  const checkedAt = new Date().toISOString();
+  const acceptance = await checkSemanticRebuildProposalAcceptance(workspaceRoot, options);
+  const acceptanceId = `kb-semantic-rebuild-acceptance-${randomUUID()}`;
+  const wouldWritePath = acceptance.readyForHumanGate
+    ? [
+        SEMANTIC_REBUILD_PLAN_REPORT_DIR,
+        `${SEMANTIC_REBUILD_ACCEPTANCE_PREFIX}${toReportTimestamp(checkedAt)}.json`,
+      ].join("/")
+    : null;
+  const recordPreview =
+    acceptance.readyForHumanGate && acceptance.proposalPath && acceptance.proposalSummary
+      ? {
+          acceptanceId,
+          createdAt: checkedAt,
+          status: "human_gate_ready" as const,
+          proposalId: acceptance.proposalSummary.proposalId,
+          proposalPath: acceptance.proposalPath,
+          plannedBatches: acceptance.proposalSummary.plannedBatches,
+          totalItems: acceptance.proposalSummary.totalItems,
+          requiredApproval: "human" as const,
+          nextAction: "await_human_approval" as const,
+          approved: false as const,
+          rebuildTriggered: false as const,
+        }
+      : null;
+  return {
+    mode: "acceptance-record-dry-run",
+    checkedAt,
+    proposalPath: acceptance.proposalPath,
+    wouldWrite: false,
+    wouldWritePath,
+    acceptance,
+    recordPreview,
+    constraintsVerified: {
+      recordWritten: "no",
+      stateWritten: "no",
+      embeddingCalls: "no",
+      keywordIndexWritten: "no",
+      vectorIndexWritten: "no",
+      realRebuildTriggered: "no",
+      applied: "no",
+    },
+  };
 }
 
 export function isKbApiPath(pathname: string): boolean {
-  return pathname === KB_STATE_ROUTE
-    || pathname === KB_REFRESH_ROUTE
-    || pathname === KB_SEMANTIC_REBUILD_PLAN_ROUTE
-    || pathname === KB_SEMANTIC_REBUILD_PLAN_STATE_ROUTE;
+  return (
+    pathname === KB_STATE_ROUTE ||
+    pathname === KB_REFRESH_ROUTE ||
+    pathname === KB_SEMANTIC_REBUILD_PLAN_ROUTE ||
+    pathname === KB_SEMANTIC_REBUILD_PLAN_STATE_ROUTE ||
+    pathname === KB_SEMANTIC_REBUILD_PLAN_ACCEPTANCE_ROUTE
+  );
 }
 
 export async function handleKbHttpRequest(
@@ -301,7 +608,9 @@ export async function handleKbHttpRequest(
     }
 
     try {
-      const index = JSON.parse(await readFile(path.join(workspaceRoot, KB_INDEX_FILE_RELATIVE_PATH), "utf8")) as unknown;
+      const index = JSON.parse(
+        await readFile(path.join(workspaceRoot, KB_INDEX_FILE_RELATIVE_PATH), "utf8"),
+      ) as unknown;
       sendJson(res, 200, {
         available: true,
         indexPath: KB_INDEX_FILE_RELATIVE_PATH,
@@ -326,10 +635,14 @@ export async function handleKbHttpRequest(
 
     try {
       const semantic = resolveSemanticBoundary(options);
-      sendJson(res, 200, await writeSemanticRebuildPlanReport(
-        workspaceRoot,
-        buildSemanticRebuildPlan(workspaceRoot, semantic),
-      ));
+      sendJson(
+        res,
+        200,
+        await writeSemanticRebuildPlanReport(
+          workspaceRoot,
+          buildSemanticRebuildPlan(workspaceRoot, semantic),
+        ),
+      );
     } catch (error) {
       sendJson(res, 500, {
         status: "blocked",
@@ -357,21 +670,52 @@ export async function handleKbHttpRequest(
 
     try {
       const latest = await readLatestSemanticRebuildPlanReport(workspaceRoot);
-      sendJson(res, 200, latest
-        ? { available: true, ...latest }
-        : {
-            available: false,
-            mode: "dry-run",
-            dryRun: true,
-            reportDir: SEMANTIC_REBUILD_PLAN_REPORT_DIR,
-            reportPrefix: SEMANTIC_REBUILD_PLAN_REPORT_PREFIX,
-          });
+      sendJson(
+        res,
+        200,
+        latest
+          ? { available: true, ...latest }
+          : {
+              available: false,
+              mode: "dry-run",
+              dryRun: true,
+              reportDir: SEMANTIC_REBUILD_PLAN_REPORT_DIR,
+              reportPrefix: SEMANTIC_REBUILD_PLAN_REPORT_PREFIX,
+            },
+      );
     } catch (error) {
       sendJson(res, 500, {
         available: false,
         mode: "dry-run",
         dryRun: true,
         error: `鐭ヨ瘑搴撹涔夐噸寤鸿鍒掓姤鍛婅鍙栧け璐ワ細${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_SEMANTIC_REBUILD_PLAN_ACCEPTANCE_ROUTE) {
+    if (req.method !== "GET") {
+      sendMethodNotAllowed(res, "GET");
+      return true;
+    }
+
+    try {
+      sendJson(res, 200, await buildSemanticRebuildAcceptanceRecordDryRun(workspaceRoot, options));
+    } catch (error) {
+      sendJson(res, 500, {
+        mode: "acceptance-record-dry-run",
+        wouldWrite: false,
+        error: `KB semantic rebuild acceptance check failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: {
+          recordWritten: "no",
+          stateWritten: "no",
+          embeddingCalls: "no",
+          keywordIndexWritten: "no",
+          vectorIndexWritten: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        },
       });
     }
     return true;
