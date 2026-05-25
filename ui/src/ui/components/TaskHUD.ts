@@ -58,6 +58,32 @@ type ReturnConsumerPlanState = {
   constraintsVerified?: Record<string, string>;
 };
 
+type ControlSignalsState = {
+  mode?: string;
+  status?: string;
+  frozen?: boolean;
+  g2Approved?: boolean;
+  pendingCount?: number;
+  validCount?: number;
+  invalidCount?: number;
+  expiredCount?: number;
+  errorCount?: number;
+  byRole?: Array<{ role?: string; count?: number }>;
+  byAction?: Array<{ action?: string; count?: number }>;
+  constraintsVerified?: Record<string, string>;
+};
+
+type RecoveryCandidatesState = {
+  mode?: string;
+  frozen?: boolean;
+  graphCount?: number;
+  candidateCount?: number;
+  errorCount?: number;
+  byStatus?: Array<{ status?: string; count?: number }>;
+  bySuggestedAction?: Array<{ action?: string; count?: number }>;
+  constraintsVerified?: Record<string, string>;
+};
+
 type ObserveSummaryState = {
   available?: boolean;
   reportPath?: string | null;
@@ -383,6 +409,8 @@ type HUDState = {
     pendingItems?: ReturnPendingItem[];
   };
   returnConsumerPlan?: ReturnConsumerPlanState;
+  controlSignals?: ControlSignalsState;
+  recoveryCandidates?: RecoveryCandidatesState;
   watchdogSnapshot?: {
     totalAlerts?: number;
     healthyCount?: number;
@@ -1021,7 +1049,8 @@ export class TaskHUD extends LitElement {
       </div>
 
       ${this.renderAgents(this.hud?.agentGroups ?? [])} ${this.renderActiveTasks(runningTasks)}
-      ${this.renderReviews(reviews)} ${this.renderReturnConsumerPlan()} ${this.renderWatchdog()}
+      ${this.renderReviews(reviews)} ${this.renderReturnConsumerPlan()}
+      ${this.renderSafetyControl()} ${this.renderWatchdog()}
       ${this.renderTaskGraphs(this.hud?.taskGraphs?.items ?? [])}
       ${this.renderRecentCompletions(this.hud?.recentCompletions?.items ?? [])}
       ${this.renderScheduler()} ${this.renderRuntimeLoop()} ${this.renderTaskState()}
@@ -1171,6 +1200,108 @@ export class TaskHUD extends LitElement {
             </details>
           </div>
           <span class="badge">只读</span>
+        </div>
+      </section>
+    `;
+  }
+
+  private renderSafetyControl() {
+    const control = this.hud?.controlSignals;
+    const recovery = this.hud?.recoveryCandidates;
+    if (!control && !recovery) return nothing;
+
+    const controlConstraints = control?.constraintsVerified ?? {};
+    const recoveryConstraints = recovery?.constraintsVerified ?? {};
+    const roleEntries = control?.byRole ?? [];
+    const actionEntries = control?.byAction ?? [];
+    const recoveryStatusEntries = recovery?.byStatus ?? [];
+    const recoveryActionEntries = recovery?.bySuggestedAction ?? [];
+    return html`
+      <section class="section">
+        <h4 class="section-title">安全控制</h4>
+        <div class="row">
+          <div>
+            <div class="primary">
+              ${control?.frozen || recovery?.frozen ? "冻结生效" : "只读观察"} ·
+              ${text(control?.mode ?? recovery?.mode, "observe-only")}
+            </div>
+            <div class="secondary">
+              signals ${control?.pendingCount ?? 0} · valid ${control?.validCount ?? 0} · invalid
+              ${control?.invalidCount ?? 0} · recovery ${recovery?.candidateCount ?? 0}
+            </div>
+            <div class="secondary">
+              graphs ${recovery?.graphCount ?? 0} · errors
+              ${(control?.errorCount ?? 0) + (recovery?.errorCount ?? 0)} · G2
+              ${control?.g2Approved ? "approved" : "locked"}
+            </div>
+            <details class="details">
+              <summary>查看安全约束</summary>
+              ${[
+                ["control.readOnly", controlConstraints.readOnly],
+                ["control.taskGraphMutated", controlConstraints.taskGraphMutated],
+                ["control.sessionsSent", controlConstraints.sessionsSent],
+                ["control.applied", controlConstraints.applied],
+                ["recovery.readOnly", recoveryConstraints.readOnly],
+                ["recovery.taskGraphMutated", recoveryConstraints.taskGraphMutated],
+                ["recovery.autoDispatchTriggered", recoveryConstraints.autoDispatchTriggered],
+                ["recovery.applied", recoveryConstraints.applied],
+              ].map(
+                ([label, value]) => html`
+                  <div class="issue">
+                    <div class="secondary">${label} · ${text(value, "unknown")}</div>
+                  </div>
+                `,
+              )}
+            </details>
+            ${roleEntries.length +
+              actionEntries.length +
+              recoveryStatusEntries.length +
+              recoveryActionEntries.length >
+            0
+              ? html`
+                  <details class="details">
+                    <summary>查看分布</summary>
+                    ${roleEntries.slice(0, 4).map(
+                      (item) => html`
+                        <div class="issue">
+                          <div class="secondary">
+                            role ${text(item.role, "unknown")} · ${item.count ?? 0}
+                          </div>
+                        </div>
+                      `,
+                    )}
+                    ${actionEntries.slice(0, 4).map(
+                      (item) => html`
+                        <div class="issue">
+                          <div class="secondary">
+                            signal ${text(item.action, "unknown")} · ${item.count ?? 0}
+                          </div>
+                        </div>
+                      `,
+                    )}
+                    ${recoveryStatusEntries.slice(0, 4).map(
+                      (item) => html`
+                        <div class="issue">
+                          <div class="secondary">
+                            status ${text(item.status, "unknown")} · ${item.count ?? 0}
+                          </div>
+                        </div>
+                      `,
+                    )}
+                    ${recoveryActionEntries.slice(0, 4).map(
+                      (item) => html`
+                        <div class="issue">
+                          <div class="secondary">
+                            recovery ${text(item.action, "unknown")} · ${item.count ?? 0}
+                          </div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                `
+              : nothing}
+          </div>
+          <span class="badge">${control?.frozen || recovery?.frozen ? "冻结" : "只读"}</span>
         </div>
       </section>
     `;

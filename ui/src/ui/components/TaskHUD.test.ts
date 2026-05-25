@@ -45,6 +45,40 @@ describe("TaskHUD task graph validation", () => {
                 applied: "no",
               },
             },
+            controlSignals: {
+              mode: "observe-only",
+              status: "frozen",
+              frozen: true,
+              g2Approved: false,
+              pendingCount: 2,
+              validCount: 1,
+              invalidCount: 1,
+              expiredCount: 0,
+              errorCount: 0,
+              byRole: [{ role: "engineering-executive", count: 1 }],
+              byAction: [{ action: "pause", count: 1 }],
+              constraintsVerified: {
+                readOnly: "yes",
+                taskGraphMutated: "no",
+                sessionsSent: "no",
+                applied: "no",
+              },
+            },
+            recoveryCandidates: {
+              mode: "observe-only",
+              frozen: true,
+              graphCount: 1,
+              candidateCount: 1,
+              errorCount: 0,
+              byStatus: [{ status: "blocked", count: 1 }],
+              bySuggestedAction: [{ action: "unblock", count: 1 }],
+              constraintsVerified: {
+                readOnly: "yes",
+                taskGraphMutated: "no",
+                autoDispatchTriggered: "no",
+                applied: "no",
+              },
+            },
             watchdogSnapshot: {
               totalAlerts: 4,
               healthyCount: 2,
@@ -324,6 +358,14 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("跳过 2");
     expect(compactText).toContain("schema-invalid · 2");
     expect(compactText).toContain("receiptWritten · no");
+    expect(compactText).toContain("安全控制");
+    expect(compactText).toContain("signals 2");
+    expect(compactText).toContain("valid 1");
+    expect(compactText).toContain("invalid 1");
+    expect(compactText).toContain("recovery 1");
+    expect(compactText).toContain("G2 locked");
+    expect(compactText).toContain("control.taskGraphMutated · no");
+    expect(compactText).toContain("recovery.autoDispatchTriggered · no");
     expect(compactText).toContain("健康巡检");
     expect(compactText).toContain("警告 4");
     expect(compactText).toContain("returnConsumerSkipped");
