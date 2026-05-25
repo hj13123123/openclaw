@@ -368,6 +368,36 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("routes KB hybrid recall through the HTTP fast path", async () => {
+    await withGatewayServer({
+      prefix: "kb-hybrid-recall-fast-path",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = createRequest({
+          path: "/api/kb/hybrid-recall",
+        });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(getBody())).toEqual(
+          expect.objectContaining({
+            mode: "hybrid-recall",
+            status: "blocked",
+            ready: false,
+            blockReasons: ["query_missing"],
+            constraintsVerified: expect.objectContaining({
+              fileWrites: "no",
+              embeddingCalls: "no",
+              realRebuildTriggered: "no",
+              applied: "no",
+            }),
+          }),
+        );
+      },
+    });
+  });
+
   it("routes KB semantic rebuild status through the HTTP fast path", async () => {
     await withGatewayServer({
       prefix: "kb-semantic-rebuild-status-fast-path",

@@ -13,7 +13,12 @@ import {
   KB_INDEX_FILE_RELATIVE_PATH,
   writeKnowledgeIndexSnapshot,
 } from "../runtime/kb-index-refresh.js";
-import type { KnowledgeIndex, KnowledgeIndexItem } from "../runtime/kb-index.js";
+import {
+  searchKnowledgeIndex,
+  type KnowledgeIndex,
+  type KnowledgeIndexItem,
+  type KnowledgeMatchResult,
+} from "../runtime/kb-index.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 
 const KB_STATE_ROUTE = "/api/kb/state";
@@ -37,6 +42,7 @@ const KB_SEMANTIC_REBUILD_EXECUTION_STAGE_ROUTE =
 const KB_SEMANTIC_REBUILD_EXECUTION_RUN_ROUTE =
   "/api/kb/semantic-rebuild-plan/rebuild-execution-run";
 const KB_SEMANTIC_SEARCH_ROUTE = "/api/kb/semantic-search";
+const KB_HYBRID_RECALL_ROUTE = "/api/kb/hybrid-recall";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
@@ -767,6 +773,65 @@ type SemanticSearch = {
   totalVectors: number;
   returnedResults: number;
   results: SemanticSearchResult[];
+  constraintsVerified: SemanticSearchConstraints;
+};
+
+type HybridRecallBlockReason =
+  | "query_missing"
+  | "keyword_index_missing"
+  | "keyword_index_invalid"
+  | "semantic_search_blocked"
+  | "no_recall_results";
+
+type HybridRecallSource = "keyword" | "semantic";
+
+type HybridRecallItem = Pick<
+  KnowledgeIndexItem,
+  | "itemId"
+  | "sourceType"
+  | "sourcePath"
+  | "title"
+  | "summary"
+  | "tags"
+  | "keywords"
+  | "risk"
+  | "createdAt"
+  | "status"
+  | "sourceCases"
+> & {
+  vectorId?: string;
+  embeddingTextHash?: string;
+  embeddingTextLength?: number;
+};
+
+type HybridRecallResult = {
+  item: HybridRecallItem;
+  score: number;
+  keywordScore: number;
+  semanticScore: number;
+  vectorId: string;
+  sources: HybridRecallSource[];
+  matchHits: KnowledgeMatchResult["matchHits"];
+};
+
+type HybridRecall = {
+  mode: "hybrid-recall";
+  checkedAt: string;
+  status: "ready" | "blocked";
+  ready: boolean;
+  query: string;
+  limit: number;
+  blockReasons: HybridRecallBlockReason[];
+  semanticBlockReasons: SemanticSearchBlockReason[];
+  provider: string | null;
+  model: string | null;
+  embeddingDimensions: number | null;
+  totalIndexed: number;
+  totalVectors: number;
+  keywordReturned: number;
+  semanticReturned: number;
+  returnedResults: number;
+  results: HybridRecallResult[];
   constraintsVerified: SemanticSearchConstraints;
 };
 
@@ -2426,6 +2491,43 @@ async function readJsonFile(filePath: string): Promise<unknown | null> {
   }
 }
 
+type ActiveKnowledgeIndexRead =
+  | { status: "ready"; index: KnowledgeIndex }
+  | { status: "missing" | "invalid"; index: null };
+
+function isKnowledgeIndex(value: unknown): value is KnowledgeIndex {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const index = value as Record<string, unknown>;
+  return (
+    index.version === "1.0" &&
+    index.indexStrategy === "keyword-first" &&
+    typeof index.generatedAt === "string" &&
+    typeof index.totalItems === "number" &&
+    Array.isArray(index.items) &&
+    Boolean(index.keywords) &&
+    typeof index.keywords === "object" &&
+    !Array.isArray(index.keywords)
+  );
+}
+
+async function readActiveKnowledgeIndex(workspaceRoot: string): Promise<ActiveKnowledgeIndexRead> {
+  const indexPath = path.join(workspaceRoot, KB_INDEX_FILE_RELATIVE_PATH);
+  let raw: string;
+  try {
+    raw = await readFile(indexPath, "utf8");
+  } catch {
+    return { status: "missing", index: null };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isKnowledgeIndex(parsed)) return { status: "invalid", index: null };
+    return { status: "ready", index: parsed };
+  } catch {
+    return { status: "invalid", index: null };
+  }
+}
+
 async function activeExecutionReportReplay(
   workspaceRoot: string,
   executorInput: NonNullable<SemanticRebuildExecutionContract["executorInput"]>,
@@ -3015,6 +3117,222 @@ export async function executeSemanticSearch(
   };
 }
 
+function hybridRecallConstraints(embeddingCalls: "no" | "yes"): SemanticSearchConstraints {
+  return {
+    ...noSemanticSearchConstraints(),
+    embeddingCalls,
+  };
+}
+
+function blockedHybridRecall(params: {
+  checkedAt: string;
+  query: string;
+  limit: number;
+  blockReasons: HybridRecallBlockReason[];
+  semanticBlockReasons?: SemanticSearchBlockReason[];
+  provider?: string | null;
+  model?: string | null;
+  embeddingDimensions?: number | null;
+  totalIndexed?: number;
+  totalVectors?: number;
+  keywordReturned?: number;
+  semanticReturned?: number;
+  embeddingCalls?: "no" | "yes";
+}): HybridRecall {
+  return {
+    mode: "hybrid-recall",
+    checkedAt: params.checkedAt,
+    status: "blocked",
+    ready: false,
+    query: params.query,
+    limit: params.limit,
+    blockReasons: [...new Set(params.blockReasons)],
+    semanticBlockReasons: [...new Set(params.semanticBlockReasons ?? [])],
+    provider: params.provider ?? null,
+    model: params.model ?? null,
+    embeddingDimensions: params.embeddingDimensions ?? null,
+    totalIndexed: params.totalIndexed ?? 0,
+    totalVectors: params.totalVectors ?? 0,
+    keywordReturned: params.keywordReturned ?? 0,
+    semanticReturned: params.semanticReturned ?? 0,
+    returnedResults: 0,
+    results: [],
+    constraintsVerified: hybridRecallConstraints(params.embeddingCalls ?? "no"),
+  };
+}
+
+function hybridItemFromKnowledgeItem(item: KnowledgeIndexItem, vectorId: string): HybridRecallItem {
+  return {
+    itemId: item.itemId,
+    sourceType: item.sourceType,
+    sourcePath: item.sourcePath,
+    title: item.title,
+    summary: item.summary,
+    tags: item.tags,
+    keywords: item.keywords,
+    risk: item.risk,
+    createdAt: item.createdAt,
+    ...(item.status ? { status: item.status } : {}),
+    ...(item.sourceCases ? { sourceCases: item.sourceCases } : {}),
+    vectorId,
+  };
+}
+
+function hybridItemFromSemanticItem(item: SemanticSearchResult["item"]): HybridRecallItem {
+  return {
+    itemId: item.itemId,
+    sourceType: item.sourceType,
+    sourcePath: item.sourcePath,
+    title: item.title,
+    summary: item.summary,
+    tags: item.tags,
+    keywords: item.keywords,
+    risk: item.risk,
+    createdAt: item.createdAt,
+    ...(item.status ? { status: item.status } : {}),
+    ...(item.sourceCases ? { sourceCases: item.sourceCases } : {}),
+    vectorId: item.vectorId,
+    embeddingTextHash: item.embeddingTextHash,
+    embeddingTextLength: item.embeddingTextLength,
+  };
+}
+
+function pushHybridSource(sources: HybridRecallSource[], source: HybridRecallSource): void {
+  if (!sources.includes(source)) sources.push(source);
+}
+
+export async function executeHybridRecall(
+  workspaceRoot: string,
+  params: { query: string; limit?: number | null },
+  options?: KbHttpOptions,
+): Promise<HybridRecall> {
+  const checkedAt = new Date().toISOString();
+  const query = params.query.trim();
+  const limit = normalizeSemanticSearchLimit(params.limit ?? null);
+  if (!query) {
+    return blockedHybridRecall({
+      checkedAt,
+      query,
+      limit,
+      blockReasons: ["query_missing"],
+    });
+  }
+
+  const blockReasons: HybridRecallBlockReason[] = [];
+  const keywordIndexState = await readActiveKnowledgeIndex(workspaceRoot);
+  let keywordResults: KnowledgeMatchResult[] = [];
+  if (keywordIndexState.status === "ready") {
+    keywordResults = searchKnowledgeIndex(keywordIndexState.index, query, { limit: 20 });
+  } else {
+    blockReasons.push(
+      keywordIndexState.status === "missing" ? "keyword_index_missing" : "keyword_index_invalid",
+    );
+  }
+
+  const semantic = await executeSemanticSearch(workspaceRoot, { query, limit: 20 }, options);
+  if (semantic.status !== "ready") {
+    blockReasons.push("semantic_search_blocked");
+  }
+
+  type HybridRecallAccumulator = {
+    item: HybridRecallItem;
+    vectorId: string;
+    keywordScore: number;
+    semanticScore: number;
+    sources: HybridRecallSource[];
+    matchHits: KnowledgeMatchResult["matchHits"];
+  };
+
+  const byVectorId = new Map<string, HybridRecallAccumulator>();
+  const maxKeywordScore = Math.max(0, ...keywordResults.map((result) => result.score));
+  for (const result of keywordResults) {
+    const vectorId = vectorIdForItem(result.item);
+    const keywordScore = maxKeywordScore > 0 ? result.score / maxKeywordScore : 0;
+    byVectorId.set(vectorId, {
+      item: hybridItemFromKnowledgeItem(result.item, vectorId),
+      vectorId,
+      keywordScore,
+      semanticScore: 0,
+      sources: ["keyword"],
+      matchHits: result.matchHits,
+    });
+  }
+
+  if (semantic.status === "ready") {
+    for (const result of semantic.results) {
+      const existing = byVectorId.get(result.vectorId);
+      const semanticScore = Math.max(0, Math.min(1, result.score));
+      if (existing) {
+        existing.item = hybridItemFromSemanticItem(result.item);
+        existing.semanticScore = semanticScore;
+        pushHybridSource(existing.sources, "semantic");
+      } else {
+        byVectorId.set(result.vectorId, {
+          item: hybridItemFromSemanticItem(result.item),
+          vectorId: result.vectorId,
+          keywordScore: 0,
+          semanticScore,
+          sources: ["semantic"],
+          matchHits: [],
+        });
+      }
+    }
+  }
+
+  const results = [...byVectorId.values()]
+    .map((result) => ({
+      item: result.item,
+      score: Number((result.keywordScore * 0.45 + result.semanticScore * 0.55).toFixed(6)),
+      keywordScore: Number(result.keywordScore.toFixed(6)),
+      semanticScore: Number(result.semanticScore.toFixed(6)),
+      vectorId: result.vectorId,
+      sources: result.sources,
+      matchHits: result.matchHits,
+    }))
+    .sort((left, right) => right.score - left.score || left.vectorId.localeCompare(right.vectorId))
+    .slice(0, limit);
+
+  if (results.length === 0) {
+    blockReasons.push("no_recall_results");
+    return blockedHybridRecall({
+      checkedAt,
+      query,
+      limit,
+      blockReasons,
+      semanticBlockReasons: semantic.blockReasons,
+      provider: semantic.provider,
+      model: semantic.model,
+      embeddingDimensions: semantic.embeddingDimensions,
+      totalIndexed: Math.max(keywordIndexState.index?.totalItems ?? 0, semantic.totalIndexed),
+      totalVectors: semantic.totalVectors,
+      keywordReturned: keywordResults.length,
+      semanticReturned: semantic.returnedResults,
+      embeddingCalls: semantic.constraintsVerified.embeddingCalls,
+    });
+  }
+
+  return {
+    mode: "hybrid-recall",
+    checkedAt,
+    status: "ready",
+    ready: true,
+    query,
+    limit,
+    blockReasons: [...new Set(blockReasons)],
+    semanticBlockReasons: semantic.blockReasons,
+    provider: semantic.provider,
+    model: semantic.model,
+    embeddingDimensions: semantic.embeddingDimensions,
+    totalIndexed: Math.max(keywordIndexState.index?.totalItems ?? 0, semantic.totalIndexed),
+    totalVectors: semantic.totalVectors,
+    keywordReturned: keywordResults.length,
+    semanticReturned: semantic.returnedResults,
+    returnedResults: results.length,
+    results,
+    constraintsVerified: hybridRecallConstraints(semantic.constraintsVerified.embeddingCalls),
+  };
+}
+
 async function writeVectorIndexSqlite(params: {
   workspaceRoot: string;
   relativePath: string;
@@ -3457,7 +3775,8 @@ export function isKbApiPath(pathname: string): boolean {
     pathname === KB_SEMANTIC_REBUILD_EXECUTION_CONTRACT_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_EXECUTION_STAGE_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_EXECUTION_RUN_ROUTE ||
-    pathname === KB_SEMANTIC_SEARCH_ROUTE
+    pathname === KB_SEMANTIC_SEARCH_ROUTE ||
+    pathname === KB_HYBRID_RECALL_ROUTE
   );
 }
 
@@ -3881,6 +4200,41 @@ export async function handleKbHttpRequest(
         status: "blocked",
         ready: false,
         error: `KB semantic search failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: noSemanticSearchConstraints(),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_HYBRID_RECALL_ROUTE) {
+    if (req.method !== "GET") {
+      sendMethodNotAllowed(res, "GET");
+      return true;
+    }
+
+    try {
+      const url = resolveRequestUrl(req);
+      const query = url.searchParams.get("q") ?? url.searchParams.get("query") ?? "";
+      const rawLimit = url.searchParams.get("limit");
+      const result = await executeHybridRecall(
+        workspaceRoot,
+        {
+          query,
+          limit: rawLimit ? Number.parseInt(rawLimit, 10) : null,
+        },
+        options,
+      );
+      sendJson(
+        res,
+        result.status === "ready" ? 200 : result.blockReasons.includes("query_missing") ? 400 : 409,
+        result,
+      );
+    } catch (error) {
+      sendJson(res, 500, {
+        mode: "hybrid-recall",
+        status: "blocked",
+        ready: false,
+        error: `KB hybrid recall failed: ${error instanceof Error ? error.message : String(error)}`,
         constraintsVerified: noSemanticSearchConstraints(),
       });
     }

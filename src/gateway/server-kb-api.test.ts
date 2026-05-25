@@ -17,6 +17,7 @@ import {
   checkSemanticRebuildProposalAcceptance,
   checkSemanticRebuildExecutionEntry,
   checkSemanticRebuildPreflight,
+  executeHybridRecall,
   executeSemanticRebuild,
   executeSemanticSearch,
   getSemanticRebuildStatus,
@@ -148,6 +149,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-execution-stage")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-execution-run")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-search")).toBe(true);
+    expect(isKbApiPath("/api/kb/hybrid-recall")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -2210,6 +2212,108 @@ describe("server KB API", () => {
     expect(response.json()).toEqual(
       expect.objectContaining({
         mode: "semantic-search",
+        status: "blocked",
+        ready: false,
+        blockReasons: ["query_missing"],
+        constraintsVerified: expect.objectContaining({
+          fileWrites: "no",
+          embeddingCalls: "no",
+          realRebuildTriggered: "no",
+        }),
+      }),
+    );
+  });
+
+  it("combines keyword and semantic results for read-only hybrid recall", async () => {
+    const workspaceRoot = makeWorkspace();
+    const calls: string[][] = [];
+    const config = semanticRebuildConfig();
+    registerTestEmbeddingProvider(calls, {
+      embedQuery: async () => [1, 0, 0],
+      embedBatch: async (texts) =>
+        texts.map((text) => (text.includes("Task graph recovery") ? [1, 0, 0] : [0, 1, 0])),
+    });
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+      summary: "Recover task graph state",
+      tags: ["D7"],
+    });
+    writeJson(path.join(workspaceRoot, "system", "skill-library", "skill-a.json"), {
+      skillId: "skill-a",
+      title: "KB refresh",
+      trigger: "refresh keyword index",
+      sourceCases: ["case-a"],
+    });
+
+    const refreshResponse = makeResponse();
+    await handleKbHttpRequest(
+      makeReq("/api/kb/refresh", "POST"),
+      refreshResponse.res,
+      workspaceRoot,
+    );
+    expect(refreshResponse.res.statusCode).toBe(200);
+    await prepareApprovedSemanticRebuild(workspaceRoot, config);
+    await executeSemanticRebuild(workspaceRoot, { config });
+
+    const recall = await executeHybridRecall(
+      workspaceRoot,
+      { query: "task graph recovery", limit: 2 },
+      { config },
+    );
+
+    expect(recall).toEqual(
+      expect.objectContaining({
+        mode: "hybrid-recall",
+        status: "ready",
+        ready: true,
+        query: "task graph recovery",
+        limit: 2,
+        provider: "test-embed",
+        model: "test-model",
+        embeddingDimensions: 3,
+        totalIndexed: 2,
+        totalVectors: 2,
+        keywordReturned: 1,
+        semanticReturned: 2,
+        returnedResults: 2,
+        constraintsVerified: {
+          fileWrites: "no",
+          stateWritten: "no",
+          embeddingCalls: "yes",
+          keywordIndexWritten: "no",
+          semanticIndexWritten: "no",
+          vectorIndexWritten: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        },
+      }),
+    );
+    expect(recall.results[0]).toEqual(
+      expect.objectContaining({
+        vectorId: "case:case-a",
+        sources: ["keyword", "semantic"],
+        keywordScore: 1,
+        semanticScore: 1,
+        score: 1,
+        item: expect.objectContaining({ itemId: "case-a" }),
+      }),
+    );
+  });
+
+  it("serves hybrid recall over HTTP query params", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/hybrid-recall", "GET"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(400);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        mode: "hybrid-recall",
         status: "blocked",
         ready: false,
         blockReasons: ["query_missing"],
