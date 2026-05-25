@@ -26,6 +26,7 @@ openclaw memory status
 openclaw memory status --deep
 openclaw memory status --fix
 openclaw memory index --force
+openclaw memory rebuild-plan --json
 openclaw memory search "meeting notes"
 openclaw memory search --query "deployment" --max-results 20
 openclaw memory promote --limit 10 --min-score 0.75
@@ -59,6 +60,16 @@ openclaw memory index --agent main --verbose
 `memory index`:
 
 - `--force`: force a full reindex.
+
+`memory rebuild-plan`:
+
+- `--force`: plan a full rebuild instead of an incremental rebuild.
+- `--json`: print the dry-run plan as JSON.
+
+`memory rebuild-plan` never writes index files, never calls embedding providers,
+never invokes QMD update/status, and never probes vector extensions. It only
+loads configuration, scans candidate source files, and reports the rebuild plan
+that would require a separate approved apply path.
 
 `memory search`:
 

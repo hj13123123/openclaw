@@ -1,6 +1,7 @@
 export type MemoryCommandOptions = {
   agent?: string;
   json?: boolean;
+  dryRun?: boolean;
   deep?: boolean;
   index?: boolean;
   force?: boolean;

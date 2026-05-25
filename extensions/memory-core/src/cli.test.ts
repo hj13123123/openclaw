@@ -749,6 +749,112 @@ describe("memory cli", () => {
     expect(hasLoggedInactiveSecretDiagnostic(error)).toBe(true);
   });
 
+  it("prints rebuild plan json without opening the memory manager", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "durable fact", "utf-8");
+      loadConfig.mockReturnValue({
+        agents: {
+          defaults: { workspace: workspaceDir },
+          list: [{ id: "main", default: true }],
+        },
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rebuild-plan", "--json"]);
+
+      const payload = firstWrittenJsonArg<{
+        dryRun: boolean;
+        safety: { writes: boolean; embeddingCalls: boolean; vectorProbe: boolean };
+        agents: Array<{
+          agentId: string;
+          backend: string;
+          provider: string;
+          sourceScan: { totalFiles: number | null; totalBytes: number | null };
+          actions: Array<{ step: string; state: string }>;
+        }>;
+      }>(writeJson);
+      expect(payload).not.toBeNull();
+      if (!payload) {
+        throw new Error("expected json payload");
+      }
+      expect(payload.dryRun).toBe(true);
+      expect(payload.safety).toMatchObject({
+        writes: false,
+        embeddingCalls: false,
+        vectorProbe: false,
+      });
+      expect(payload.agents[0]).toMatchObject({
+        agentId: "main",
+        backend: "builtin",
+      });
+      expect(payload.agents[0]?.provider).toBeTruthy();
+      expect(payload.agents[0]?.sourceScan.totalFiles).toBe(1);
+      expect(payload.agents[0]?.sourceScan.totalBytes).toBeGreaterThan(0);
+      expect(payload.agents[0]?.actions.some((action) => action.step === "rebuild-index")).toBe(
+        true,
+      );
+      expect(getMemorySearchManager).not.toHaveBeenCalled();
+    });
+  });
+
+  it("plans qmd rebuilds without invoking qmd status or update", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "root memory", "utf-8");
+      await fs.mkdir(path.join(workspaceDir, "kb"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "kb", "note.md"), "kb note", "utf-8");
+      loadConfig.mockReturnValue({
+        memory: {
+          backend: "qmd",
+          qmd: {
+            paths: [{ name: "kb", path: "kb", pattern: "**/*.md" }],
+          },
+        },
+        agents: {
+          defaults: { workspace: workspaceDir },
+          list: [{ id: "main", default: true }],
+        },
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rebuild-plan", "--json", "--force"]);
+
+      const payload = firstWrittenJsonArg<{
+        force: boolean;
+        safety: { qmdUpdate: boolean; vectorProbe: boolean };
+        agents: Array<{
+          backend: string;
+          provider: string;
+          qmd?: { collections: Array<{ name: string }> };
+          sourceScan: { totalFiles: number | null };
+          vector: { state: string; reason: string };
+          actions: Array<{ step: string; state: string }>;
+        }>;
+      }>(writeJson);
+      expect(payload).not.toBeNull();
+      if (!payload) {
+        throw new Error("expected json payload");
+      }
+      expect(payload.force).toBe(true);
+      expect(payload.safety).toMatchObject({ qmdUpdate: false, vectorProbe: false });
+      expect(payload.agents[0]).toMatchObject({
+        backend: "qmd",
+        provider: "qmd",
+      });
+      expect(payload.agents[0]?.qmd?.collections.some((entry) => entry.name.includes("kb"))).toBe(
+        true,
+      );
+      expect(payload.agents[0]?.sourceScan.totalFiles).toBe(2);
+      expect(payload.agents[0]?.vector).toMatchObject({
+        state: "not-probed",
+        reason: "dry run does not invoke qmd status or update",
+      });
+      expect(payload.agents[0]?.actions).toContainEqual(
+        expect.objectContaining({ step: "probe-vector", state: "skipped" }),
+      );
+      expect(getMemorySearchManager).not.toHaveBeenCalled();
+    });
+  });
+
   it("logs default message when memory manager is missing", async () => {
     getMemorySearchManager.mockResolvedValueOnce({ manager: null });
 

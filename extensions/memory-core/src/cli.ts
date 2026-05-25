@@ -37,6 +37,11 @@ async function runMemoryIndex(opts: MemoryCommandOptions) {
   await runtime.runMemoryIndex(opts);
 }
 
+async function runMemoryRebuildPlan(opts: MemoryCommandOptions) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemoryRebuildPlan(opts);
+}
+
 async function runMemorySearch(queryArg: string | undefined, opts: MemorySearchCommandOptions) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemorySearch(queryArg, opts);
@@ -80,6 +85,7 @@ export function registerMemoryCli(program: Command) {
           ],
           ["openclaw memory status --deep", "Probe embedding provider readiness."],
           ["openclaw memory index --force", "Force a full reindex."],
+          ["openclaw memory rebuild-plan --json", "Preview a semantic/vector rebuild plan."],
           ['openclaw memory search "meeting notes"', "Quick search using positional query."],
           [
             'openclaw memory search --query "deployment" --max-results 20',
@@ -134,6 +140,17 @@ export function registerMemoryCli(program: Command) {
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
       await runMemoryIndex(opts);
+    });
+
+  memory
+    .command("rebuild-plan")
+    .description("Preview a semantic/vector rebuild plan without writing")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--force", "Plan a full rebuild", false)
+    .option("--dry-run", "Preview only; this command never writes", true)
+    .option("--json", "Print JSON")
+    .action(async (opts: MemoryCommandOptions) => {
+      await runMemoryRebuildPlan(opts);
     });
 
   memory

@@ -2,6 +2,11 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  resolveAgentWorkspaceDir,
+  resolveMemorySearchConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -69,13 +74,76 @@ type MemorySourceName = "memory" | "sessions";
 type SourceScan = {
   source: MemorySourceName;
   totalFiles: number | null;
+  totalBytes: number | null;
   issues: string[];
 };
 
 type MemorySourceScan = {
   sources: SourceScan[];
   totalFiles: number | null;
+  totalBytes: number | null;
   issues: string[];
+};
+
+type IndexArtifactPlan = {
+  path?: string;
+  exists: boolean;
+  bytes?: number;
+  mtimeMs?: number;
+  issue?: string;
+};
+
+type MemoryRebuildPlanAgent = {
+  agentId: string;
+  backend: "builtin" | "qmd";
+  provider: string;
+  model?: string;
+  workspaceDir: string;
+  storePath?: string;
+  sources: MemorySourceName[];
+  sourceScan: MemorySourceScan;
+  index: IndexArtifactPlan;
+  vector: {
+    enabled: boolean;
+    state: "not-probed" | "disabled";
+    extensionPath?: string;
+    reason: string;
+  };
+  qmd?: {
+    command: string;
+    collections: Array<{
+      name: string;
+      path: string;
+      pattern: string;
+      kind: string;
+    }>;
+    update: {
+      onBoot: boolean;
+      intervalMs: number;
+      embedIntervalMs: number;
+    };
+  };
+  actions: Array<{
+    step: string;
+    state: "checked" | "planned" | "skipped";
+    detail: string;
+  }>;
+  warnings: string[];
+  blockers: string[];
+};
+
+type MemoryRebuildPlan = {
+  generatedAt: string;
+  dryRun: true;
+  force: boolean;
+  safety: {
+    writes: false;
+    embeddingCalls: false;
+    vectorProbe: false;
+    qmdUpdate: false;
+    requiresHumanApprovalForApply: true;
+  };
+  agents: MemoryRebuildPlanAgent[];
 };
 
 type LoadedMemoryCommandConfig = {
@@ -499,25 +567,51 @@ async function checkReadableFile(pathname: string): Promise<{ exists: boolean; i
   }
 }
 
+async function statFileBytes(pathname: string): Promise<number | null> {
+  try {
+    const stat = await fs.stat(pathname);
+    return stat.isFile() ? stat.size : null;
+  } catch {
+    return null;
+  }
+}
+
+async function sumFileBytes(files: string[]): Promise<number | null> {
+  let total = 0;
+  for (const file of files) {
+    const bytes = await statFileBytes(file);
+    if (bytes === null) {
+      return null;
+    }
+    total += bytes;
+  }
+  return total;
+}
+
 async function scanSessionFiles(agentId: string): Promise<SourceScan> {
   const issues: string[] = [];
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
   try {
     const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
-    const totalFiles = entries.filter(
-      (entry) => entry.isFile() && entry.name.endsWith(".jsonl"),
-    ).length;
-    return { source: "sessions", totalFiles, issues };
+    const files = entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+      .map((entry) => path.join(sessionsDir, entry.name));
+    return {
+      source: "sessions",
+      totalFiles: files.length,
+      totalBytes: await sumFileBytes(files),
+      issues,
+    };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
       issues.push(`sessions directory missing (${shortenHomePath(sessionsDir)})`);
-      return { source: "sessions", totalFiles: 0, issues };
+      return { source: "sessions", totalFiles: 0, totalBytes: 0, issues };
     }
     issues.push(
       `sessions directory not accessible (${shortenHomePath(sessionsDir)}): ${code ?? "error"}`,
     );
-    return { source: "sessions", totalFiles: null, issues };
+    return { source: "sessions", totalFiles: null, totalBytes: null, issues };
   }
 }
 
@@ -610,11 +704,13 @@ async function scanMemoryFiles(
     totalFiles = files.size;
   }
 
+  const totalBytes = listedOk ? await sumFileBytes(Array.from(new Set(listed))) : null;
+
   if ((totalFiles ?? 0) === 0 && issues.length === 0) {
     issues.push(`no memory files found in ${shortenHomePath(workspaceDir)}`);
   }
 
-  return { source: "memory", totalFiles, issues };
+  return { source: "memory", totalFiles, totalBytes, issues };
 }
 
 async function summarizeQmdIndexArtifact(manager: MemoryManager): Promise<string | null> {
@@ -667,7 +763,386 @@ async function scanMemorySources(params: {
   const totalFiles = totals.some((total) => total === null)
     ? null
     : numericTotals.reduce((sum, total) => sum + total, 0);
-  return { sources: scans, totalFiles, issues };
+  const byteTotals = scans.map((scan) => scan.totalBytes);
+  const numericByteTotals = byteTotals.filter((total): total is number => total !== null);
+  const totalBytes = byteTotals.some((total) => total === null)
+    ? null
+    : numericByteTotals.reduce((sum, total) => sum + total, 0);
+  return { sources: scans, totalFiles, totalBytes, issues };
+}
+
+async function inspectIndexArtifact(indexPath?: string): Promise<IndexArtifactPlan> {
+  const resolvedPath = indexPath?.trim();
+  if (!resolvedPath) {
+    return { exists: false };
+  }
+  try {
+    const stat = await fs.stat(resolvedPath);
+    if (!stat.isFile()) {
+      return {
+        path: resolvedPath,
+        exists: false,
+        issue: `${shortenHomePath(resolvedPath)} is not a file`,
+      };
+    }
+    return {
+      path: resolvedPath,
+      exists: true,
+      bytes: stat.size,
+      mtimeMs: stat.mtimeMs,
+    };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return { path: resolvedPath, exists: false };
+    }
+    return {
+      path: resolvedPath,
+      exists: false,
+      issue: `${shortenHomePath(resolvedPath)} not accessible (${code ?? "error"})`,
+    };
+  }
+}
+
+function uniqueSources(sources: Iterable<MemorySourceName>): MemorySourceName[] {
+  const result: MemorySourceName[] = [];
+  for (const source of sources) {
+    if ((source === "memory" || source === "sessions") && !result.includes(source)) {
+      result.push(source);
+    }
+  }
+  return result.length > 0 ? result : ["memory"];
+}
+
+function resolveQmdIndexPath(agentId: string): string {
+  return path.join(
+    resolveStateDir(process.env, os.homedir),
+    "agents",
+    agentId,
+    "qmd",
+    "xdg-cache",
+    "qmd",
+    "index.sqlite",
+  );
+}
+
+function formatNullableCount(value: number | null | undefined, unit: string): string {
+  if (value === null || value === undefined) {
+    return `unknown ${unit}`;
+  }
+  return `${value} ${unit}`;
+}
+
+function formatIndexArtifact(index: IndexArtifactPlan): string {
+  if (!index.path) {
+    return "<unknown>";
+  }
+  const base = shortenHomePath(index.path);
+  if (!index.exists) {
+    return `${base} (missing)`;
+  }
+  const suffix = typeof index.bytes === "number" ? `, ${index.bytes} bytes` : "";
+  return `${base} (exists${suffix})`;
+}
+
+function buildDryRunActions(params: {
+  backend: "builtin" | "qmd";
+  force: boolean;
+  vectorEnabled: boolean;
+}): MemoryRebuildPlanAgent["actions"] {
+  return [
+    {
+      step: "load-config",
+      state: "checked",
+      detail: "Resolved active memory configuration only.",
+    },
+    {
+      step: "scan-sources",
+      state: "checked",
+      detail: "Counted candidate files without reading or indexing content.",
+    },
+    {
+      step: "probe-vector",
+      state: "skipped",
+      detail: "Dry run does not load sqlite-vec, invoke qmd status, or call embedding providers.",
+    },
+    {
+      step: "rebuild-index",
+      state: "planned",
+      detail: `${params.force ? "Full" : "incremental"} ${params.backend} rebuild would require a separate apply command and human approval.`,
+    },
+    {
+      step: "update-vector",
+      state: params.vectorEnabled ? "planned" : "skipped",
+      detail: params.vectorEnabled
+        ? "Vector rows would be refreshed during an approved rebuild."
+        : "Vector storage is disabled; only lexical/index metadata would be refreshed.",
+    },
+  ];
+}
+
+function collectScanWarnings(scan: MemorySourceScan): string[] {
+  return scan.issues.map((issue) => `source scan: ${issue}`);
+}
+
+async function buildBuiltinRebuildPlanAgent(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  force: boolean;
+}): Promise<MemoryRebuildPlanAgent> {
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
+  if (!settings) {
+    const sourceScan: MemorySourceScan = {
+      sources: [],
+      totalFiles: 0,
+      totalBytes: 0,
+      issues: [],
+    };
+    return {
+      agentId: params.agentId,
+      backend: "builtin",
+      provider: "disabled",
+      workspaceDir,
+      sources: [],
+      sourceScan,
+      index: { exists: false },
+      vector: {
+        enabled: false,
+        state: "disabled",
+        reason: "memory search is disabled",
+      },
+      actions: buildDryRunActions({
+        backend: "builtin",
+        force: params.force,
+        vectorEnabled: false,
+      }),
+      warnings: [],
+      blockers: ["memory search is disabled for this agent"],
+    };
+  }
+
+  const sources = uniqueSources(settings.sources);
+  const sourceScan = await scanMemorySources({
+    workspaceDir,
+    agentId: params.agentId,
+    sources,
+    extraPaths: settings.extraPaths,
+  });
+  const index = await inspectIndexArtifact(settings.store.path);
+  const warnings = collectScanWarnings(sourceScan);
+  if (index.issue) {
+    warnings.push(`index: ${index.issue}`);
+  }
+  if (!index.exists) {
+    warnings.push("index store is missing; an approved rebuild would create it.");
+  }
+  if (!settings.store.vector.enabled) {
+    warnings.push("vector storage is disabled; semantic/vector recall would remain unavailable.");
+  }
+
+  return {
+    agentId: params.agentId,
+    backend: "builtin",
+    provider: settings.provider,
+    model: settings.model,
+    workspaceDir,
+    storePath: settings.store.path,
+    sources,
+    sourceScan,
+    index,
+    vector: {
+      enabled: settings.store.vector.enabled,
+      state: settings.store.vector.enabled ? "not-probed" : "disabled",
+      extensionPath: settings.store.vector.extensionPath,
+      reason: settings.store.vector.enabled
+        ? "dry run does not load or probe the vector extension"
+        : "disabled by memorySearch.store.vector.enabled",
+    },
+    actions: buildDryRunActions({
+      backend: "builtin",
+      force: params.force,
+      vectorEnabled: settings.store.vector.enabled,
+    }),
+    warnings,
+    blockers: [],
+  };
+}
+
+async function buildQmdRebuildPlanAgent(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  force: boolean;
+}): Promise<MemoryRebuildPlanAgent> {
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const backend = resolveMemoryBackendConfig({ cfg: params.cfg, agentId: params.agentId });
+  const qmd = backend.qmd;
+  if (!qmd) {
+    return await buildBuiltinRebuildPlanAgent(params);
+  }
+  const sources = uniqueSources(
+    qmd.collections.map((collection) => (collection.kind === "sessions" ? "sessions" : "memory")),
+  );
+  const unsupportedPatterns = qmd.collections.filter(
+    (collection) => collection.kind === "custom" && collection.pattern !== "**/*.md",
+  );
+  const scannableExtraPaths = qmd.collections
+    .filter((collection) => collection.kind === "custom" && collection.pattern === "**/*.md")
+    .map((collection) => collection.path);
+  const sourceScan = await scanMemorySources({
+    workspaceDir,
+    agentId: params.agentId,
+    sources,
+    extraPaths: scannableExtraPaths,
+  });
+  const storePath = resolveQmdIndexPath(params.agentId);
+  const index = await inspectIndexArtifact(storePath);
+  const warnings = collectScanWarnings(sourceScan);
+  warnings.push("qmd vector availability is not probed in dry run.");
+  if (index.issue) {
+    warnings.push(`index: ${index.issue}`);
+  }
+  if (!index.exists) {
+    warnings.push("qmd index is missing; an approved rebuild would create it.");
+  }
+  for (const collection of unsupportedPatterns) {
+    warnings.push(
+      `qmd collection ${collection.name} uses pattern ${collection.pattern}; dry-run file count may exclude it.`,
+    );
+  }
+
+  return {
+    agentId: params.agentId,
+    backend: "qmd",
+    provider: "qmd",
+    model: "qmd",
+    workspaceDir,
+    storePath,
+    sources,
+    sourceScan,
+    index,
+    vector: {
+      enabled: true,
+      state: "not-probed",
+      reason: "dry run does not invoke qmd status or update",
+    },
+    qmd: {
+      command: qmd.command,
+      collections: qmd.collections.map((collection) => ({
+        name: collection.name,
+        path: collection.path,
+        pattern: collection.pattern,
+        kind: collection.kind,
+      })),
+      update: {
+        onBoot: qmd.update.onBoot,
+        intervalMs: qmd.update.intervalMs,
+        embedIntervalMs: qmd.update.embedIntervalMs,
+      },
+    },
+    actions: buildDryRunActions({
+      backend: "qmd",
+      force: params.force,
+      vectorEnabled: true,
+    }),
+    warnings,
+    blockers: [],
+  };
+}
+
+async function buildMemoryRebuildPlan(
+  cfg: OpenClawConfig,
+  opts: MemoryCommandOptions,
+): Promise<MemoryRebuildPlan> {
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const force = Boolean(opts.force);
+  const agents: MemoryRebuildPlanAgent[] = [];
+  for (const agentId of agentIds) {
+    const backend = resolveMemoryBackendConfig({ cfg, agentId });
+    agents.push(
+      backend.backend === "qmd"
+        ? await buildQmdRebuildPlanAgent({ cfg, agentId, force })
+        : await buildBuiltinRebuildPlanAgent({ cfg, agentId, force }),
+    );
+  }
+  return {
+    generatedAt: new Date().toISOString(),
+    dryRun: true,
+    force,
+    safety: {
+      writes: false,
+      embeddingCalls: false,
+      vectorProbe: false,
+      qmdUpdate: false,
+      requiresHumanApprovalForApply: true,
+    },
+    agents,
+  };
+}
+
+function formatMemoryRebuildPlan(plan: MemoryRebuildPlan): string {
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  const info = (text: string) => colorize(rich, theme.info, text);
+  const warn = (text: string) => colorize(rich, theme.warn, text);
+  const label = (text: string) => muted(`${text}:`);
+  const lines = [
+    heading("Memory Rebuild Plan"),
+    `${label("Dry run")} ${info("true")} ${muted("(no writes, no embedding calls, no vector probe)")}`,
+    `${label("Force")} ${info(String(plan.force))}`,
+  ];
+  for (const agent of plan.agents) {
+    lines.push("");
+    lines.push(`${heading("Agent")} ${info(agent.agentId)}`);
+    lines.push(`${label("Backend")} ${info(agent.backend)}`);
+    lines.push(`${label("Provider")} ${info(agent.provider)}`);
+    if (agent.model) {
+      lines.push(`${label("Model")} ${info(agent.model)}`);
+    }
+    lines.push(`${label("Workspace")} ${info(shortenHomePath(agent.workspaceDir))}`);
+    lines.push(`${label("Store")} ${info(formatIndexArtifact(agent.index))}`);
+    lines.push(`${label("Sources")} ${info(agent.sources.join(", ") || "none")}`);
+    lines.push(
+      `${label("Candidates")} ${info(formatNullableCount(agent.sourceScan.totalFiles, "files"))} ${muted("/")} ${info(formatNullableCount(agent.sourceScan.totalBytes, "bytes"))}`,
+    );
+    lines.push(
+      `${label("Vector")} ${info(agent.vector.enabled ? agent.vector.state : "disabled")} ${muted(agent.vector.reason)}`,
+    );
+    if (agent.qmd) {
+      lines.push(`${label("QMD command")} ${info(agent.qmd.command)}`);
+      lines.push(`${label("QMD collections")} ${info(String(agent.qmd.collections.length))}`);
+    }
+    if (agent.blockers.length) {
+      lines.push(label("Blockers"));
+      for (const blocker of agent.blockers) {
+        lines.push(`  ${warn(blocker)}`);
+      }
+    }
+    if (agent.warnings.length) {
+      lines.push(label("Warnings"));
+      for (const warning of agent.warnings) {
+        lines.push(`  ${warn(warning)}`);
+      }
+    }
+    lines.push(label("Actions"));
+    for (const action of agent.actions) {
+      lines.push(`  ${info(action.step)} ${muted(action.state)} - ${action.detail}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+export async function runMemoryRebuildPlan(opts: MemoryCommandOptions) {
+  setVerbose(Boolean(opts.verbose));
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory rebuild-plan");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const plan = await buildMemoryRebuildPlan(cfg, opts);
+  if (opts.json) {
+    defaultRuntime.writeJson(plan);
+    return;
+  }
+  defaultRuntime.log(formatMemoryRebuildPlan(plan));
 }
 
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
