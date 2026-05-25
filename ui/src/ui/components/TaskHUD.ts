@@ -101,6 +101,31 @@ type PromotionCandidatesState = {
   constraintsVerified?: Record<string, string>;
 };
 
+type SchedulerTickPlanState = {
+  mode?: string;
+  decision?: string;
+  reason?: string;
+  enabled?: boolean;
+  markerMode?: string;
+  stateStatus?: string;
+  running?: boolean;
+  totalTicks?: number;
+  nextTickIndex?: number | null;
+  warningCount?: number;
+  maxTicks?: {
+    effective?: number;
+    reason?: string;
+    global?: number;
+    perTask?: number | null;
+    perTaskId?: string | null;
+    reached?: boolean;
+  };
+  sourceFiles?: {
+    tickScriptExists?: boolean;
+  };
+  constraintsVerified?: Record<string, string>;
+};
+
 type ObserveSummaryState = {
   available?: boolean;
   reportPath?: string | null;
@@ -429,6 +454,7 @@ type HUDState = {
   controlSignals?: ControlSignalsState;
   recoveryCandidates?: RecoveryCandidatesState;
   promotionCandidates?: PromotionCandidatesState;
+  schedulerTickPlan?: SchedulerTickPlanState;
   watchdogSnapshot?: {
     totalAlerts?: number;
     healthyCount?: number;
@@ -1227,11 +1253,13 @@ export class TaskHUD extends LitElement {
     const control = this.hud?.controlSignals;
     const recovery = this.hud?.recoveryCandidates;
     const promotion = this.hud?.promotionCandidates;
-    if (!control && !recovery && !promotion) return nothing;
+    const scheduler = this.hud?.schedulerTickPlan;
+    if (!control && !recovery && !promotion && !scheduler) return nothing;
 
     const controlConstraints = control?.constraintsVerified ?? {};
     const recoveryConstraints = recovery?.constraintsVerified ?? {};
     const promotionConstraints = promotion?.constraintsVerified ?? {};
+    const schedulerConstraints = scheduler?.constraintsVerified ?? {};
     const roleEntries = control?.byRole ?? [];
     const actionEntries = control?.byAction ?? [];
     const recoveryStatusEntries = recovery?.byStatus ?? [];
@@ -1266,6 +1294,10 @@ export class TaskHUD extends LitElement {
               promotion ${promotion?.stats?.total ?? 0} · invalid ${promotion?.stats?.invalid ?? 0}
               · consistency ${promotionConsistencyIssueCount}
             </div>
+            <div class="secondary">
+              scheduler ${text(scheduler?.decision, "disabled")} · tick
+              ${scheduler?.nextTickIndex ?? "none"} · warnings ${scheduler?.warningCount ?? 0}
+            </div>
             <details class="details">
               <summary>查看安全约束</summary>
               ${[
@@ -1281,6 +1313,11 @@ export class TaskHUD extends LitElement {
                 ["promotion.candidateStateWritten", promotionConstraints.candidateStateWritten],
                 ["promotion.truthFilesWritten", promotionConstraints.truthFilesWritten],
                 ["promotion.autoPromote", promotionConstraints.autoPromote],
+                ["scheduler.readOnly", schedulerConstraints.readOnly],
+                ["scheduler.scriptInvoked", schedulerConstraints.scriptInvoked],
+                ["scheduler.childProcessSpawned", schedulerConstraints.childProcessSpawned],
+                ["scheduler.autoDispatchTriggered", schedulerConstraints.autoDispatchTriggered],
+                ["scheduler.applied", schedulerConstraints.applied],
               ].map(
                 ([label, value]) => html`
                   <div class="issue">

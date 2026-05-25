@@ -100,6 +100,37 @@ describe("TaskHUD task graph validation", () => {
                 autoPromote: "disabled",
               },
             },
+            schedulerTickPlan: {
+              mode: "observe-only",
+              decision: "disabled",
+              reason: "scheduler marker is disabled",
+              enabled: false,
+              markerMode: "observe",
+              stateStatus: "disabled",
+              running: false,
+              totalTicks: 0,
+              nextTickIndex: null,
+              warningCount: 3,
+              maxTicks: {
+                effective: 10,
+                reason: "global_max_ticks",
+                global: 10,
+                perTask: null,
+                perTaskId: null,
+                reached: false,
+              },
+              sourceFiles: { tickScriptExists: true },
+              constraintsVerified: {
+                readOnly: "yes",
+                markerWritten: "no",
+                stateWritten: "no",
+                eventEmitted: "no",
+                scriptInvoked: "no",
+                childProcessSpawned: "no",
+                autoDispatchTriggered: "no",
+                applied: "no",
+              },
+            },
             watchdogSnapshot: {
               totalAlerts: 4,
               healthyCount: 2,
@@ -391,6 +422,9 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("recovery.autoDispatchTriggered · no");
     expect(compactText).toContain("promotion.candidateStateWritten · no");
     expect(compactText).toContain("promotion.truthFilesWritten · no");
+    expect(compactText).toContain("scheduler disabled");
+    expect(compactText).toContain("scheduler.scriptInvoked · no");
+    expect(compactText).toContain("scheduler.childProcessSpawned · no");
     expect(compactText).toContain("promotion state rolledback · 3");
     expect(compactText).toContain("promotion consistency ok · 5");
     expect(compactText).toContain("健康巡检");
