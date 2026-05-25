@@ -14,7 +14,6 @@ import {
   resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
-import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   clampResultsByInjectedChars,
   decorateCitations,
@@ -64,12 +63,15 @@ function queueShortTermRecallTracking(params: {
   timezone?: string;
 }): void {
   const trackingResults = resolveRecallTrackingResults(params.rawResults, params.surfacedResults);
-  void recordShortTermRecalls({
-    workspaceDir: params.workspaceDir,
-    query: params.query,
-    results: trackingResults,
-    timezone: params.timezone,
-  }).catch(() => {
+  void (async () => {
+    const { recordShortTermRecalls } = await import("./short-term-promotion.js");
+    await recordShortTermRecalls({
+      workspaceDir: params.workspaceDir,
+      query: params.query,
+      results: trackingResults,
+      timezone: params.timezone,
+    });
+  })().catch(() => {
     // Recall tracking is best-effort and must never block memory recall.
   });
 }

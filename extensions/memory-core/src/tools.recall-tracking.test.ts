@@ -36,6 +36,16 @@ function createSearchTool(config: OpenClawConfig) {
   return tool;
 }
 
+async function waitForRecallTrackingCall(count = 1): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (recallTrackingMock.recordShortTermRecalls.mock.calls.length >= count) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledTimes(count);
+}
+
 describe("memory_search recall tracking", () => {
   beforeEach(() => {
     resetMemoryToolMockState();
@@ -80,7 +90,7 @@ describe("memory_search recall tracking", () => {
     expect(details.results).toHaveLength(1);
     expect(details.results[0]?.path).toBe("memory/2026-04-03.md");
 
-    expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledTimes(1);
+    await waitForRecallTrackingCall();
     const [firstCall] = recallTrackingMock.recordShortTermRecalls.mock.calls;
     expect(firstCall).toBeDefined();
     const recallParams = firstCall[0];
@@ -128,7 +138,7 @@ describe("memory_search recall tracking", () => {
       const details = result.details as { results: Array<{ path: string }> };
       expect(details.results).toHaveLength(1);
       expect(details.results[0]?.path).toBe("memory/2026-04-03.md");
-      expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledTimes(1);
+      await waitForRecallTrackingCall();
     } finally {
       if (timeout) {
         clearTimeout(timeout);
@@ -173,7 +183,7 @@ describe("memory_search recall tracking", () => {
 
     await tool.execute("call_recall_timezone", { query: "glacier" });
 
-    expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledTimes(1);
+    await waitForRecallTrackingCall();
     const [firstCall] = recallTrackingMock.recordShortTermRecalls.mock.calls;
     expect(firstCall?.[0]?.timezone).toBe("Europe/London");
   });
