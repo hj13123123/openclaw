@@ -64,9 +64,9 @@ describe("HUD state core", () => {
     });
 
     expect(state.generator).toBe("runtime-hud-state");
-    expect(state.agentGroups).toHaveLength(3);
+    expect(state.agentGroups).toHaveLength(5);
     expect(state.globalStatus).toMatchObject({
-      status: "healthy",
+      status: "degraded",
       runningCount: 1,
       completedCount: 2,
       failedCount: 0,
@@ -77,6 +77,14 @@ describe("HUD state core", () => {
       currentTask: "TASK-MAIN",
       progressPct: 50,
       progressDerivation: "position-state",
+    });
+    expect(state.agentGroups.find((agent) => agent.agentId === "evolution-curator")).toMatchObject({
+      role: "observability",
+      status: "unknown",
+    });
+    expect(state.agentGroups.find((agent) => agent.agentId === "patrol")).toMatchObject({
+      role: "observability",
+      status: "unknown",
     });
   });
 

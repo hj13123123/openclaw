@@ -194,6 +194,8 @@ export const DEFAULT_HUD_AGENT_DEFAULTS: HudAgentDefault[] = [
   { agentId: "main", displayName: "main", role: "orchestrator" },
   { agentId: "engineering-executive", displayName: "Engineering Executive", role: "execution" },
   { agentId: "front-end-executive", displayName: "Front-End Executive", role: "execution" },
+  { agentId: "evolution-curator", displayName: "Evolution Curator", role: "observability" },
+  { agentId: "patrol", displayName: "Patrol", role: "observability" },
 ];
 
 function stringValue(value: unknown): string | null {

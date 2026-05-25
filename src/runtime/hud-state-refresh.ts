@@ -54,7 +54,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readJsonFile(filePath: string): Record<string, unknown> | null {
   try {
-    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as unknown;
+    const raw = readFileSync(filePath, "utf8").replace(/^\uFEFF/u, "");
+    const parsed = JSON.parse(raw) as unknown;
     return isRecord(parsed) ? parsed : null;
   } catch {
     return null;
