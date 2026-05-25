@@ -354,6 +354,9 @@ type HUDState = {
     lastScanAt?: string;
     pendingItems?: ReturnPendingItem[];
   };
+  watchdogSnapshot?: {
+    totalAlerts?: number;
+  };
   taskGraphs?: {
     items?: TaskGraphItem[];
   };
@@ -955,6 +958,9 @@ export class TaskHUD extends LitElement {
     const alerts = attention.filter((item) =>
       ["critical", "error", "warning", "warn"].includes(String(item.severity ?? "").toLowerCase()),
     );
+    const watchdogAlertCount = Number(this.hud?.watchdogSnapshot?.totalAlerts ?? 0);
+    const globalAlertCount = Number(this.hud?.globalStatus?.alertCount ?? 0);
+    const alertCount = Math.max(alerts.length, watchdogAlertCount, globalAlertCount);
     const reviews = [
       ...attention.filter((item) => item.needsReview === true),
       ...(this.hud?.returnInbox?.pendingItems ?? []).map((item) => ({
@@ -977,7 +983,7 @@ export class TaskHUD extends LitElement {
         <div class="counts">
           <span><strong>${runningTasks.length}</strong> 运行</span>
           <span><strong>${reviews.length}</strong> 验收</span>
-          <span><strong>${alerts.length}</strong> 警告</span>
+          <span><strong>${alertCount}</strong> 警告</span>
         </div>
       </div>
 

@@ -30,6 +30,7 @@ describe("TaskHUD task graph validation", () => {
             activeTasks: [],
             attentionQueue: [],
             returnInbox: { pendingItems: [] },
+            watchdogSnapshot: { totalAlerts: 4 },
             taskGraphs: {
               items: [
                 {
@@ -267,6 +268,7 @@ describe("TaskHUD task graph validation", () => {
     const text = element.shadowRoot?.textContent ?? "";
     const compactText = text.replace(/\s+/g, " ");
     expect(fetchMock).toHaveBeenCalledWith("/api/task-graph/validation");
+    expect(compactText).toContain("4 警告");
     expect(compactText).toContain("任务图验真");
     expect(compactText).toContain("错误 0");
     expect(compactText).toContain("警告 1");
