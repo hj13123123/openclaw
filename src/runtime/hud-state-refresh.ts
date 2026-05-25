@@ -1,12 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { scanControlSignals } from "./control-signals.js";
-import {
-  AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH,
-  AUTO_EVOLUTION_REPORT_PREFIX,
-  summarizeAutoEvolutionObserve,
-  type AutoEvolutionObserveReport,
-} from "./evolution/auto-evolution-observe.js";
+import { readAutoEvolutionState } from "./evolution/auto-evolution-observe.js";
 import {
   generateHudState,
   type HudAutoEvolutionObserveSummary,
@@ -18,12 +13,7 @@ import {
   type HudState,
   type HudTaskGraphItem,
 } from "./hud-state.js";
-import {
-  MIRROR_REPORT_DIR_RELATIVE_PATH,
-  MIRROR_REPORT_PREFIX,
-  summarizeMirrorObserve,
-  type MirrorObserveReport,
-} from "./mirror/mirror-observe.js";
+import { readMirrorObserveState } from "./mirror/mirror-observe.js";
 import { scanRecoveryCandidates } from "./recovery-candidates.js";
 import { scanReturnConsumerPlan } from "./returns/return-consumer-plan.js";
 import { scanReturnInbox } from "./returns/return-inbox.js";
@@ -271,11 +261,12 @@ function readLatestMirrorObserve(
   workspaceRoot: string,
   warnings: string[],
 ): HudMirrorObserveSummary {
-  const reportDir = path.join(workspaceRoot, MIRROR_REPORT_DIR_RELATIVE_PATH);
-  if (!existsSync(reportDir)) {
+  const state = readMirrorObserveState(workspaceRoot);
+  if (!state.available) {
+    if (state.error) warnings.push(state.error);
     return {
       available: false,
-      reportPath: null,
+      reportPath: state.reportPath ?? null,
       mirrorId: null,
       generatedAt: null,
       mode: null,
@@ -284,62 +275,28 @@ function readLatestMirrorObserve(
       verdict: null,
     };
   }
-
-  const latestReport = listFiles(
-    reportDir,
-    (name) => name.startsWith(MIRROR_REPORT_PREFIX) && name.endsWith(REPORT_FILE_SUFFIX),
-  ).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
-  if (!latestReport) {
-    return {
-      available: false,
-      reportPath: null,
-      mirrorId: null,
-      generatedAt: null,
-      mode: null,
-      stats: null,
-      constraintsVerified: null,
-      verdict: null,
-    };
-  }
-
-  const reportPath = path.relative(workspaceRoot, latestReport).replace(/\\/gu, "/");
-  try {
-    const report = JSON.parse(readFileSync(latestReport, "utf8")) as MirrorObserveReport;
-    const summary = summarizeMirrorObserve(report);
-    return {
-      available: true,
-      reportPath,
-      mirrorId: summary.mirrorId,
-      generatedAt: summary.generatedAt,
-      mode: summary.mode,
-      stats: summary.stats,
-      constraintsVerified: summary.constraintsVerified,
-      verdict: summary.verdict,
-    };
-  } catch {
-    warnings.push(`Failed to parse mirror observe report: ${path.basename(latestReport)}`);
-    return {
-      available: false,
-      reportPath,
-      mirrorId: null,
-      generatedAt: null,
-      mode: null,
-      stats: null,
-      constraintsVerified: null,
-      verdict: null,
-    };
-  }
+  return {
+    available: true,
+    reportPath: state.reportPath,
+    mirrorId: state.mirrorId,
+    generatedAt: state.generatedAt,
+    mode: state.mode,
+    stats: state.stats,
+    constraintsVerified: state.constraintsVerified,
+    verdict: state.verdict,
+  };
 }
 
 function readLatestAutoEvolutionObserve(
   workspaceRoot: string,
   warnings: string[],
 ): HudAutoEvolutionObserveSummary {
-  const reportDir = path.join(workspaceRoot, AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH);
-  if (!existsSync(reportDir)) {
+  const state = readAutoEvolutionState(workspaceRoot);
+  if (!state.available) {
+    if (state.error) warnings.push(state.error);
     return {
       available: false,
-      reportPath: null,
+      reportPath: state.reportPath ?? null,
       generatedAt: null,
       mode: null,
       stats: null,
@@ -347,48 +304,15 @@ function readLatestAutoEvolutionObserve(
       verdict: null,
     };
   }
-
-  const latestReport = listFiles(
-    reportDir,
-    (name) => name.startsWith(AUTO_EVOLUTION_REPORT_PREFIX) && name.endsWith(REPORT_FILE_SUFFIX),
-  ).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
-  if (!latestReport) {
-    return {
-      available: false,
-      reportPath: null,
-      generatedAt: null,
-      mode: null,
-      stats: null,
-      constraintsVerified: null,
-      verdict: null,
-    };
-  }
-
-  const reportPath = path.relative(workspaceRoot, latestReport).replace(/\\/gu, "/");
-  try {
-    const report = JSON.parse(readFileSync(latestReport, "utf8")) as AutoEvolutionObserveReport;
-    const summary = summarizeAutoEvolutionObserve(report);
-    return {
-      available: true,
-      reportPath,
-      generatedAt: summary.generatedAt,
-      mode: summary.mode,
-      stats: summary.stats,
-      constraintsVerified: summary.constraintsVerified,
-      verdict: summary.verdict,
-    };
-  } catch {
-    warnings.push(`Failed to parse auto-evolution observe report: ${path.basename(latestReport)}`);
-    return {
-      available: false,
-      reportPath,
-      generatedAt: null,
-      mode: null,
-      stats: null,
-      constraintsVerified: null,
-      verdict: null,
-    };
-  }
+  return {
+    available: true,
+    reportPath: state.reportPath,
+    generatedAt: state.generatedAt,
+    mode: state.mode,
+    stats: state.stats,
+    constraintsVerified: state.constraintsVerified,
+    verdict: state.verdict,
+  };
 }
 
 function latestSemanticRebuildReport(
