@@ -594,7 +594,29 @@ export async function handleHudStateHttpRequest(
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.end(JSON.stringify(enriched));
-    } catch {
+    } catch (stateReadError) {
+      if (existsSync(hudStatePath)) {
+        try {
+          const result = writeHudStateSnapshot(workspaceRoot);
+          const recentCompletions = scanRecentCompletions(workspaceRoot);
+          sendJson(res, 200, {
+            ...result.state,
+            recentCompletions,
+            snapshotRecovered: true,
+            snapshotRecoveryReason: "invalid_snapshot",
+            snapshotRecoveryError:
+              stateReadError instanceof Error ? stateReadError.message : String(stateReadError),
+          });
+          return true;
+        } catch (recoveryError) {
+          sendJson(res, 200, {
+            available: false,
+            message: "task-hud-state.json 无法解析，自动恢复失败",
+            error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+          });
+          return true;
+        }
+      }
       sendJson(res, 200, {
         available: false,
         message: "task-hud-state.json 尚未生成",

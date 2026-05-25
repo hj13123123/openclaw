@@ -638,6 +638,49 @@ describe("server HUD API runtime loop freshness", () => {
     expect(readFileSync(returnPath, "utf8")).toBe(before);
   });
 
+  it("recovers malformed HUD state snapshots with a runtime refresh", async () => {
+    const workspaceRoot = makeWorkspace();
+    const hudStatePath = path.join(workspaceRoot, "runtime", "main", "tmp", "task-hud-state.json");
+    mkdirSync(path.dirname(hudStatePath), { recursive: true });
+    writeFileSync(hudStatePath, '{"version":"1.1","taskGraphs":[{"title":"broken}', "utf8");
+    writeJson(
+      path.join(workspaceRoot, "system", "positions", "state", "main_workspace-main.json"),
+      {
+        agentId: "main",
+        status: "idle",
+        progressPct: 100,
+      },
+    );
+
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq("/api/hud/state", "GET"),
+      response.res,
+      workspaceRoot,
+    );
+    const body = response.json();
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(body).toEqual(
+      expect.objectContaining({
+        generator: "runtime-hud-state",
+        snapshotRecovered: true,
+        snapshotRecoveryReason: "invalid_snapshot",
+        recentCompletions: {
+          totalToday: 0,
+          lastCompletedAt: null,
+          items: [],
+        },
+      }),
+    );
+    expect(JSON.parse(readFileSync(hudStatePath, "utf8"))).toEqual(
+      expect.objectContaining({
+        generator: "runtime-hud-state",
+      }),
+    );
+  });
+
   it("rejects return inbox writes", async () => {
     const response = makeResponse();
     const handled = await handleHudStateHttpRequest(
