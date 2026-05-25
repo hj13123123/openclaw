@@ -9,6 +9,20 @@ import { loadConfig, type OpenClawConfig, type MemorySearchConfig } from "../con
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createEmbeddingProvider } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import {
+  buildDispatchRecallQuery,
+  dispatchRecallAcceptanceConstraints,
+  dispatchRecallAcceptanceRecordDryRunConstraints,
+  dispatchRecallAcceptanceRecordListConstraints,
+  dispatchRecallAcceptanceRecordWriteConstraints,
+  dispatchRecallDispatchDryRunConstraints,
+  dispatchRecallPreflightConstraints,
+  dispatchRecallPreviewConstraints,
+  dispatchRecallPreviewConstraintsValid,
+  dispatchRecallStatusConstraints,
+  normalizeDispatchRecallPreviewLimit,
+  normalizeDispatchRecallResultLimit,
+} from "../runtime/kb-dispatch-recall.js";
+import {
   buildKnowledgeIndexFromWorkspace,
   KB_INDEX_FILE_RELATIVE_PATH,
   writeKnowledgeIndexSnapshot,
@@ -19,11 +33,8 @@ import {
   type KnowledgeIndexItem,
   type KnowledgeMatchResult,
 } from "../runtime/kb-index.js";
-import {
-  buildRuntimeLoopPreflight,
-  type RuntimeLoopPreflightDispatchPlanEntry,
-} from "../runtime/runtime-loop.js";
-import { getTaskState, type TaskRecord } from "../runtime/task-state-machine.js";
+import { buildRuntimeLoopPreflight } from "../runtime/runtime-loop.js";
+import { getTaskState } from "../runtime/task-state-machine.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 
 const KB_STATE_ROUTE = "/api/kb/state";
@@ -3612,199 +3623,6 @@ export async function executeHybridRecall(
   };
 }
 
-function normalizeDispatchRecallPreviewLimit(raw: number | null | undefined): number {
-  if (!Number.isFinite(raw)) return 5;
-  return Math.min(10, Math.max(0, Math.floor(raw ?? 5)));
-}
-
-function normalizeDispatchRecallResultLimit(raw: number | null | undefined): number {
-  if (!Number.isFinite(raw)) return 3;
-  return Math.min(10, Math.max(1, Math.floor(raw ?? 3)));
-}
-
-function optionalText(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function metadataText(task: TaskRecord | undefined, fields: string[]): string[] {
-  if (!task) return [];
-  return fields
-    .map((field) => optionalText(task.metadata[field]))
-    .filter((value): value is string => value !== null);
-}
-
-function dispatchRecallQuery(
-  candidate: RuntimeLoopPreflightDispatchPlanEntry,
-  task: TaskRecord | undefined,
-): string {
-  return [
-    task?.taskId ?? candidate.taskId,
-    task?.summary,
-    task?.sourceRole,
-    candidate.dispatchTarget,
-    candidate.policyDecision,
-    candidate.riskLevel,
-    ...metadataText(task, ["title", "summary", "description", "intent", "goal", "task"]),
-  ]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    .join("\n");
-}
-
-function dispatchRecallPreviewConstraints(embeddingCalls: "no" | "yes") {
-  return {
-    stateWritten: "no" as const,
-    artifactWritten: "no" as const,
-    eventEmitted: "no" as const,
-    dispatchTriggered: "no" as const,
-    sessionsSpawnCalled: "no" as const,
-    taskGraphMutated: "no" as const,
-    returnConsumed: "no" as const,
-    receiptWritten: "no" as const,
-    embeddingCalls,
-    keywordIndexWritten: "no" as const,
-    semanticIndexWritten: "no" as const,
-    vectorIndexWritten: "no" as const,
-    realRebuildTriggered: "no" as const,
-    applied: "no" as const,
-  };
-}
-
-function dispatchRecallAcceptanceConstraints(embeddingCalls: "no" | "yes") {
-  return {
-    ...dispatchRecallPreviewConstraints(embeddingCalls),
-    acceptanceRecordWritten: "no" as const,
-  };
-}
-
-function dispatchRecallAcceptanceRecordDryRunConstraints(embeddingCalls: "no" | "yes") {
-  return {
-    ...dispatchRecallAcceptanceConstraints(embeddingCalls),
-    recordWritten: "no" as const,
-  };
-}
-
-function dispatchRecallAcceptanceRecordWriteConstraints(
-  embeddingCalls: "no" | "yes",
-  recordWritten: "no" | "yes",
-) {
-  return {
-    stateWritten: "no" as const,
-    artifactWritten:
-      recordWritten === "yes" ? ("acceptance-record-only" as const) : ("no" as const),
-    eventEmitted: "no" as const,
-    dispatchTriggered: "no" as const,
-    sessionsSpawnCalled: "no" as const,
-    taskGraphMutated: "no" as const,
-    returnConsumed: "no" as const,
-    receiptWritten: "no" as const,
-    embeddingCalls,
-    keywordIndexWritten: "no" as const,
-    semanticIndexWritten: "no" as const,
-    vectorIndexWritten: "no" as const,
-    realRebuildTriggered: "no" as const,
-    applied: "no" as const,
-    acceptanceRecordWritten: recordWritten,
-    recordWritten,
-  };
-}
-
-function dispatchRecallAcceptanceRecordListConstraints() {
-  return {
-    fileWrites: "no" as const,
-    stateWritten: "no" as const,
-    eventEmitted: "no" as const,
-    dispatchTriggered: "no" as const,
-    sessionsSpawnCalled: "no" as const,
-    taskGraphMutated: "no" as const,
-    returnConsumed: "no" as const,
-    receiptWritten: "no" as const,
-    embeddingCalls: "no" as const,
-    keywordIndexWritten: "no" as const,
-    semanticIndexWritten: "no" as const,
-    vectorIndexWritten: "no" as const,
-    realRebuildTriggered: "no" as const,
-    applied: "no" as const,
-  };
-}
-
-function dispatchRecallPreflightConstraints(embeddingCalls: "no" | "yes" = "no") {
-  return {
-    fileWrites: "no" as const,
-    stateWritten: "no" as const,
-    eventEmitted: "no" as const,
-    dispatchTriggered: "no" as const,
-    sessionsSpawnCalled: "no" as const,
-    taskGraphMutated: "no" as const,
-    returnConsumed: "no" as const,
-    receiptWritten: "no" as const,
-    embeddingCalls,
-    keywordIndexWritten: "no" as const,
-    semanticIndexWritten: "no" as const,
-    vectorIndexWritten: "no" as const,
-    realRebuildTriggered: "no" as const,
-    applied: "no" as const,
-  };
-}
-
-function dispatchRecallDispatchDryRunConstraints(embeddingCalls: "no" | "yes" = "no") {
-  return {
-    fileWrites: "no" as const,
-    stateWritten: "no" as const,
-    eventEmitted: "no" as const,
-    dispatchTriggered: "no" as const,
-    wouldDispatch: false as const,
-    sessionsSpawnCalled: "no" as const,
-    taskGraphMutated: "no" as const,
-    returnConsumed: "no" as const,
-    receiptWritten: "no" as const,
-    embeddingCalls,
-    keywordIndexWritten: "no" as const,
-    semanticIndexWritten: "no" as const,
-    vectorIndexWritten: "no" as const,
-    realRebuildTriggered: "no" as const,
-    applied: "no" as const,
-  };
-}
-
-function dispatchRecallStatusConstraints(embeddingCalls: "no" | "yes") {
-  return {
-    fileWrites: "no" as const,
-    stateWritten: "no" as const,
-    eventEmitted: "no" as const,
-    dispatchTriggered: "no" as const,
-    wouldDispatch: false as const,
-    sessionsSpawnCalled: "no" as const,
-    taskGraphMutated: "no" as const,
-    returnConsumed: "no" as const,
-    receiptWritten: "no" as const,
-    embeddingCalls,
-    keywordIndexWritten: "no" as const,
-    semanticIndexWritten: "no" as const,
-    vectorIndexWritten: "no" as const,
-    realRebuildTriggered: "no" as const,
-    applied: "no" as const,
-  };
-}
-
-function dispatchRecallPreviewConstraintsValid(preview: DispatchRecallPreview): boolean {
-  const constraints = preview.constraintsVerified;
-  return (
-    constraints.stateWritten === "no" &&
-    constraints.artifactWritten === "no" &&
-    constraints.eventEmitted === "no" &&
-    constraints.dispatchTriggered === "no" &&
-    constraints.sessionsSpawnCalled === "no" &&
-    constraints.taskGraphMutated === "no" &&
-    constraints.returnConsumed === "no" &&
-    constraints.receiptWritten === "no" &&
-    constraints.keywordIndexWritten === "no" &&
-    constraints.semanticIndexWritten === "no" &&
-    constraints.vectorIndexWritten === "no" &&
-    constraints.realRebuildTriggered === "no" &&
-    constraints.applied === "no"
-  );
-}
-
 function isDispatchRecallAcceptanceRecord(value: unknown): value is DispatchRecallAcceptanceRecord {
   const record = value as Partial<DispatchRecallAcceptanceRecord>;
   const constraints = record.constraintsVerified as Record<string, unknown> | undefined;
@@ -4344,7 +4162,7 @@ export async function executeDispatchRecallPreview(
   const candidates: DispatchRecallPreviewCandidate[] = [];
   let embeddingCalls: "no" | "yes" = "no";
   for (const candidate of selectedCandidates) {
-    const query = dispatchRecallQuery(candidate, tasksById.get(candidate.taskId));
+    const query = buildDispatchRecallQuery(candidate, tasksById.get(candidate.taskId));
     const recall = await executeHybridRecall(workspaceRoot, { query, limit: recallLimit }, options);
     if (recall.constraintsVerified.embeddingCalls === "yes") embeddingCalls = "yes";
     candidates.push({
