@@ -2642,6 +2642,7 @@ describe("server KB API", () => {
         }),
         constraintsVerified: expect.objectContaining({
           fileWrites: "no",
+          embeddingCalls: "yes",
           dispatchTriggered: "no",
           sessionsSpawnCalled: "no",
           taskGraphMutated: "no",
@@ -2673,6 +2674,7 @@ describe("server KB API", () => {
         ],
         constraintsVerified: expect.objectContaining({
           fileWrites: "no",
+          embeddingCalls: "yes",
           dispatchTriggered: "no",
           wouldDispatch: false,
           sessionsSpawnCalled: "no",
@@ -2736,6 +2738,7 @@ describe("server KB API", () => {
         }),
         constraintsVerified: expect.objectContaining({
           fileWrites: "no",
+          embeddingCalls: "yes",
           dispatchTriggered: "no",
           wouldDispatch: false,
           sessionsSpawnCalled: "no",

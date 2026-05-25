@@ -3727,7 +3727,7 @@ function dispatchRecallAcceptanceRecordListConstraints() {
   };
 }
 
-function dispatchRecallPreflightConstraints() {
+function dispatchRecallPreflightConstraints(embeddingCalls: "no" | "yes" = "no") {
   return {
     fileWrites: "no" as const,
     stateWritten: "no" as const,
@@ -3737,7 +3737,7 @@ function dispatchRecallPreflightConstraints() {
     taskGraphMutated: "no" as const,
     returnConsumed: "no" as const,
     receiptWritten: "no" as const,
-    embeddingCalls: "no" as const,
+    embeddingCalls,
     keywordIndexWritten: "no" as const,
     semanticIndexWritten: "no" as const,
     vectorIndexWritten: "no" as const,
@@ -3746,7 +3746,7 @@ function dispatchRecallPreflightConstraints() {
   };
 }
 
-function dispatchRecallDispatchDryRunConstraints() {
+function dispatchRecallDispatchDryRunConstraints(embeddingCalls: "no" | "yes" = "no") {
   return {
     fileWrites: "no" as const,
     stateWritten: "no" as const,
@@ -3757,7 +3757,7 @@ function dispatchRecallDispatchDryRunConstraints() {
     taskGraphMutated: "no" as const,
     returnConsumed: "no" as const,
     receiptWritten: "no" as const,
-    embeddingCalls: "no" as const,
+    embeddingCalls,
     keywordIndexWritten: "no" as const,
     semanticIndexWritten: "no" as const,
     vectorIndexWritten: "no" as const,
@@ -4147,7 +4147,9 @@ export async function checkDispatchRecallPreflight(
     recordPath: latest?.recordPath ?? null,
     acceptanceRecord,
     acceptance,
-    constraintsVerified: dispatchRecallPreflightConstraints(),
+    constraintsVerified: dispatchRecallPreflightConstraints(
+      acceptance.constraintsVerified.embeddingCalls,
+    ),
   };
 }
 
@@ -4176,7 +4178,9 @@ export async function buildDispatchRecallDispatchDryRun(
     blockReasons: preflight.blockReasons,
     preflight,
     plannedDispatches,
-    constraintsVerified: dispatchRecallDispatchDryRunConstraints(),
+    constraintsVerified: dispatchRecallDispatchDryRunConstraints(
+      preflight.acceptance.constraintsVerified.embeddingCalls,
+    ),
   };
 }
 
