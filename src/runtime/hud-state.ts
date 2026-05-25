@@ -1,3 +1,6 @@
+import type { ControlSignalScanResult } from "./control-signals.js";
+import type { RecoveryCandidateScanResult } from "./recovery-candidates.js";
+
 export type HudAgentStatus =
   | "completed"
   | "running"
@@ -45,6 +48,7 @@ export interface HudAgentGroup {
   currentTask: string | null;
   currentTaskTitle: string | null;
   progressPct: number;
+  source: "position-state";
   progressDerivation: "position-state" | "unknown";
   hasAlerts: boolean;
   lastProgressAt: string | null;
@@ -133,6 +137,35 @@ export interface HudSemanticRebuildSummary {
   constraintsVerified: Record<string, string> | null;
 }
 
+export type HudControlSignalsSummary = Pick<
+  ControlSignalScanResult,
+  | "mode"
+  | "status"
+  | "pendingPath"
+  | "frozen"
+  | "g2Approved"
+  | "pendingCount"
+  | "expiredCount"
+  | "errorCount"
+  | "validCount"
+  | "invalidCount"
+  | "byRole"
+  | "byAction"
+  | "constraintsVerified"
+>;
+
+export type HudRecoveryCandidatesSummary = Pick<
+  RecoveryCandidateScanResult,
+  | "mode"
+  | "sourcePath"
+  | "frozen"
+  | "graphCount"
+  | "candidateCount"
+  | "byStatus"
+  | "bySuggestedAction"
+  | "constraintsVerified"
+> & { errorCount: number };
+
 export interface HudStateInput {
   generatedAt: string;
   positionStatesByAgentId?: Record<string, HudPositionState>;
@@ -144,6 +177,8 @@ export interface HudStateInput {
   mirrorObserve?: HudMirrorObserveSummary;
   autoEvolutionObserve?: HudAutoEvolutionObserveSummary;
   semanticRebuild?: HudSemanticRebuildSummary;
+  controlSignals?: HudControlSignalsSummary;
+  recoveryCandidates?: HudRecoveryCandidatesSummary;
   warnings?: string[];
   agentDefaults?: HudAgentDefault[];
 }
@@ -190,6 +225,8 @@ export interface HudState {
   mirrorObserve: HudMirrorObserveSummary;
   autoEvolutionObserve: HudAutoEvolutionObserveSummary;
   semanticRebuild: HudSemanticRebuildSummary;
+  controlSignals: HudControlSignalsSummary;
+  recoveryCandidates: HudRecoveryCandidatesSummary;
   warnings: string[];
 }
 
@@ -264,11 +301,15 @@ export function normalizeHudAgentStatus(rawStatus: unknown): HudAgentStatus {
 function buildAgentGroups(input: HudStateInput): HudAgentGroup[] {
   const defaults = input.agentDefaults ?? DEFAULT_HUD_AGENT_DEFAULTS;
   const statesByAgentId = input.positionStatesByAgentId ?? {};
-  const agentIds = new Set<string>(defaults.map((item) => item.agentId));
-  for (const agentId of Object.keys(statesByAgentId)) agentIds.add(agentId);
   const defaultsById = new Map(defaults.map((item) => [item.agentId, item]));
+  const defaultOrderById = new Map(defaults.map((item, index) => [item.agentId, index]));
+  const agentIds = Object.keys(statesByAgentId).sort((a, b) => {
+    const aOrder = defaultOrderById.get(a) ?? Number.MAX_SAFE_INTEGER;
+    const bOrder = defaultOrderById.get(b) ?? Number.MAX_SAFE_INTEGER;
+    return aOrder === bOrder ? a.localeCompare(b) : aOrder - bOrder;
+  });
 
-  return [...agentIds].map((agentId) => {
+  return agentIds.map((agentId) => {
     const state = statesByAgentId[agentId];
     const defaultValue = defaultsById.get(agentId);
     const status = normalizeHudAgentStatus(firstString(state, ["status", "currentState", "state"]));
@@ -291,7 +332,8 @@ function buildAgentGroups(input: HudStateInput): HudAgentGroup[] {
           Math.floor(firstNumber(state, ["progressPct", "progress", "completionPct"]) ?? 0),
         ),
       ),
-      progressDerivation: state ? "position-state" : "unknown",
+      source: "position-state",
+      progressDerivation: "position-state",
       hasAlerts: status === "failed" || status === "attention_required",
       lastProgressAt: firstString(state, [
         "lastProgressAt",
@@ -352,10 +394,58 @@ function defaultSemanticRebuildSummary(): HudSemanticRebuildSummary {
   };
 }
 
+function defaultControlSignalsSummary(): HudControlSignalsSummary {
+  return {
+    mode: "observe-only",
+    status: "ok",
+    pendingPath: "system/control-signals/pending",
+    frozen: false,
+    g2Approved: false,
+    pendingCount: 0,
+    expiredCount: 0,
+    errorCount: 0,
+    validCount: 0,
+    invalidCount: 0,
+    byRole: [],
+    byAction: [],
+    constraintsVerified: {
+      readOnly: "yes",
+      signalWritten: "no",
+      taskGraphMutated: "no",
+      sessionsSent: "no",
+      autoDispatchTriggered: "no",
+      applied: "no",
+    },
+  };
+}
+
+function defaultRecoveryCandidatesSummary(): HudRecoveryCandidatesSummary {
+  return {
+    mode: "observe-only",
+    sourcePath: "runtime/main/tmp/v2-task-graph-01/",
+    frozen: false,
+    graphCount: 0,
+    candidateCount: 0,
+    byStatus: [],
+    bySuggestedAction: [],
+    errorCount: 0,
+    constraintsVerified: {
+      readOnly: "yes",
+      recoveryDecisionWritten: "no",
+      taskGraphMutated: "no",
+      sessionsSent: "no",
+      autoDispatchTriggered: "no",
+      applied: "no",
+    },
+  };
+}
+
 function buildWatchdogConditions(
   mirrorObserve: HudMirrorObserveSummary,
   autoEvolutionObserve: HudAutoEvolutionObserveSummary,
   taskGraphItems: readonly HudTaskGraphItem[],
+  controlSignals: HudControlSignalsSummary,
+  recoveryCandidates: HudRecoveryCandidatesSummary,
 ): Record<string, number> {
   const byCondition: Record<string, number> = {};
   const taskGraphValidationErrorCount = taskGraphItems.filter(
@@ -415,6 +505,21 @@ function buildWatchdogConditions(
   if (evolutionViolationCount > 0) {
     byCondition.autoEvolutionObserveConstraintViolation = evolutionViolationCount;
   }
+  if (controlSignals.pendingCount > 0) {
+    byCondition.pendingControlSignals = controlSignals.pendingCount;
+  }
+  if (controlSignals.invalidCount > 0) {
+    byCondition.invalidControlSignals = controlSignals.invalidCount;
+  }
+  if (controlSignals.errorCount > 0) {
+    byCondition.controlSignalScanError = controlSignals.errorCount;
+  }
+  if (recoveryCandidates.candidateCount > 0) {
+    byCondition.recoveryCandidates = recoveryCandidates.candidateCount;
+  }
+  if (recoveryCandidates.errorCount > 0) {
+    byCondition.recoveryCandidateScanError = recoveryCandidates.errorCount;
+  }
   return byCondition;
 }
 
@@ -430,10 +535,14 @@ export function generateHudState(input: HudStateInput): HudState {
   const mirrorObserve = input.mirrorObserve ?? defaultMirrorObserveSummary();
   const autoEvolutionObserve = input.autoEvolutionObserve ?? defaultAutoEvolutionObserveSummary();
   const semanticRebuild = input.semanticRebuild ?? defaultSemanticRebuildSummary();
+  const controlSignals = input.controlSignals ?? defaultControlSignalsSummary();
+  const recoveryCandidates = input.recoveryCandidates ?? defaultRecoveryCandidatesSummary();
   const watchdogConditions = buildWatchdogConditions(
     mirrorObserve,
     autoEvolutionObserve,
     taskGraphItems,
+    controlSignals,
+    recoveryCandidates,
   );
   const watchdogConditionAlertCount = Object.values(watchdogConditions).reduce(
     (sum, count) => sum + count,
@@ -491,6 +600,8 @@ export function generateHudState(input: HudStateInput): HudState {
     mirrorObserve,
     autoEvolutionObserve,
     semanticRebuild,
+    controlSignals,
+    recoveryCandidates,
     warnings,
   };
 }

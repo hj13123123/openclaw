@@ -18,6 +18,7 @@ type AgentState = {
   currentTaskTitle?: string | null;
   currentTask?: string | null;
   progressPct?: number;
+  source?: string;
   lastProgressAt?: string | null;
 };
 
@@ -971,7 +972,7 @@ export class TaskHUD extends LitElement {
       <div class="status">
         <div class="status-line">
           <span class="dot ${statusClass(status)}"></span>
-          <span class="primary">${labelStatus(status)}</span>
+          <span class="primary">${labelStatus(status)} · 运行态</span>
         </div>
         <div class="counts">
           <span><strong>${runningTasks.length}</strong> 运行</span>
@@ -1011,7 +1012,8 @@ export class TaskHUD extends LitElement {
                         >
                       </div>
                       <div class="meta">
-                        ${labelStatus(agent.status)} · ${formatRelative(agent.lastProgressAt)}
+                        ${labelStatus(agent.status)} · 真实状态 ·
+                        ${formatRelative(agent.lastProgressAt)}
                       </div>
                       <div
                         class="secondary"
@@ -1258,7 +1260,8 @@ export class TaskHUD extends LitElement {
     const summary = this.taskState?.summary;
     return html`
       <section class="section">
-        <h4 class="section-title">任务状态</h4>
+        <h4 class="section-title">任务台账</h4>
+        <div class="secondary section-note">历史任务统计，不代表当前运行岗位数</div>
         <div class="grid">
           ${[
             ["总数", summary?.total ?? 0],

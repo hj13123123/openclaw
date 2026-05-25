@@ -53,7 +53,7 @@ describe("HUD state core", () => {
     expect(normalizeHudAgentStatus(null)).toBe("unknown");
   });
 
-  it("builds default agent groups and derives healthy counters", () => {
+  it("builds agent groups only from position states and derives healthy counters", () => {
     const state = generateHudState({
       generatedAt,
       positionStatesByAgentId: {
@@ -64,9 +64,13 @@ describe("HUD state core", () => {
     });
 
     expect(state.generator).toBe("runtime-hud-state");
-    expect(state.agentGroups).toHaveLength(5);
+    expect(state.agentGroups.map((agent) => agent.agentId)).toEqual([
+      "main",
+      "engineering-executive",
+      "front-end-executive",
+    ]);
     expect(state.globalStatus).toMatchObject({
-      status: "degraded",
+      status: "healthy",
       runningCount: 1,
       completedCount: 2,
       failedCount: 0,
@@ -76,16 +80,10 @@ describe("HUD state core", () => {
       status: "completed",
       currentTask: "TASK-MAIN",
       progressPct: 50,
+      source: "position-state",
       progressDerivation: "position-state",
     });
-    expect(state.agentGroups.find((agent) => agent.agentId === "evolution-curator")).toMatchObject({
-      role: "observability",
-      status: "unknown",
-    });
-    expect(state.agentGroups.find((agent) => agent.agentId === "patrol")).toMatchObject({
-      role: "observability",
-      status: "unknown",
-    });
+    expect(state.agentGroups.find((agent) => agent.agentId === "patrol")).toBeUndefined();
   });
 
   it("marks pending returns as attention_required", () => {
@@ -182,7 +180,7 @@ describe("HUD state core", () => {
       },
     });
 
-    expect(state.globalStatus.status).toBe("degraded");
+    expect(state.globalStatus.status).toBe("healthy");
     expect(state.mirrorObserve).toMatchObject({
       available: true,
       reportPath: "runtime/main/tmp/mirror-observe-a.json",
@@ -308,7 +306,7 @@ describe("HUD state core", () => {
       },
     });
 
-    expect(state.globalStatus.status).toBe("degraded");
+    expect(state.globalStatus.status).toBe("healthy");
     expect(state.semanticRebuild).toMatchObject({
       available: true,
       stage: "ready_for_real_rebuild_implementation",
@@ -346,6 +344,75 @@ describe("HUD state core", () => {
       readyForExecution: false,
       readyForRealRebuildImplementation: false,
       constraintsVerified: null,
+    });
+    expect(state.controlSignals).toMatchObject({
+      mode: "observe-only",
+      status: "ok",
+      pendingCount: 0,
+      invalidCount: 0,
+    });
+    expect(state.recoveryCandidates).toMatchObject({
+      mode: "observe-only",
+      graphCount: 0,
+      candidateCount: 0,
+      errorCount: 0,
+    });
+  });
+
+  it("adds D7 control and recovery summaries to watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      controlSignals: {
+        mode: "observe-only",
+        status: "ok",
+        pendingPath: "system/control-signals/pending",
+        frozen: false,
+        g2Approved: false,
+        pendingCount: 2,
+        expiredCount: 1,
+        errorCount: 1,
+        validCount: 1,
+        invalidCount: 1,
+        byRole: [{ role: "engineering-executive", count: 2 }],
+        byAction: [{ action: "pause", count: 2 }],
+        constraintsVerified: {
+          readOnly: "yes",
+          signalWritten: "no",
+          taskGraphMutated: "no",
+          sessionsSent: "no",
+          autoDispatchTriggered: "no",
+          applied: "no",
+        },
+      },
+      recoveryCandidates: {
+        mode: "observe-only",
+        sourcePath: "runtime/main/tmp/v2-task-graph-01/",
+        frozen: false,
+        graphCount: 1,
+        candidateCount: 3,
+        byStatus: [{ status: "failed", count: 3 }],
+        bySuggestedAction: [{ action: "retry", count: 3 }],
+        errorCount: 1,
+        constraintsVerified: {
+          readOnly: "yes",
+          recoveryDecisionWritten: "no",
+          taskGraphMutated: "no",
+          sessionsSent: "no",
+          autoDispatchTriggered: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 8,
+      byCondition: {
+        pendingControlSignals: 2,
+        invalidControlSignals: 1,
+        controlSignalScanError: 1,
+        recoveryCandidates: 3,
+        recoveryCandidateScanError: 1,
+      },
     });
   });
 

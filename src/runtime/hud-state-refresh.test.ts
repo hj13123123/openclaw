@@ -62,6 +62,13 @@ describe("HUD state refresh", () => {
       writeJson(workspaceRoot, "system/case-library/case-a.json", {
         caseId: "case-a",
       });
+      writeJson(workspaceRoot, "system/control-signals/pending/ctrl-a.json", {
+        signalId: "ctrl-a",
+        taskId: "TASK-B",
+        targetRole: "engineering-executive",
+        action: "pause",
+        status: "pending",
+      });
       writeJson(workspaceRoot, "runtime/main/tmp/v2-task-graph-01/task-graph-a.json", {
         graphId: "graph-a",
         parentTaskId: "TASK-PARENT",
@@ -194,20 +201,16 @@ describe("HUD state refresh", () => {
       expect(written.agentGroups.map((agent) => agent.agentId)).toEqual([
         "main",
         "engineering-executive",
-        "front-end-executive",
         "evolution-curator",
-        "patrol",
       ]);
       expect(
         written.agentGroups.find((agent) => agent.agentId === "evolution-curator"),
       ).toMatchObject({
         role: "observability",
         status: "completed",
+        source: "position-state",
       });
-      expect(written.agentGroups.find((agent) => agent.agentId === "patrol")).toMatchObject({
-        role: "observability",
-        status: "unknown",
-      });
+      expect(written.agentGroups.find((agent) => agent.agentId === "patrol")).toBeUndefined();
       expect(written.returnInbox.pendingCount).toBe(1);
       expect(written.returnInbox.pendingItems[0]).toMatchObject({
         returnId: "return-a.json",
@@ -231,6 +234,23 @@ describe("HUD state refresh", () => {
           blocked: 1,
         },
         nextRunnable: ["c"],
+      });
+      expect(written.controlSignals).toMatchObject({
+        mode: "observe-only",
+        status: "ok",
+        pendingCount: 1,
+        validCount: 1,
+        invalidCount: 0,
+        byRole: [{ role: "engineering-executive", count: 1 }],
+        byAction: [{ action: "pause", count: 1 }],
+      });
+      expect(written.recoveryCandidates).toMatchObject({
+        mode: "observe-only",
+        graphCount: 1,
+        candidateCount: 1,
+        byStatus: [{ status: "blocked", count: 1 }],
+        bySuggestedAction: [{ action: "unblock", count: 1 }],
+        errorCount: 0,
       });
       expect(written.mirrorObserve).toMatchObject({
         available: true,
@@ -270,6 +290,8 @@ describe("HUD state refresh", () => {
       expect(written.watchdogSnapshot.byCondition).toMatchObject({
         mirrorObserveAttention: 2,
         autoEvolutionObserveP1: 2,
+        pendingControlSignals: 1,
+        recoveryCandidates: 1,
       });
     }));
 

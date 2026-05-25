@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { scanControlSignals } from "./control-signals.js";
 import {
   AUTO_EVOLUTION_REPORT_DIR_RELATIVE_PATH,
   AUTO_EVOLUTION_REPORT_PREFIX,
@@ -22,6 +23,7 @@ import {
   summarizeMirrorObserve,
   type MirrorObserveReport,
 } from "./mirror/mirror-observe.js";
+import { scanRecoveryCandidates } from "./recovery-candidates.js";
 import { scanReturnInbox } from "./returns/return-inbox.js";
 import {
   TASK_GRAPH_SOURCE_RELATIVE_PATH,
@@ -484,6 +486,38 @@ export function generateHudStateFromWorkspace(
     mirrorObserve: readLatestMirrorObserve(workspaceRoot, warnings),
     autoEvolutionObserve: readLatestAutoEvolutionObserve(workspaceRoot, warnings),
     semanticRebuild: readSemanticRebuildSummary(workspaceRoot),
+    controlSignals: (() => {
+      const scan = scanControlSignals(workspaceRoot);
+      return {
+        mode: scan.mode,
+        status: scan.status,
+        pendingPath: scan.pendingPath,
+        frozen: scan.frozen,
+        g2Approved: scan.g2Approved,
+        pendingCount: scan.pendingCount,
+        expiredCount: scan.expiredCount,
+        errorCount: scan.errorCount,
+        validCount: scan.validCount,
+        invalidCount: scan.invalidCount,
+        byRole: scan.byRole,
+        byAction: scan.byAction,
+        constraintsVerified: scan.constraintsVerified,
+      };
+    })(),
+    recoveryCandidates: (() => {
+      const scan = scanRecoveryCandidates(workspaceRoot);
+      return {
+        mode: scan.mode,
+        sourcePath: scan.sourcePath,
+        frozen: scan.frozen,
+        graphCount: scan.graphCount,
+        candidateCount: scan.candidateCount,
+        byStatus: scan.byStatus,
+        bySuggestedAction: scan.bySuggestedAction,
+        errorCount: scan.errors.length,
+        constraintsVerified: scan.constraintsVerified,
+      };
+    })(),
     warnings,
   });
 }
