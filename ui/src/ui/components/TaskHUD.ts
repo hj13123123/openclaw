@@ -280,6 +280,47 @@ type KbSemanticAcceptanceStateData = {
   };
 };
 
+type KbSemanticAcceptanceRecordsStateData = {
+  available?: boolean;
+  mode?: string;
+  reportDir?: string;
+  reportPrefix?: string;
+  totalRecords?: number;
+  returnedRecords?: number;
+  invalidRecords?: number;
+  records?: Array<{
+    recordPath?: string;
+    acceptanceId?: string;
+    createdAt?: string;
+    status?: string;
+    proposalId?: string;
+    proposalPath?: string;
+    plannedBatches?: number;
+    totalItems?: number;
+    requiredApproval?: string;
+    nextAction?: string;
+    approved?: boolean;
+    rebuildTriggered?: boolean;
+    constraintsVerified?: {
+      recordWritten?: string;
+      stateWritten?: string;
+      embeddingCalls?: string;
+      keywordIndexWritten?: string;
+      vectorIndexWritten?: string;
+      realRebuildTriggered?: string;
+      applied?: string;
+    };
+  }>;
+  constraintsVerified?: {
+    fileWrites?: string;
+    embeddingCalls?: string;
+    keywordIndexWritten?: string;
+    vectorIndexWritten?: string;
+    realRebuildTriggered?: string;
+    applied?: string;
+  };
+};
+
 type PolicyStateData = {
   policyVersion?: string | null;
   rulesCount?: number;
@@ -421,6 +462,7 @@ export class TaskHUD extends LitElement {
   @state() private kbState: KbStateData | null = null;
   @state() private kbSemanticPlan: KbSemanticPlanStateData | null = null;
   @state() private kbSemanticAcceptance: KbSemanticAcceptanceStateData | null = null;
+  @state() private kbSemanticAcceptanceRecords: KbSemanticAcceptanceRecordsStateData | null = null;
   @state() private policy: PolicyStateData | null = null;
   @state() private refreshing = false;
 
@@ -744,6 +786,7 @@ export class TaskHUD extends LitElement {
         this.fetchKbState(),
         this.fetchKbSemanticPlanState(),
         this.fetchKbSemanticAcceptanceState(),
+        this.fetchKbSemanticAcceptanceRecordsState(),
         this.fetchPolicyState(),
       ]);
     } finally {
@@ -843,6 +886,17 @@ export class TaskHUD extends LitElement {
         : null;
     } catch {
       this.kbSemanticAcceptance = null;
+    }
+  }
+
+  private async fetchKbSemanticAcceptanceRecordsState() {
+    try {
+      const response = await fetch("/api/kb/semantic-rebuild-plan/acceptance-records");
+      this.kbSemanticAcceptanceRecords = response.ok
+        ? ((await response.json()) as KbSemanticAcceptanceRecordsStateData)
+        : null;
+    } catch {
+      this.kbSemanticAcceptanceRecords = null;
     }
   }
 
@@ -1307,6 +1361,8 @@ export class TaskHUD extends LitElement {
     const acceptance = this.kbSemanticAcceptance;
     const acceptanceGate = acceptance?.acceptance;
     const acceptanceConstraints = acceptance?.constraintsVerified ?? {};
+    const acceptanceRecords = this.kbSemanticAcceptanceRecords;
+    const acceptanceRecordItems = acceptanceRecords?.records ?? [];
     return html`
       <section class="section">
         <h4 class="section-title">知识库</h4>
@@ -1328,6 +1384,11 @@ export class TaskHUD extends LitElement {
             <div class="secondary">
               semantic gate ${text(acceptanceGate?.status, "missing")} / human gate
               ${acceptanceGate?.readyForHumanGate ? "ready" : "blocked"}
+            </div>
+            <div class="secondary">
+              semantic records
+              ${acceptanceRecords?.returnedRecords ?? 0}/${acceptanceRecords?.totalRecords ?? 0} /
+              invalid ${acceptanceRecords?.invalidRecords ?? 0}
             </div>
             ${plan?.available
               ? html`
@@ -1386,6 +1447,37 @@ export class TaskHUD extends LitElement {
                           <div class="issue">
                             <div class="secondary">
                               nextAction / ${text(acceptance.recordPreview.nextAction, "unknown")}
+                            </div>
+                          </div>
+                        `
+                      : nothing}
+                  </details>
+                `
+              : nothing}
+            ${acceptanceRecordItems.length > 0
+              ? html`
+                  <details class="details">
+                    <summary>semantic acceptance records</summary>
+                    ${acceptanceRecordItems.slice(0, 3).map(
+                      (record) => html`
+                        <div class="issue">
+                          <div class="secondary">
+                            ${text(record.status, "unknown")} /
+                            ${text(record.proposalId, "unknown")}
+                          </div>
+                          <div class="secondary">
+                            nextAction / ${text(record.nextAction, "unknown")} / realRebuild
+                            ${text(record.constraintsVerified?.realRebuildTriggered, "unknown")}
+                          </div>
+                        </div>
+                      `,
+                    )}
+                    ${acceptanceRecords?.constraintsVerified
+                      ? html`
+                          <div class="issue">
+                            <div class="secondary">
+                              list fileWrites /
+                              ${text(acceptanceRecords.constraintsVerified.fileWrites, "unknown")}
                             </div>
                           </div>
                         `

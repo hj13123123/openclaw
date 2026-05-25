@@ -203,6 +203,53 @@ describe("TaskHUD task graph validation", () => {
           }),
         );
       }
+      if (url === "/api/kb/semantic-rebuild-plan/acceptance-records") {
+        return Promise.resolve(
+          jsonResponse({
+            available: true,
+            mode: "acceptance-record-list",
+            reportDir: "runtime/main/tmp",
+            reportPrefix: "kb-semantic-rebuild-acceptance-",
+            totalRecords: 1,
+            returnedRecords: 1,
+            invalidRecords: 0,
+            records: [
+              {
+                recordPath:
+                  "runtime/main/tmp/kb-semantic-rebuild-acceptance-2026-05-21T00-03-00-000Z.json",
+                acceptanceId: "acceptance-record-1",
+                createdAt: "2026-05-21T00:03:00.000Z",
+                status: "human_gate_ready",
+                proposalId: "kb-semantic-rebuild-2026-05-21T00-01-00-000Z",
+                proposalPath: "runtime/main/tmp/kb-semantic-rebuild-plan.json",
+                plannedBatches: 1,
+                totalItems: 5,
+                requiredApproval: "human",
+                nextAction: "await_human_approval",
+                approved: false,
+                rebuildTriggered: false,
+                constraintsVerified: {
+                  recordWritten: "yes",
+                  stateWritten: "no",
+                  embeddingCalls: "no",
+                  keywordIndexWritten: "no",
+                  vectorIndexWritten: "no",
+                  realRebuildTriggered: "no",
+                  applied: "no",
+                },
+              },
+            ],
+            constraintsVerified: {
+              fileWrites: "no",
+              embeddingCalls: "no",
+              keywordIndexWritten: "no",
+              vectorIndexWritten: "no",
+              realRebuildTriggered: "no",
+              applied: "no",
+            },
+          }),
+        );
+      }
       if (url === "/api/hud/scheduler-events?limit=8") return Promise.resolve(jsonResponse([]));
       return Promise.resolve(jsonResponse({}));
     });
@@ -280,5 +327,12 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("recordWritten");
     expect(compactText).toContain("realRebuild");
     expect(compactText).toContain("await_human_approval");
+    expect(fetchMock).toHaveBeenCalledWith("/api/kb/semantic-rebuild-plan/acceptance-records");
+    expect(compactText).toContain("semantic records 1/1");
+    expect(compactText).toContain("invalid 0");
+    expect(compactText).toContain("semantic acceptance records");
+    expect(compactText).toContain("human_gate_ready");
+    expect(compactText).toContain("kb-semantic-rebuild-2026-05-21T00-01-00-000Z");
+    expect(compactText).toContain("list fileWrites / no");
   });
 });
