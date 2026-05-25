@@ -30,6 +30,21 @@ describe("TaskHUD task graph validation", () => {
             activeTasks: [],
             attentionQueue: [],
             returnInbox: { pendingItems: [] },
+            returnConsumerPlan: {
+              mode: "observe-only",
+              totalCount: 2,
+              processCount: 0,
+              skipCount: 2,
+              warningCount: 0,
+              byReason: [{ reason: "schema-invalid", count: 2 }],
+              constraintsVerified: {
+                consumed: "no",
+                archived: "no",
+                receiptWritten: "no",
+                taskGraphMutated: "no",
+                applied: "no",
+              },
+            },
             watchdogSnapshot: { totalAlerts: 4 },
             taskGraphs: {
               items: [
@@ -269,6 +284,11 @@ describe("TaskHUD task graph validation", () => {
     const compactText = text.replace(/\s+/g, " ");
     expect(fetchMock).toHaveBeenCalledWith("/api/task-graph/validation");
     expect(compactText).toContain("4 警告");
+    expect(compactText).toContain("回执消费计划");
+    expect(compactText).toContain("总数 2");
+    expect(compactText).toContain("跳过 2");
+    expect(compactText).toContain("schema-invalid · 2");
+    expect(compactText).toContain("receiptWritten · no");
     expect(compactText).toContain("任务图验真");
     expect(compactText).toContain("错误 0");
     expect(compactText).toContain("警告 1");

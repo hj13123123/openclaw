@@ -48,6 +48,16 @@ type ReturnPendingItem = {
   summary?: string | null;
 };
 
+type ReturnConsumerPlanState = {
+  mode?: string;
+  totalCount?: number;
+  processCount?: number;
+  skipCount?: number;
+  warningCount?: number;
+  byReason?: Array<{ reason?: string; count?: number }>;
+  constraintsVerified?: Record<string, string>;
+};
+
 type TaskGraphItem = {
   graphId: string;
   title?: string | null;
@@ -354,6 +364,7 @@ type HUDState = {
     lastScanAt?: string;
     pendingItems?: ReturnPendingItem[];
   };
+  returnConsumerPlan?: ReturnConsumerPlanState;
   watchdogSnapshot?: {
     totalAlerts?: number;
   };
@@ -988,7 +999,8 @@ export class TaskHUD extends LitElement {
       </div>
 
       ${this.renderAgents(this.hud?.agentGroups ?? [])} ${this.renderActiveTasks(runningTasks)}
-      ${this.renderReviews(reviews)} ${this.renderTaskGraphs(this.hud?.taskGraphs?.items ?? [])}
+      ${this.renderReviews(reviews)} ${this.renderReturnConsumerPlan()}
+      ${this.renderTaskGraphs(this.hud?.taskGraphs?.items ?? [])}
       ${this.renderRecentCompletions(this.hud?.recentCompletions?.items ?? [])}
       ${this.renderScheduler()} ${this.renderRuntimeLoop()} ${this.renderTaskState()}
       ${this.renderPromoteGate()} ${this.renderKnowledgeBase()} ${this.renderPolicy()}
@@ -1084,6 +1096,60 @@ export class TaskHUD extends LitElement {
                 </div>
               `,
             )}
+      </section>
+    `;
+  }
+
+  private renderReturnConsumerPlan() {
+    const plan = this.hud?.returnConsumerPlan;
+    if (!plan || Number(plan.totalCount ?? 0) <= 0) return nothing;
+    const reasons = plan.byReason ?? [];
+    const constraints = plan.constraintsVerified ?? {};
+    return html`
+      <section class="section">
+        <h4 class="section-title">回执消费计划</h4>
+        <div class="row">
+          <div>
+            <div class="primary">${text(plan.mode, "observe-only")}</div>
+            <div class="secondary">
+              总数 ${plan.totalCount ?? 0} · 可消费 ${plan.processCount ?? 0} · 跳过
+              ${plan.skipCount ?? 0} · 警告 ${plan.warningCount ?? 0}
+            </div>
+            ${reasons.length > 0
+              ? html`
+                  <details class="details">
+                    <summary>查看跳过原因</summary>
+                    ${reasons.slice(0, 5).map(
+                      (item) => html`
+                        <div class="issue">
+                          <div class="secondary">
+                            ${text(item.reason, "unknown")} · ${item.count ?? 0}
+                          </div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                `
+              : nothing}
+            <details class="details">
+              <summary>查看消费约束</summary>
+              ${[
+                ["consumed", constraints.consumed],
+                ["archived", constraints.archived],
+                ["receiptWritten", constraints.receiptWritten],
+                ["taskGraphMutated", constraints.taskGraphMutated],
+                ["applied", constraints.applied],
+              ].map(
+                ([label, value]) => html`
+                  <div class="issue">
+                    <div class="secondary">${label} · ${text(value, "unknown")}</div>
+                  </div>
+                `,
+              )}
+            </details>
+          </div>
+          <span class="badge">只读</span>
+        </div>
       </section>
     `;
   }
