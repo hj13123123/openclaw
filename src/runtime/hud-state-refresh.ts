@@ -38,6 +38,7 @@ const SEMANTIC_REBUILD_REPORT_REL = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_ACCEPTANCE_PREFIX = "kb-semantic-rebuild-acceptance-";
 const SEMANTIC_REBUILD_APPROVAL_PREFIX = "kb-semantic-rebuild-approval-";
+const SEMANTIC_REBUILD_EXECUTION_RUN_PREFIX = "kb-semantic-rebuild-execution-run-";
 const REPORT_FILE_SUFFIX = ".json";
 
 export interface HudStateRefreshResult {
@@ -399,11 +400,13 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 }
 
 function semanticRebuildConstraints(
+  execution: Record<string, unknown> | null,
   approval: Record<string, unknown> | null,
   acceptance: Record<string, unknown> | null,
   plan: Record<string, unknown> | null,
 ): Record<string, string> | null {
   const constraints =
+    recordValue(execution?.constraintsVerified) ??
     recordValue(approval?.constraintsVerified) ??
     recordValue(acceptance?.constraintsVerified) ??
     recordValue(plan?.constraintsVerified);
@@ -419,16 +422,24 @@ function readSemanticRebuildSummary(workspaceRoot: string): HudSemanticRebuildSu
   const plan = latestSemanticRebuildReport(workspaceRoot, SEMANTIC_REBUILD_PLAN_PREFIX);
   const acceptance = latestSemanticRebuildReport(workspaceRoot, SEMANTIC_REBUILD_ACCEPTANCE_PREFIX);
   const approval = latestSemanticRebuildReport(workspaceRoot, SEMANTIC_REBUILD_APPROVAL_PREFIX);
+  const execution = latestSemanticRebuildReport(
+    workspaceRoot,
+    SEMANTIC_REBUILD_EXECUTION_RUN_PREFIX,
+  );
   const planSource = recordValue(plan?.report.source);
-  const stage: HudSemanticRebuildSummary["stage"] = !plan
-    ? "plan_missing"
-    : plan.report.status !== "ready"
-      ? "blocked"
-      : !acceptance
-        ? "plan_ready"
-        : !approval
-          ? "rebuild_approval_required"
-          : "ready_for_real_rebuild_implementation";
+  const executionStatus = stringValue(execution?.report.status);
+  const stage: HudSemanticRebuildSummary["stage"] =
+    executionStatus === "applied"
+      ? "applied"
+      : !plan
+        ? "plan_missing"
+        : plan.report.status !== "ready"
+          ? "blocked"
+          : !acceptance
+            ? "plan_ready"
+            : !approval
+              ? "rebuild_approval_required"
+              : "ready_for_real_rebuild_implementation";
 
   return {
     available: Boolean(plan),
@@ -436,13 +447,18 @@ function readSemanticRebuildSummary(workspaceRoot: string): HudSemanticRebuildSu
     latestPlanPath: plan?.reportPath ?? null,
     latestAcceptancePath: acceptance?.reportPath ?? null,
     latestApprovalPath: approval?.reportPath ?? null,
-    totalItems: planSource ? numberFromRecordValue(planSource, "totalItems") : null,
+    latestExecutionPath: execution?.reportPath ?? null,
+    executionStatus,
+    totalItems:
+      (execution ? numberFromRecordValue(execution.report, "totalItems") : null) ??
+      (planSource ? numberFromRecordValue(planSource, "totalItems") : null),
     plannedBatches: plan ? numberFromRecordValue(plan.report, "plannedBatches") : null,
     readyForHumanGate: Boolean(acceptance),
     readyForExecution: Boolean(acceptance),
     readyForRealRebuildImplementation:
       Boolean(approval) && stage === "ready_for_real_rebuild_implementation",
     constraintsVerified: semanticRebuildConstraints(
+      execution?.report ?? null,
       approval?.report ?? null,
       acceptance?.report ?? null,
       plan?.report ?? null,

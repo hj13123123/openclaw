@@ -118,10 +118,13 @@ export interface HudSemanticRebuildSummary {
     | "acceptance_ready"
     | "rebuild_approval_required"
     | "ready_for_real_rebuild_implementation"
+    | "applied"
     | "blocked";
   latestPlanPath: string | null;
   latestAcceptancePath: string | null;
   latestApprovalPath: string | null;
+  latestExecutionPath: string | null;
+  executionStatus: string | null;
   totalItems: number | null;
   plannedBatches: number | null;
   readyForHumanGate: boolean;
@@ -338,6 +341,8 @@ function defaultSemanticRebuildSummary(): HudSemanticRebuildSummary {
     latestPlanPath: null,
     latestAcceptancePath: null,
     latestApprovalPath: null,
+    latestExecutionPath: null,
+    executionStatus: null,
     totalItems: null,
     plannedBatches: null,
     readyForHumanGate: false,

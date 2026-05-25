@@ -93,6 +93,8 @@ describe("HUD semantic rebuild refresh", () => {
           "runtime/main/tmp/kb-semantic-rebuild-acceptance-2026-05-20T00-01-55-000Z.json",
         latestApprovalPath:
           "runtime/main/tmp/kb-semantic-rebuild-approval-2026-05-20T00-02-00-000Z.json",
+        latestExecutionPath: null,
+        executionStatus: null,
         totalItems: 1,
         plannedBatches: 1,
         readyForHumanGate: true,
@@ -112,5 +114,94 @@ describe("HUD semantic rebuild refresh", () => {
       expect(() =>
         readFileSync(path.join(workspaceRoot, "system", "kb-index", "vector-index.sqlite"), "utf8"),
       ).toThrow();
+    }));
+
+  it("shows applied semantic rebuild execution reports after real rebuild", () =>
+    withTempRoot((workspaceRoot) => {
+      writeJson(
+        workspaceRoot,
+        "runtime/main/tmp/kb-semantic-rebuild-plan-2026-05-20T00-01-50-000Z.json",
+        {
+          status: "ready",
+          mode: "dry-run",
+          generatedAt: "2026-05-20T00:01:50.000Z",
+          source: {
+            totalItems: 1,
+          },
+          plannedBatches: 1,
+          constraintsVerified: {
+            embeddingCalls: "no",
+            vectorIndexWritten: "no",
+            applied: "no",
+          },
+        },
+      );
+      writeJson(
+        workspaceRoot,
+        "runtime/main/tmp/kb-semantic-rebuild-acceptance-2026-05-20T00-01-55-000Z.json",
+        {
+          mode: "acceptance-record",
+          createdAt: "2026-05-20T00:01:55.000Z",
+          constraintsVerified: {
+            embeddingCalls: "no",
+            applied: "no",
+          },
+        },
+      );
+      writeJson(
+        workspaceRoot,
+        "runtime/main/tmp/kb-semantic-rebuild-approval-2026-05-20T00-02-00-000Z.json",
+        {
+          mode: "rebuild-approval-record",
+          createdAt: "2026-05-20T00:02:00.000Z",
+          approved: true,
+          constraintsVerified: {
+            embeddingCalls: "no",
+            applied: "no",
+          },
+        },
+      );
+      writeJson(
+        workspaceRoot,
+        "runtime/main/tmp/kb-semantic-rebuild-execution-run-semantic-rebuild-a.json",
+        {
+          mode: "semantic-rebuild-execution-run-report",
+          executedAt: "2026-05-20T00:03:00.000Z",
+          status: "applied",
+          provider: "ollama",
+          model: "nomic-embed-text:latest",
+          totalItems: 14,
+          batchesExecuted: 1,
+          embeddingDimensions: 768,
+          constraintsVerified: {
+            embeddingCalls: "yes",
+            semanticIndexWritten: "yes",
+            vectorIndexWritten: "yes",
+            realRebuildTriggered: "yes",
+            applied: "yes",
+          },
+        },
+      );
+
+      const result = writeHudStateSnapshot(workspaceRoot, "2026-05-20T00:03:10.000Z");
+      const statePath = path.join(workspaceRoot, HUD_STATE_RELATIVE_PATH);
+      const written = JSON.parse(readFileSync(statePath, "utf8")) as typeof result.state;
+
+      expect(written.semanticRebuild).toMatchObject({
+        available: true,
+        stage: "applied",
+        latestExecutionPath:
+          "runtime/main/tmp/kb-semantic-rebuild-execution-run-semantic-rebuild-a.json",
+        executionStatus: "applied",
+        totalItems: 14,
+        readyForRealRebuildImplementation: false,
+        constraintsVerified: {
+          embeddingCalls: "yes",
+          semanticIndexWritten: "yes",
+          vectorIndexWritten: "yes",
+          realRebuildTriggered: "yes",
+          applied: "yes",
+        },
+      });
     }));
 });
