@@ -34,6 +34,34 @@ describe("gateway OpenAI-compatible disabled HTTP routes", () => {
 });
 
 describe("gateway probe endpoints", () => {
+  it("routes KB semantic rebuild acceptance through the HTTP fast path", async () => {
+    await withGatewayServer({
+      prefix: "kb-semantic-acceptance-fast-path",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = createRequest({ path: "/api/kb/semantic-rebuild-plan/acceptance" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual(
+          expect.objectContaining({
+            mode: "acceptance-record-dry-run",
+            wouldWrite: false,
+            acceptance: expect.objectContaining({
+              readyForHumanGate: false,
+              status: expect.stringMatching(/^(missing|blocked)$/u),
+            }),
+            constraintsVerified: expect.objectContaining({
+              realRebuildTriggered: "no",
+              applied: "no",
+            }),
+          }),
+        );
+      },
+    });
+  });
+
   it("returns detailed readiness payload for local /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: true,
