@@ -3,6 +3,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  clearMemoryEmbeddingProviders,
+  registerMemoryEmbeddingProvider,
+} from "../plugins/memory-embedding-providers.js";
 import {
   buildSemanticRebuildAcceptanceRecordDryRun,
   buildSemanticRebuildApprovalRecordDryRun,
@@ -12,6 +17,7 @@ import {
   checkSemanticRebuildProposalAcceptance,
   checkSemanticRebuildExecutionEntry,
   checkSemanticRebuildPreflight,
+  executeSemanticRebuild,
   getSemanticRebuildStatus,
   handleKbHttpRequest,
   isKbApiPath,
@@ -48,6 +54,57 @@ function writeJson(filePath: string, value: unknown): void {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function registerTestEmbeddingProvider(calls: string[][]): void {
+  registerMemoryEmbeddingProvider({
+    id: "test-embed",
+    defaultModel: "test-model",
+    transport: "remote",
+    create: async (options) => ({
+      provider: {
+        id: "test-embed",
+        model: options.model,
+        embedQuery: async () => [1, 0, 0],
+        embedBatch: async (texts) => {
+          calls.push(texts);
+          return texts.map((_, index) => [index + 1, index + 2, index + 3]);
+        },
+      },
+    }),
+  });
+}
+
+function semanticRebuildConfig() {
+  return {
+    agents: {
+      defaults: {
+        memorySearch: {
+          enabled: true,
+          provider: "test-embed",
+          fallback: "none",
+          model: "test-model",
+          store: { vector: { enabled: true } },
+        },
+      },
+    },
+  };
+}
+
+async function prepareApprovedSemanticRebuild(
+  workspaceRoot: string,
+  config: ReturnType<typeof semanticRebuildConfig>,
+) {
+  await handleKbHttpRequest(
+    makeReq("/api/kb/semantic-rebuild-plan", "POST"),
+    makeResponse().res,
+    workspaceRoot,
+    { config },
+  );
+  const acceptance = await writeSemanticRebuildAcceptanceRecord(workspaceRoot, { config });
+  expect(acceptance.wrote).toBe(true);
+  const approval = await writeSemanticRebuildApprovalRecord(workspaceRoot, { config });
+  expect(approval.wrote).toBe(true);
+}
+
 describe("server KB API", () => {
   const roots: string[] = [];
 
@@ -55,6 +112,7 @@ describe("server KB API", () => {
     for (const root of roots.splice(0)) {
       rmSync(root, { recursive: true, force: true });
     }
+    clearMemoryEmbeddingProviders();
   });
 
   function makeWorkspace(): string {
@@ -78,6 +136,7 @@ describe("server KB API", () => {
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-execution")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-execution-contract")).toBe(true);
     expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-execution-stage")).toBe(true);
+    expect(isKbApiPath("/api/kb/semantic-rebuild-plan/rebuild-execution-run")).toBe(true);
     expect(isKbApiPath("/api/hud/state")).toBe(false);
   });
 
@@ -1435,7 +1494,7 @@ describe("server KB API", () => {
           wouldExecute: false,
           readyForExecutionHumanGate: true,
         }),
-        nextAction: "implement_real_rebuild_executor",
+        nextAction: "run_real_rebuild_executor",
         constraintsVerified: {
           fileWrites: "no",
           stateWritten: "no",
@@ -1577,7 +1636,7 @@ describe("server KB API", () => {
           readyForRealRebuildImplementation: true,
           wouldExecute: false,
           executed: false,
-          nextAction: "implement_real_rebuild_executor",
+          nextAction: "run_real_rebuild_executor",
         }),
         executorInput: expect.objectContaining({
           contractVersion: "v1",
@@ -1626,12 +1685,12 @@ describe("server KB API", () => {
           executionPolicy: {
             requiredApproval: "human",
             approvedBy: "rebuild-approval-record",
-            embeddingCallsAllowed: false,
-            semanticIndexWritesAllowed: false,
-            vectorIndexWritesAllowed: false,
+            embeddingCallsAllowed: true,
+            semanticIndexWritesAllowed: true,
+            vectorIndexWritesAllowed: true,
             atomicWritesRequired: true,
-            realRebuildExecutorImplemented: false,
-            nextAction: "implement_real_rebuild_executor",
+            realRebuildExecutorImplemented: true,
+            nextAction: "run_real_rebuild_executor",
           },
         }),
         constraintsVerified: {
@@ -1824,6 +1883,56 @@ describe("server KB API", () => {
     expect(second.record?.createdAt).toBe(first.record?.createdAt);
   });
 
+  it("refreshes stale staged semantic rebuild execution metadata", async () => {
+    const workspaceRoot = makeWorkspace();
+    const config = semanticRebuildConfig();
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+    });
+    await prepareApprovedSemanticRebuild(workspaceRoot, config);
+
+    const first = await writeSemanticRebuildExecutionStageRecord(workspaceRoot, { config });
+    expect(first.recordPath).toEqual(expect.any(String));
+    expect(first.manifestPath).toEqual(expect.any(String));
+
+    const recordFile = path.join(workspaceRoot, ...first.recordPath!.split("/"));
+    const manifestFile = path.join(workspaceRoot, ...first.manifestPath!.split("/"));
+    const stale = JSON.parse(readFileSync(recordFile, "utf8")) as {
+      contract: { executionPolicy: Record<string, unknown> };
+      manifest: { executionPolicy: Record<string, unknown> };
+    };
+    const stalePolicy = {
+      ...stale.contract.executionPolicy,
+      embeddingCallsAllowed: false,
+      semanticIndexWritesAllowed: false,
+      vectorIndexWritesAllowed: false,
+      realRebuildExecutorImplemented: false,
+      nextAction: "implement_real_rebuild_executor",
+    };
+    stale.contract.executionPolicy = stalePolicy;
+    stale.manifest.executionPolicy = stalePolicy;
+    writeJson(recordFile, stale);
+    writeJson(manifestFile, stale.manifest);
+
+    const refreshed = await writeSemanticRebuildExecutionStageRecord(workspaceRoot, { config });
+    const refreshedManifest = JSON.parse(readFileSync(manifestFile, "utf8")) as {
+      executionPolicy: { embeddingCallsAllowed: boolean };
+    };
+
+    expect(refreshed).toEqual(
+      expect.objectContaining({
+        wrote: true,
+        idempotentReplay: false,
+        recordPath: first.recordPath,
+        manifestPath: first.manifestPath,
+      }),
+    );
+    expect(refreshed.record?.contract.executionPolicy.embeddingCallsAllowed).toBe(true);
+    expect(refreshed.record?.manifest.executionPolicy.embeddingCallsAllowed).toBe(true);
+    expect(refreshedManifest.executionPolicy.embeddingCallsAllowed).toBe(true);
+  });
+
   it("blocks staged semantic rebuild execution writes when the contract is not ready", async () => {
     const stage = await writeSemanticRebuildExecutionStageRecord(makeWorkspace());
 
@@ -1841,6 +1950,160 @@ describe("server KB API", () => {
         constraintsVerified: expect.objectContaining({
           fileWrites: "no",
           embeddingCalls: "no",
+          realRebuildTriggered: "no",
+          applied: "no",
+        }),
+      }),
+    );
+  });
+
+  it("executes a real semantic rebuild into staged and active outputs", async () => {
+    const workspaceRoot = makeWorkspace();
+    const calls: string[][] = [];
+    const config = semanticRebuildConfig();
+    registerTestEmbeddingProvider(calls);
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+      summary: "Recover task graph state",
+      tags: ["D7"],
+    });
+    writeJson(path.join(workspaceRoot, "system", "skill-library", "skill-a.json"), {
+      skillId: "skill-a",
+      title: "KB refresh",
+      trigger: "refresh keyword index",
+      sourceCases: ["case-a"],
+      keywords: ["kb-refresh"],
+    });
+
+    await prepareApprovedSemanticRebuild(workspaceRoot, config);
+
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/rebuild-execution-run", "POST"),
+      response.res,
+      workspaceRoot,
+      { config },
+    );
+    const body = response.json();
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(201);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toHaveLength(2);
+    expect(body).toEqual(
+      expect.objectContaining({
+        mode: "semantic-rebuild-execution-run",
+        status: "applied",
+        readyForExecution: true,
+        executed: true,
+        idempotentReplay: false,
+        totalItems: 2,
+        batchesExecuted: 1,
+        embeddingDimensions: 3,
+        provider: "test-embed",
+        model: "test-model",
+        constraintsVerified: {
+          fileWrites: "staged-and-active-semantic-vector-indexes",
+          stateWritten: "no",
+          embeddingCalls: "yes",
+          keywordIndexWritten: "no",
+          semanticIndexWritten: "yes",
+          vectorIndexWritten: "yes",
+          realRebuildTriggered: "yes",
+          applied: "yes",
+        },
+      }),
+    );
+
+    const semanticIndex = JSON.parse(
+      readFileSync(path.join(workspaceRoot, "system", "kb-index", "semantic-index.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(semanticIndex).toEqual(
+      expect.objectContaining({
+        version: "v1",
+        totalItems: 2,
+        provider: "test-embed",
+        model: "test-model",
+        dimensions: 3,
+      }),
+    );
+    expect(semanticIndex.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ itemId: "case-a", vectorId: "case:case-a" }),
+        expect.objectContaining({ itemId: "skill-a", vectorId: "skill:skill-a" }),
+      ]),
+    );
+
+    const activeReport = JSON.parse(
+      readFileSync(
+        path.join(workspaceRoot, "system", "kb-index", "semantic-rebuild-report.json"),
+        "utf8",
+      ),
+    );
+    expect(activeReport).toEqual(
+      expect.objectContaining({
+        mode: "semantic-rebuild-execution-run-report",
+        status: "applied",
+        totalItems: 2,
+      }),
+    );
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(
+      path.join(workspaceRoot, "system", "kb-index", "vector-index.sqlite"),
+    );
+    try {
+      const count = db.prepare("SELECT COUNT(*) AS count FROM vectors").get() as {
+        count: number | bigint;
+      };
+      expect(Number(count.count)).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("replays real semantic rebuild execution without another embedding call", async () => {
+    const workspaceRoot = makeWorkspace();
+    const calls: string[][] = [];
+    const config = semanticRebuildConfig();
+    registerTestEmbeddingProvider(calls);
+    writeJson(path.join(workspaceRoot, "system", "case-library", "case-a.json"), {
+      caseId: "case-a",
+      title: "Task graph recovery",
+    });
+    await prepareApprovedSemanticRebuild(workspaceRoot, config);
+
+    const first = await executeSemanticRebuild(workspaceRoot, { config });
+    const second = await executeSemanticRebuild(workspaceRoot, { config });
+
+    expect(first).toEqual(expect.objectContaining({ status: "applied", executed: true }));
+    expect(second).toEqual(
+      expect.objectContaining({
+        status: "applied",
+        executed: false,
+        idempotentReplay: true,
+        totalItems: 1,
+      }),
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  it("blocks real semantic rebuild execution when gate records are missing", async () => {
+    const run = await executeSemanticRebuild(makeWorkspace());
+
+    expect(run).toEqual(
+      expect.objectContaining({
+        mode: "semantic-rebuild-execution-run",
+        status: "blocked",
+        readyForExecution: false,
+        executed: false,
+        idempotentReplay: false,
+        blockReasons: expect.arrayContaining(["executor_contract_not_ready"]),
+        constraintsVerified: expect.objectContaining({
+          embeddingCalls: "no",
+          semanticIndexWritten: "no",
+          vectorIndexWritten: "no",
           realRebuildTriggered: "no",
           applied: "no",
         }),
@@ -1954,7 +2217,7 @@ describe("server KB API", () => {
         mode: "semantic-rebuild-status",
         stage: "ready_for_real_rebuild_implementation",
         status: "ready_for_real_rebuild_implementation",
-        nextAction: "implement_real_rebuild_executor",
+        nextAction: "run_real_rebuild_executor",
         plan: expect.objectContaining({
           available: true,
           reportPath: plan.reportPath,
@@ -1999,7 +2262,7 @@ describe("server KB API", () => {
           blockReasons: [],
           wouldExecute: false,
           executed: false,
-          nextAction: "implement_real_rebuild_executor",
+          nextAction: "run_real_rebuild_executor",
         }),
         constraintsVerified: {
           fileWrites: "no",
@@ -2230,6 +2493,20 @@ describe("server KB API", () => {
     const response = makeResponse();
     const handled = await handleKbHttpRequest(
       makeReq("/api/kb/semantic-rebuild-plan/rebuild-execution-stage", "GET"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "POST");
+  });
+
+  it("rejects semantic rebuild execution run reads", async () => {
+    const response = makeResponse();
+    const handled = await handleKbHttpRequest(
+      makeReq("/api/kb/semantic-rebuild-plan/rebuild-execution-run", "GET"),
       response.res,
       makeWorkspace(),
     );

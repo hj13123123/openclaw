@@ -1,13 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { basename } from "node:path";
 import path from "node:path";
+import { resolveAgentDir } from "../agents/agent-scope.js";
+import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadConfig, type OpenClawConfig, type MemorySearchConfig } from "../config/config.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { createEmbeddingProvider } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import {
   buildKnowledgeIndexFromWorkspace,
   KB_INDEX_FILE_RELATIVE_PATH,
   writeKnowledgeIndexSnapshot,
 } from "../runtime/kb-index-refresh.js";
+import type { KnowledgeIndex, KnowledgeIndexItem } from "../runtime/kb-index.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 
 const KB_STATE_ROUTE = "/api/kb/state";
@@ -28,6 +34,8 @@ const KB_SEMANTIC_REBUILD_EXECUTION_CONTRACT_ROUTE =
   "/api/kb/semantic-rebuild-plan/rebuild-execution-contract";
 const KB_SEMANTIC_REBUILD_EXECUTION_STAGE_ROUTE =
   "/api/kb/semantic-rebuild-plan/rebuild-execution-stage";
+const KB_SEMANTIC_REBUILD_EXECUTION_RUN_ROUTE =
+  "/api/kb/semantic-rebuild-plan/rebuild-execution-run";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
@@ -452,7 +460,7 @@ type SemanticRebuildExecutionEntry = {
   latestApprovalRecord: SemanticRebuildApprovalRecordSummary | null;
   approvalRecords: SemanticRebuildApprovalRecordList;
   dryRun: SemanticRebuildExecutionDryRun;
-  nextAction: "implement_real_rebuild_executor" | "resolve_blockers";
+  nextAction: "run_real_rebuild_executor" | "resolve_blockers";
   constraintsVerified: {
     fileWrites: "no";
     stateWritten: "no";
@@ -525,12 +533,12 @@ type SemanticRebuildExecutionContract = {
     executionPolicy: {
       requiredApproval: "human";
       approvedBy: "rebuild-approval-record";
-      embeddingCallsAllowed: false;
-      semanticIndexWritesAllowed: false;
-      vectorIndexWritesAllowed: false;
+      embeddingCallsAllowed: true;
+      semanticIndexWritesAllowed: true;
+      vectorIndexWritesAllowed: true;
       atomicWritesRequired: true;
-      realRebuildExecutorImplemented: false;
-      nextAction: "implement_real_rebuild_executor";
+      realRebuildExecutorImplemented: true;
+      nextAction: "run_real_rebuild_executor";
     };
   } | null;
   constraintsVerified: {
@@ -609,6 +617,108 @@ type SemanticRebuildExecutionStageWrite = {
   constraintsVerified: SemanticRebuildExecutionStageConstraints;
 };
 
+type SemanticRebuildExecutionRunConstraints = {
+  fileWrites: "no" | "staged-and-active-semantic-vector-indexes";
+  stateWritten: "no";
+  embeddingCalls: "no" | "yes";
+  keywordIndexWritten: "no";
+  semanticIndexWritten: "no" | "yes";
+  vectorIndexWritten: "no" | "yes";
+  realRebuildTriggered: "no" | "yes";
+  applied: "no" | "yes";
+};
+
+type SemanticRebuildExecutionRunBlockReason =
+  | SemanticRebuildExecutionEntryBlockReason
+  | "executor_contract_not_ready"
+  | "staged_execution_not_ready"
+  | "source_index_drift"
+  | "semantic_provider_missing"
+  | "semantic_model_missing"
+  | "memory_search_disabled"
+  | "vector_store_disabled"
+  | "embedding_provider_unavailable";
+
+type SemanticRebuildVectorRecord = {
+  vectorId: string;
+  item: KnowledgeIndexItem;
+  embeddingText: string;
+  embeddingTextHash: string;
+  embedding: number[];
+};
+
+type SemanticRebuildSemanticIndex = {
+  version: "v1";
+  generatedAt: string;
+  idempotencyKey: string;
+  sourceIndexPath: string;
+  sourceIndexGeneratedAt: string;
+  provider: string;
+  model: string;
+  dimensions: number;
+  totalItems: number;
+  items: Array<
+    Pick<
+      KnowledgeIndexItem,
+      | "itemId"
+      | "sourceType"
+      | "sourcePath"
+      | "title"
+      | "summary"
+      | "tags"
+      | "keywords"
+      | "risk"
+      | "createdAt"
+      | "status"
+      | "sourceCases"
+    > & {
+      vectorId: string;
+      embeddingTextHash: string;
+      embeddingTextLength: number;
+    }
+  >;
+};
+
+type SemanticRebuildExecutionRunReport = {
+  mode: "semantic-rebuild-execution-run-report";
+  executionId: string;
+  idempotencyKey: string;
+  executedAt: string;
+  status: "applied";
+  provider: string;
+  model: string;
+  totalItems: number;
+  batchesExecuted: number;
+  embeddingDimensions: number;
+  outputs: NonNullable<SemanticRebuildExecutionContract["executorInput"]>["plannedOutputs"];
+  stagedOutputs: NonNullable<SemanticRebuildExecutionContract["executorInput"]>["stagedOutputs"];
+  executionRecordPath: string;
+  constraintsVerified: SemanticRebuildExecutionRunConstraints;
+};
+
+type SemanticRebuildExecutionRun = {
+  mode: "semantic-rebuild-execution-run";
+  checkedAt: string;
+  status: "applied" | "blocked";
+  readyForExecution: boolean;
+  executed: boolean;
+  idempotentReplay: boolean;
+  recordPath: string | null;
+  reportPath: string | null;
+  outputPaths:
+    | NonNullable<SemanticRebuildExecutionContract["executorInput"]>["plannedOutputs"]
+    | null;
+  blockReasons: SemanticRebuildExecutionRunBlockReason[];
+  stage: SemanticRebuildExecutionStageWrite;
+  totalItems: number;
+  batchesExecuted: number;
+  embeddingDimensions: number | null;
+  provider: string | null;
+  model: string | null;
+  report: SemanticRebuildExecutionRunReport | null;
+  constraintsVerified: SemanticRebuildExecutionRunConstraints;
+};
+
 type SemanticRebuildStatusStage =
   | "plan_missing"
   | "acceptance_blocked"
@@ -624,7 +734,7 @@ type SemanticRebuildStatus = {
   checkedAt: string;
   stage: SemanticRebuildStatusStage;
   status: "ready_for_real_rebuild_implementation" | "blocked";
-  nextAction: "implement_real_rebuild_executor" | "resolve_blockers";
+  nextAction: "run_real_rebuild_executor" | "resolve_blockers";
   plan: {
     available: boolean;
     reportPath: string | null;
@@ -1199,6 +1309,48 @@ function executionStageConstraints<T extends "no" | "staged-execution-record-and
     realRebuildTriggered: "no" as const,
     applied: "no" as const,
   };
+}
+
+function executionRunConstraints(params: {
+  fileWrites: SemanticRebuildExecutionRunConstraints["fileWrites"];
+  embeddingCalls: SemanticRebuildExecutionRunConstraints["embeddingCalls"];
+  semanticIndexWritten: SemanticRebuildExecutionRunConstraints["semanticIndexWritten"];
+  vectorIndexWritten: SemanticRebuildExecutionRunConstraints["vectorIndexWritten"];
+  realRebuildTriggered: SemanticRebuildExecutionRunConstraints["realRebuildTriggered"];
+  applied: SemanticRebuildExecutionRunConstraints["applied"];
+}): SemanticRebuildExecutionRunConstraints {
+  return {
+    fileWrites: params.fileWrites,
+    stateWritten: "no",
+    embeddingCalls: params.embeddingCalls,
+    keywordIndexWritten: "no",
+    semanticIndexWritten: params.semanticIndexWritten,
+    vectorIndexWritten: params.vectorIndexWritten,
+    realRebuildTriggered: params.realRebuildTriggered,
+    applied: params.applied,
+  };
+}
+
+function noExecutionRunConstraints(): SemanticRebuildExecutionRunConstraints {
+  return executionRunConstraints({
+    fileWrites: "no",
+    embeddingCalls: "no",
+    semanticIndexWritten: "no",
+    vectorIndexWritten: "no",
+    realRebuildTriggered: "no",
+    applied: "no",
+  });
+}
+
+function appliedExecutionRunConstraints(): SemanticRebuildExecutionRunConstraints {
+  return executionRunConstraints({
+    fileWrites: "staged-and-active-semantic-vector-indexes",
+    embeddingCalls: "yes",
+    semanticIndexWritten: "yes",
+    vectorIndexWritten: "yes",
+    realRebuildTriggered: "yes",
+    applied: "yes",
+  });
 }
 
 function approvalRecordConstraintsValid(record: SemanticRebuildApprovalRecord): boolean {
@@ -1839,7 +1991,7 @@ export async function checkSemanticRebuildExecutionEntry(
     approvalRecords,
     dryRun,
     nextAction: readyForRealRebuildImplementation
-      ? "implement_real_rebuild_executor"
+      ? "run_real_rebuild_executor"
       : "resolve_blockers",
     constraintsVerified: preflightConstraints(),
   };
@@ -1911,12 +2063,12 @@ export async function buildSemanticRebuildExecutionContract(
             executionPolicy: {
               requiredApproval: "human" as const,
               approvedBy: "rebuild-approval-record" as const,
-              embeddingCallsAllowed: false as const,
-              semanticIndexWritesAllowed: false as const,
-              vectorIndexWritesAllowed: false as const,
+              embeddingCallsAllowed: true as const,
+              semanticIndexWritesAllowed: true as const,
+              vectorIndexWritesAllowed: true as const,
               atomicWritesRequired: true as const,
-              realRebuildExecutorImplemented: false as const,
-              nextAction: "implement_real_rebuild_executor" as const,
+              realRebuildExecutorImplemented: true as const,
+              nextAction: "run_real_rebuild_executor" as const,
             },
           };
         })()
@@ -1999,6 +2151,56 @@ function buildSemanticRebuildExecutionStageRecord(
   };
 }
 
+function isSameSemanticRebuildExecutionPolicy(
+  left: SemanticRebuildExecutionStageManifest["executionPolicy"],
+  right: SemanticRebuildExecutionStageManifest["executionPolicy"],
+): boolean {
+  return (
+    left.requiredApproval === right.requiredApproval &&
+    left.approvedBy === right.approvedBy &&
+    left.embeddingCallsAllowed === right.embeddingCallsAllowed &&
+    left.semanticIndexWritesAllowed === right.semanticIndexWritesAllowed &&
+    left.vectorIndexWritesAllowed === right.vectorIndexWritesAllowed &&
+    left.atomicWritesRequired === right.atomicWritesRequired &&
+    left.realRebuildExecutorImplemented === right.realRebuildExecutorImplemented &&
+    left.nextAction === right.nextAction
+  );
+}
+
+function isCurrentSemanticRebuildExecutionStageRecord(
+  record: SemanticRebuildExecutionStageRecord,
+  executorInput: NonNullable<SemanticRebuildExecutionContract["executorInput"]>,
+): boolean {
+  return (
+    record.executionId === semanticRebuildExecutionId(executorInput.idempotencyKey) &&
+    record.idempotencyKey === executorInput.idempotencyKey &&
+    record.contractVersion === executorInput.contractVersion &&
+    record.manifestPath === executorInput.stagedOutputs.rebuildReportPath &&
+    record.contract.idempotencyKey === executorInput.idempotencyKey &&
+    record.contract.sourceIndexPath === executorInput.sourceIndexPath &&
+    record.contract.executionRecordPath === executorInput.executionRecordPath &&
+    record.contract.semantic.provider === executorInput.semantic.provider &&
+    record.contract.semantic.model === executorInput.semantic.model &&
+    record.contract.batchPlan.totalItems === executorInput.batchPlan.totalItems &&
+    record.contract.batchPlan.plannedBatches === executorInput.batchPlan.plannedBatches &&
+    record.contract.batchPlan.maxItemsPerBatch === executorInput.batchPlan.maxItemsPerBatch &&
+    record.manifest.idempotencyKey === executorInput.idempotencyKey &&
+    record.manifest.sourceIndexPath === executorInput.sourceIndexPath &&
+    record.manifest.provider === executorInput.semantic.provider &&
+    record.manifest.model === executorInput.semantic.model &&
+    record.manifest.totalItems === executorInput.batchPlan.totalItems &&
+    record.manifest.plannedBatches === executorInput.batchPlan.plannedBatches &&
+    isSameSemanticRebuildExecutionPolicy(
+      record.contract.executionPolicy,
+      executorInput.executionPolicy,
+    ) &&
+    isSameSemanticRebuildExecutionPolicy(
+      record.manifest.executionPolicy,
+      executorInput.executionPolicy,
+    )
+  );
+}
+
 function isSemanticRebuildExecutionStageRecord(
   value: unknown,
 ): value is SemanticRebuildExecutionStageRecord {
@@ -2070,7 +2272,7 @@ export async function writeSemanticRebuildExecutionStageRecord(
     workspaceRoot,
     executorInput.executionRecordPath,
   );
-  if (existing) {
+  if (existing && isCurrentSemanticRebuildExecutionStageRecord(existing, executorInput)) {
     return {
       mode: "semantic-rebuild-execution-stage-write",
       checkedAt,
@@ -2108,6 +2310,582 @@ export async function writeSemanticRebuildExecutionStageRecord(
     contract,
     record,
     constraintsVerified: record.constraintsVerified,
+  };
+}
+
+function semanticRebuildExecutionRunRecordPath(
+  executorInput: NonNullable<SemanticRebuildExecutionContract["executorInput"]>,
+): string {
+  return executorInput.executionRecordPath.replace(
+    "/kb-semantic-rebuild-execution-",
+    "/kb-semantic-rebuild-execution-run-",
+  );
+}
+
+function isAppliedExecutionRunReport(value: unknown): value is SemanticRebuildExecutionRunReport {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Record<string, unknown>;
+  const constraints = report.constraintsVerified as Record<string, unknown> | undefined;
+  if (!constraints) return false;
+  return (
+    report.mode === "semantic-rebuild-execution-run-report" &&
+    typeof report.executionId === "string" &&
+    typeof report.idempotencyKey === "string" &&
+    typeof report.executedAt === "string" &&
+    report.status === "applied" &&
+    typeof report.provider === "string" &&
+    typeof report.model === "string" &&
+    typeof report.totalItems === "number" &&
+    typeof report.batchesExecuted === "number" &&
+    typeof report.embeddingDimensions === "number" &&
+    Boolean(report.outputs) &&
+    typeof report.outputs === "object" &&
+    constraints.embeddingCalls === "yes" &&
+    constraints.semanticIndexWritten === "yes" &&
+    constraints.vectorIndexWritten === "yes" &&
+    constraints.realRebuildTriggered === "yes" &&
+    constraints.applied === "yes"
+  );
+}
+
+async function readJsonFile(filePath: string): Promise<unknown | null> {
+  try {
+    return JSON.parse(await readFile(filePath, "utf8")) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+async function activeExecutionReportReplay(
+  workspaceRoot: string,
+  executorInput: NonNullable<SemanticRebuildExecutionContract["executorInput"]>,
+): Promise<SemanticRebuildExecutionRunReport | null> {
+  const reportPath = path.join(
+    workspaceRoot,
+    ...executorInput.plannedOutputs.rebuildReportPath.split("/"),
+  );
+  const parsed = await readJsonFile(reportPath);
+  if (
+    !isAppliedExecutionRunReport(parsed) ||
+    parsed.idempotencyKey !== executorInput.idempotencyKey
+  ) {
+    return null;
+  }
+  const semanticIndex = await readJsonFile(
+    path.join(workspaceRoot, ...executorInput.plannedOutputs.semanticIndexPath.split("/")),
+  );
+  try {
+    await readFile(
+      path.join(workspaceRoot, ...executorInput.plannedOutputs.vectorIndexPath.split("/")),
+    );
+  } catch {
+    return null;
+  }
+  if (!semanticIndex || typeof semanticIndex !== "object") {
+    return null;
+  }
+  return parsed;
+}
+
+function semanticEmbeddingText(item: KnowledgeIndexItem): string {
+  return [
+    `id: ${item.itemId}`,
+    `type: ${item.sourceType}`,
+    `title: ${item.title}`,
+    item.summary ? `summary: ${item.summary}` : null,
+    item.tags.length > 0 ? `tags: ${item.tags.join(", ")}` : null,
+    item.keywords.length > 0 ? `keywords: ${item.keywords.join(", ")}` : null,
+    `risk: ${item.risk}`,
+    item.status ? `status: ${item.status}` : null,
+    item.sourceCases?.length ? `sourceCases: ${item.sourceCases.join(", ")}` : null,
+    `sourcePath: ${item.sourcePath}`,
+  ]
+    .filter((entry): entry is string => entry !== null)
+    .join("\n");
+}
+
+function sha256Text(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function vectorIdForItem(item: KnowledgeIndexItem): string {
+  return `${item.sourceType}:${item.itemId}`;
+}
+
+function assertValidEmbeddingBatch(
+  vectors: number[][],
+  expectedLength: number,
+  expectedDimensions: number | null,
+): number {
+  if (vectors.length !== expectedLength) {
+    throw new Error(
+      `Embedding batch returned ${vectors.length} vectors for ${expectedLength} inputs.`,
+    );
+  }
+  let dimensions = expectedDimensions;
+  for (const vector of vectors) {
+    if (!Array.isArray(vector) || vector.length === 0) {
+      throw new Error("Embedding provider returned an empty vector.");
+    }
+    if (!vector.every((value) => Number.isFinite(value))) {
+      throw new Error("Embedding provider returned a non-finite vector value.");
+    }
+    dimensions ??= vector.length;
+    if (vector.length !== dimensions) {
+      throw new Error("Embedding provider returned inconsistent vector dimensions.");
+    }
+  }
+  return dimensions ?? 0;
+}
+
+async function embedSemanticRebuildItems(params: {
+  workspaceRoot: string;
+  config: OpenClawConfig;
+  executorInput: NonNullable<SemanticRebuildExecutionContract["executorInput"]>;
+  stageRecord: SemanticRebuildExecutionStageRecord;
+  index: KnowledgeIndex;
+}): Promise<{
+  records: SemanticRebuildVectorRecord[];
+  dimensions: number;
+  provider: string;
+  model: string;
+}> {
+  const providerId = params.executorInput.semantic.provider;
+  const model = params.executorInput.semantic.model;
+  if (!providerId) {
+    throw new Error("semantic_provider_missing");
+  }
+  if (!model) {
+    throw new Error("semantic_model_missing");
+  }
+  const memorySearch = resolveMemorySearchConfig(params.config, "main");
+  if (!memorySearch) {
+    throw new Error("memory_search_disabled");
+  }
+  if (!memorySearch.store.vector.enabled) {
+    throw new Error("vector_store_disabled");
+  }
+  const result = await createEmbeddingProvider({
+    config: params.config,
+    agentDir: resolveAgentDir(params.config, "main"),
+    provider: providerId,
+    fallback: memorySearch.fallback,
+    model,
+    local: memorySearch.local,
+    remote: memorySearch.remote
+      ? {
+          baseUrl: memorySearch.remote.baseUrl,
+          apiKey: memorySearch.remote.apiKey,
+          headers: memorySearch.remote.headers,
+        }
+      : undefined,
+    outputDimensionality: memorySearch.outputDimensionality,
+  });
+  if (!result.provider) {
+    throw new Error(result.providerUnavailableReason ?? "embedding_provider_unavailable");
+  }
+
+  const records: SemanticRebuildVectorRecord[] = [];
+  let dimensions: number | null = null;
+  for (const batch of params.stageRecord.manifest.batches) {
+    const items = params.index.items.slice(batch.itemOffset, batch.itemLimit);
+    const texts = items.map(semanticEmbeddingText);
+    const vectors = await result.provider.embedBatch(texts);
+    dimensions = assertValidEmbeddingBatch(vectors, items.length, dimensions);
+    for (const [index, item] of items.entries()) {
+      const embeddingText = texts[index] ?? "";
+      records.push({
+        vectorId: vectorIdForItem(item),
+        item,
+        embeddingText,
+        embeddingTextHash: sha256Text(embeddingText),
+        embedding: vectors[index] ?? [],
+      });
+    }
+  }
+
+  return {
+    records,
+    dimensions: dimensions ?? 0,
+    provider: result.provider.id,
+    model: result.provider.model,
+  };
+}
+
+function buildSemanticIndex(params: {
+  executedAt: string;
+  executorInput: NonNullable<SemanticRebuildExecutionContract["executorInput"]>;
+  index: KnowledgeIndex;
+  records: SemanticRebuildVectorRecord[];
+  dimensions: number;
+  provider: string;
+  model: string;
+}): SemanticRebuildSemanticIndex {
+  return {
+    version: "v1",
+    generatedAt: params.executedAt,
+    idempotencyKey: params.executorInput.idempotencyKey,
+    sourceIndexPath: params.executorInput.sourceIndexPath,
+    sourceIndexGeneratedAt: params.index.generatedAt,
+    provider: params.provider,
+    model: params.model,
+    dimensions: params.dimensions,
+    totalItems: params.records.length,
+    items: params.records.map((record) => ({
+      itemId: record.item.itemId,
+      sourceType: record.item.sourceType,
+      sourcePath: record.item.sourcePath,
+      title: record.item.title,
+      summary: record.item.summary,
+      tags: record.item.tags,
+      keywords: record.item.keywords,
+      risk: record.item.risk,
+      createdAt: record.item.createdAt,
+      ...(record.item.status ? { status: record.item.status } : {}),
+      ...(record.item.sourceCases ? { sourceCases: record.item.sourceCases } : {}),
+      vectorId: record.vectorId,
+      embeddingTextHash: record.embeddingTextHash,
+      embeddingTextLength: record.embeddingText.length,
+    })),
+  };
+}
+
+async function writeJsonFile(
+  workspaceRoot: string,
+  relativePath: string,
+  value: unknown,
+): Promise<void> {
+  const filePath = path.join(workspaceRoot, ...relativePath.split("/"));
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function vectorToBlob(embedding: number[]): Buffer {
+  return Buffer.from(new Float32Array(embedding).buffer);
+}
+
+async function writeVectorIndexSqlite(params: {
+  workspaceRoot: string;
+  relativePath: string;
+  executedAt: string;
+  executorInput: NonNullable<SemanticRebuildExecutionContract["executorInput"]>;
+  provider: string;
+  model: string;
+  dimensions: number;
+  records: SemanticRebuildVectorRecord[];
+}): Promise<void> {
+  const filePath = path.join(params.workspaceRoot, ...params.relativePath.split("/"));
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await rm(filePath, { force: true });
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(filePath);
+  try {
+    db.exec("PRAGMA journal_mode = DELETE");
+    db.exec("PRAGMA busy_timeout = 5000");
+    db.exec(`
+      CREATE TABLE meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      CREATE TABLE vectors (
+        vector_id TEXT PRIMARY KEY,
+        item_id TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_path TEXT NOT NULL,
+        text_hash TEXT NOT NULL,
+        dimensions INTEGER NOT NULL,
+        embedding_json TEXT NOT NULL,
+        embedding_blob BLOB NOT NULL
+      );
+      CREATE INDEX vectors_item_id_idx ON vectors(item_id);
+      CREATE INDEX vectors_source_path_idx ON vectors(source_path);
+    `);
+    const insertMeta = db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)");
+    insertMeta.run("version", "v1");
+    insertMeta.run("idempotencyKey", params.executorInput.idempotencyKey);
+    insertMeta.run("executedAt", params.executedAt);
+    insertMeta.run("provider", params.provider);
+    insertMeta.run("model", params.model);
+    insertMeta.run("dimensions", String(params.dimensions));
+    insertMeta.run("totalItems", String(params.records.length));
+    const insertVector = db.prepare(
+      `INSERT INTO vectors
+        (vector_id, item_id, source_type, source_path, text_hash, dimensions, embedding_json, embedding_blob)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    db.exec("BEGIN");
+    try {
+      for (const record of params.records) {
+        insertVector.run(
+          record.vectorId,
+          record.item.itemId,
+          record.item.sourceType,
+          record.item.sourcePath,
+          record.embeddingTextHash,
+          record.embedding.length,
+          JSON.stringify(record.embedding),
+          vectorToBlob(record.embedding),
+        );
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  } finally {
+    db.close();
+  }
+}
+
+async function copyStagedFileToActive(
+  workspaceRoot: string,
+  stagedRelativePath: string,
+  activeRelativePath: string,
+): Promise<void> {
+  const stagedPath = path.join(workspaceRoot, ...stagedRelativePath.split("/"));
+  const activePath = path.join(workspaceRoot, ...activeRelativePath.split("/"));
+  await mkdir(path.dirname(activePath), { recursive: true });
+  const tmpPath = path.join(
+    path.dirname(activePath),
+    `.${basename(activePath)}.${process.pid}.${Date.now()}.tmp`,
+  );
+  await copyFile(stagedPath, tmpPath);
+  await rename(tmpPath, activePath);
+}
+
+async function backupActiveFile(
+  filePath: string,
+): Promise<{ filePath: string; backupPath: string; existed: boolean }> {
+  const backupPath = `${filePath}.${process.pid}.${Date.now()}.bak`;
+  try {
+    await copyFile(filePath, backupPath);
+    return { filePath, backupPath, existed: true };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { filePath, backupPath, existed: false };
+    }
+    throw error;
+  }
+}
+
+async function restoreActiveBackups(
+  backups: Array<{ filePath: string; backupPath: string; existed: boolean }>,
+): Promise<void> {
+  for (const backup of backups.toReversed()) {
+    if (backup.existed) {
+      await copyFile(backup.backupPath, backup.filePath);
+    } else {
+      await rm(backup.filePath, { force: true });
+    }
+  }
+}
+
+async function cleanupActiveBackups(
+  backups: Array<{ filePath: string; backupPath: string; existed: boolean }>,
+): Promise<void> {
+  for (const backup of backups) {
+    await rm(backup.backupPath, { force: true });
+  }
+}
+
+async function applySemanticRebuildOutputs(params: {
+  workspaceRoot: string;
+  executorInput: NonNullable<SemanticRebuildExecutionContract["executorInput"]>;
+}): Promise<void> {
+  const activeFiles = [
+    params.executorInput.plannedOutputs.vectorIndexPath,
+    params.executorInput.plannedOutputs.semanticIndexPath,
+    params.executorInput.plannedOutputs.rebuildReportPath,
+  ].map((relativePath) => path.join(params.workspaceRoot, ...relativePath.split("/")));
+  const backups = await Promise.all(activeFiles.map(backupActiveFile));
+  try {
+    await copyStagedFileToActive(
+      params.workspaceRoot,
+      params.executorInput.stagedOutputs.vectorIndexPath,
+      params.executorInput.plannedOutputs.vectorIndexPath,
+    );
+    await copyStagedFileToActive(
+      params.workspaceRoot,
+      params.executorInput.stagedOutputs.semanticIndexPath,
+      params.executorInput.plannedOutputs.semanticIndexPath,
+    );
+    await copyStagedFileToActive(
+      params.workspaceRoot,
+      params.executorInput.stagedOutputs.rebuildReportPath,
+      params.executorInput.plannedOutputs.rebuildReportPath,
+    );
+  } catch (error) {
+    await restoreActiveBackups(backups);
+    throw error;
+  } finally {
+    await cleanupActiveBackups(backups);
+  }
+}
+
+function blockedExecutionRun(params: {
+  checkedAt: string;
+  stage: SemanticRebuildExecutionStageWrite;
+  blockReasons: SemanticRebuildExecutionRunBlockReason[];
+}): SemanticRebuildExecutionRun {
+  return {
+    mode: "semantic-rebuild-execution-run",
+    checkedAt: params.checkedAt,
+    status: "blocked",
+    readyForExecution: false,
+    executed: false,
+    idempotentReplay: false,
+    recordPath: null,
+    reportPath: null,
+    outputPaths: null,
+    blockReasons: [...new Set(params.blockReasons)],
+    stage: params.stage,
+    totalItems: 0,
+    batchesExecuted: 0,
+    embeddingDimensions: null,
+    provider: params.stage.contract.executorInput?.semantic.provider ?? null,
+    model: params.stage.contract.executorInput?.semantic.model ?? null,
+    report: null,
+    constraintsVerified: noExecutionRunConstraints(),
+  };
+}
+
+export async function executeSemanticRebuild(
+  workspaceRoot: string,
+  options?: KbHttpOptions,
+): Promise<SemanticRebuildExecutionRun> {
+  const checkedAt = new Date().toISOString();
+  const stage = await writeSemanticRebuildExecutionStageRecord(workspaceRoot, options);
+  const executorInput = stage.contract.executorInput;
+  if (!stage.readyForStagedExecution || !stage.record || !executorInput) {
+    return blockedExecutionRun({
+      checkedAt,
+      stage,
+      blockReasons: [
+        ...(executorInput ? [] : ["executor_contract_not_ready" as const]),
+        "staged_execution_not_ready",
+        ...stage.blockReasons,
+      ],
+    });
+  }
+
+  const replay = await activeExecutionReportReplay(workspaceRoot, executorInput);
+  if (replay) {
+    return {
+      mode: "semantic-rebuild-execution-run",
+      checkedAt,
+      status: "applied",
+      readyForExecution: true,
+      executed: false,
+      idempotentReplay: true,
+      recordPath: semanticRebuildExecutionRunRecordPath(executorInput),
+      reportPath: executorInput.plannedOutputs.rebuildReportPath,
+      outputPaths: executorInput.plannedOutputs,
+      blockReasons: [],
+      stage,
+      totalItems: replay.totalItems,
+      batchesExecuted: replay.batchesExecuted,
+      embeddingDimensions: replay.embeddingDimensions,
+      provider: replay.provider,
+      model: replay.model,
+      report: replay,
+      constraintsVerified: noExecutionRunConstraints(),
+    };
+  }
+
+  const config = options?.config ?? (options?.loadConfig ?? loadConfig)();
+  const { index } = buildKnowledgeIndexFromWorkspace(workspaceRoot, checkedAt);
+  if (index.totalItems !== executorInput.batchPlan.totalItems) {
+    return blockedExecutionRun({ checkedAt, stage, blockReasons: ["source_index_drift"] });
+  }
+  const providerId = executorInput.semantic.provider;
+  const model = executorInput.semantic.model;
+  const preflightBlockReasons: SemanticRebuildExecutionRunBlockReason[] = [
+    ...(!providerId ? (["semantic_provider_missing"] as const) : []),
+    ...(!model ? (["semantic_model_missing"] as const) : []),
+  ];
+  const memorySearch = resolveMemorySearchConfig(config, "main");
+  if (!memorySearch) {
+    preflightBlockReasons.push("memory_search_disabled");
+  } else if (!memorySearch.store.vector.enabled) {
+    preflightBlockReasons.push("vector_store_disabled");
+  }
+  if (preflightBlockReasons.length > 0) {
+    return blockedExecutionRun({ checkedAt, stage, blockReasons: preflightBlockReasons });
+  }
+
+  const {
+    records,
+    dimensions,
+    provider,
+    model: resolvedModel,
+  } = await embedSemanticRebuildItems({
+    workspaceRoot,
+    config,
+    executorInput,
+    stageRecord: stage.record,
+    index,
+  });
+  const reportPath = semanticRebuildExecutionRunRecordPath(executorInput);
+  const report: SemanticRebuildExecutionRunReport = {
+    mode: "semantic-rebuild-execution-run-report",
+    executionId: semanticRebuildExecutionId(executorInput.idempotencyKey),
+    idempotencyKey: executorInput.idempotencyKey,
+    executedAt: checkedAt,
+    status: "applied",
+    provider,
+    model: resolvedModel,
+    totalItems: records.length,
+    batchesExecuted: stage.record.manifest.batches.length,
+    embeddingDimensions: dimensions,
+    outputs: executorInput.plannedOutputs,
+    stagedOutputs: executorInput.stagedOutputs,
+    executionRecordPath: reportPath,
+    constraintsVerified: appliedExecutionRunConstraints(),
+  };
+  const semanticIndex = buildSemanticIndex({
+    executedAt: checkedAt,
+    executorInput,
+    index,
+    records,
+    dimensions,
+    provider,
+    model: resolvedModel,
+  });
+
+  await writeJsonFile(workspaceRoot, executorInput.stagedOutputs.semanticIndexPath, semanticIndex);
+  await writeVectorIndexSqlite({
+    workspaceRoot,
+    relativePath: executorInput.stagedOutputs.vectorIndexPath,
+    executedAt: checkedAt,
+    executorInput,
+    provider,
+    model: resolvedModel,
+    dimensions,
+    records,
+  });
+  await writeJsonFile(workspaceRoot, executorInput.stagedOutputs.rebuildReportPath, report);
+  await applySemanticRebuildOutputs({ workspaceRoot, executorInput });
+  await writeJsonFile(workspaceRoot, reportPath, report);
+
+  return {
+    mode: "semantic-rebuild-execution-run",
+    checkedAt,
+    status: "applied",
+    readyForExecution: true,
+    executed: true,
+    idempotentReplay: false,
+    recordPath: reportPath,
+    reportPath: executorInput.plannedOutputs.rebuildReportPath,
+    outputPaths: executorInput.plannedOutputs,
+    blockReasons: [],
+    stage,
+    totalItems: records.length,
+    batchesExecuted: stage.record.manifest.batches.length,
+    embeddingDimensions: dimensions,
+    provider,
+    model: resolvedModel,
+    report,
+    constraintsVerified: appliedExecutionRunConstraints(),
   };
 }
 
@@ -2226,7 +3004,8 @@ export function isKbApiPath(pathname: string): boolean {
     pathname === KB_SEMANTIC_REBUILD_APPROVAL_RECORDS_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_EXECUTION_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_EXECUTION_CONTRACT_ROUTE ||
-    pathname === KB_SEMANTIC_REBUILD_EXECUTION_STAGE_ROUTE
+    pathname === KB_SEMANTIC_REBUILD_EXECUTION_STAGE_ROUTE ||
+    pathname === KB_SEMANTIC_REBUILD_EXECUTION_RUN_ROUTE
   );
 }
 
@@ -2585,6 +3364,37 @@ export async function handleKbHttpRequest(
         record: null,
         error: `KB semantic rebuild execution stage failed: ${error instanceof Error ? error.message : String(error)}`,
         constraintsVerified: executionStageConstraints("no"),
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_SEMANTIC_REBUILD_EXECUTION_RUN_ROUTE) {
+    if (req.method !== "POST") {
+      sendMethodNotAllowed(res, "POST");
+      return true;
+    }
+
+    try {
+      const result = await executeSemanticRebuild(workspaceRoot, options);
+      sendJson(
+        res,
+        result.status === "applied" ? (result.idempotentReplay ? 200 : 201) : 409,
+        result,
+      );
+    } catch (error) {
+      sendJson(res, 500, {
+        mode: "semantic-rebuild-execution-run",
+        status: "blocked",
+        readyForExecution: false,
+        executed: false,
+        idempotentReplay: false,
+        recordPath: null,
+        reportPath: null,
+        outputPaths: null,
+        blockReasons: ["embedding_provider_unavailable"],
+        error: `KB semantic rebuild execution failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: noExecutionRunConstraints(),
       });
     }
     return true;
