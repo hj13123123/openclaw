@@ -84,6 +84,23 @@ type RecoveryCandidatesState = {
   constraintsVerified?: Record<string, string>;
 };
 
+type PromotionCandidatesState = {
+  available?: boolean;
+  status?: string;
+  generatedAt?: string | null;
+  lastSyncedAt?: string | null;
+  stats?: {
+    total?: number;
+    byState?: Record<string, number>;
+    byRisk?: Record<string, number>;
+    byConsistency?: Record<string, number>;
+    invalid?: number;
+    safeApplyEligible?: number;
+  };
+  errorCount?: number;
+  constraintsVerified?: Record<string, string>;
+};
+
 type ObserveSummaryState = {
   available?: boolean;
   reportPath?: string | null;
@@ -411,6 +428,7 @@ type HUDState = {
   returnConsumerPlan?: ReturnConsumerPlanState;
   controlSignals?: ControlSignalsState;
   recoveryCandidates?: RecoveryCandidatesState;
+  promotionCandidates?: PromotionCandidatesState;
   watchdogSnapshot?: {
     totalAlerts?: number;
     healthyCount?: number;
@@ -1208,14 +1226,22 @@ export class TaskHUD extends LitElement {
   private renderSafetyControl() {
     const control = this.hud?.controlSignals;
     const recovery = this.hud?.recoveryCandidates;
-    if (!control && !recovery) return nothing;
+    const promotion = this.hud?.promotionCandidates;
+    if (!control && !recovery && !promotion) return nothing;
 
     const controlConstraints = control?.constraintsVerified ?? {};
     const recoveryConstraints = recovery?.constraintsVerified ?? {};
+    const promotionConstraints = promotion?.constraintsVerified ?? {};
     const roleEntries = control?.byRole ?? [];
     const actionEntries = control?.byAction ?? [];
     const recoveryStatusEntries = recovery?.byStatus ?? [];
     const recoveryActionEntries = recovery?.bySuggestedAction ?? [];
+    const promotionStateEntries = Object.entries(promotion?.stats?.byState ?? {});
+    const promotionConsistencyEntries = Object.entries(promotion?.stats?.byConsistency ?? {});
+    const promotionConsistencyIssueCount = promotionConsistencyEntries.reduce(
+      (sum, [key, count]) => (key === "ok" ? sum : sum + Math.max(0, Number(count) || 0)),
+      0,
+    );
     return html`
       <section class="section">
         <h4 class="section-title">安全控制</h4>
@@ -1231,8 +1257,14 @@ export class TaskHUD extends LitElement {
             </div>
             <div class="secondary">
               graphs ${recovery?.graphCount ?? 0} · errors
-              ${(control?.errorCount ?? 0) + (recovery?.errorCount ?? 0)} · G2
-              ${control?.g2Approved ? "approved" : "locked"}
+              ${(control?.errorCount ?? 0) +
+              (recovery?.errorCount ?? 0) +
+              (promotion?.errorCount ?? 0)}
+              · G2 ${control?.g2Approved ? "approved" : "locked"}
+            </div>
+            <div class="secondary">
+              promotion ${promotion?.stats?.total ?? 0} · invalid ${promotion?.stats?.invalid ?? 0}
+              · consistency ${promotionConsistencyIssueCount}
             </div>
             <details class="details">
               <summary>查看安全约束</summary>
@@ -1245,6 +1277,10 @@ export class TaskHUD extends LitElement {
                 ["recovery.taskGraphMutated", recoveryConstraints.taskGraphMutated],
                 ["recovery.autoDispatchTriggered", recoveryConstraints.autoDispatchTriggered],
                 ["recovery.applied", recoveryConstraints.applied],
+                ["promotion.readOnly", promotionConstraints.readOnly],
+                ["promotion.candidateStateWritten", promotionConstraints.candidateStateWritten],
+                ["promotion.truthFilesWritten", promotionConstraints.truthFilesWritten],
+                ["promotion.autoPromote", promotionConstraints.autoPromote],
               ].map(
                 ([label, value]) => html`
                   <div class="issue">
@@ -1256,7 +1292,9 @@ export class TaskHUD extends LitElement {
             ${roleEntries.length +
               actionEntries.length +
               recoveryStatusEntries.length +
-              recoveryActionEntries.length >
+              recoveryActionEntries.length +
+              promotionStateEntries.length +
+              promotionConsistencyEntries.length >
             0
               ? html`
                   <details class="details">
@@ -1293,6 +1331,24 @@ export class TaskHUD extends LitElement {
                         <div class="issue">
                           <div class="secondary">
                             recovery ${text(item.action, "unknown")} · ${item.count ?? 0}
+                          </div>
+                        </div>
+                      `,
+                    )}
+                    ${promotionStateEntries.slice(0, 4).map(
+                      ([state, count]) => html`
+                        <div class="issue">
+                          <div class="secondary">
+                            promotion state ${text(state, "unknown")} · ${count ?? 0}
+                          </div>
+                        </div>
+                      `,
+                    )}
+                    ${promotionConsistencyEntries.slice(0, 4).map(
+                      ([state, count]) => html`
+                        <div class="issue">
+                          <div class="secondary">
+                            promotion consistency ${text(state, "unknown")} · ${count ?? 0}
                           </div>
                         </div>
                       `,

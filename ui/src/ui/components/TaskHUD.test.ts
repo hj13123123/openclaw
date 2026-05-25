@@ -79,6 +79,27 @@ describe("TaskHUD task graph validation", () => {
                 applied: "no",
               },
             },
+            promotionCandidates: {
+              available: true,
+              status: "ok",
+              stats: {
+                total: 5,
+                byState: { rolledback: 3, pending: 1, rejected: 1 },
+                byRisk: { low: 5 },
+                byConsistency: { ok: 5 },
+                invalid: 0,
+                safeApplyEligible: 5,
+              },
+              errorCount: 0,
+              constraintsVerified: {
+                readOnly: "yes",
+                candidateStateWritten: "no",
+                truthFilesWritten: "no",
+                applied: "none",
+                rolledBack: "none",
+                autoPromote: "disabled",
+              },
+            },
             watchdogSnapshot: {
               totalAlerts: 4,
               healthyCount: 2,
@@ -364,8 +385,14 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("invalid 1");
     expect(compactText).toContain("recovery 1");
     expect(compactText).toContain("G2 locked");
+    expect(compactText).toContain("promotion 5");
+    expect(compactText).toContain("consistency 0");
     expect(compactText).toContain("control.taskGraphMutated · no");
     expect(compactText).toContain("recovery.autoDispatchTriggered · no");
+    expect(compactText).toContain("promotion.candidateStateWritten · no");
+    expect(compactText).toContain("promotion.truthFilesWritten · no");
+    expect(compactText).toContain("promotion state rolledback · 3");
+    expect(compactText).toContain("promotion consistency ok · 5");
     expect(compactText).toContain("健康巡检");
     expect(compactText).toContain("警告 4");
     expect(compactText).toContain("returnConsumerSkipped");
