@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { getRecentEvents } from "../runtime/event-bus.js";
 import { writeHudStateSnapshot } from "../runtime/hud-state-refresh.js";
+import { scanReturnConsumerPlan } from "../runtime/returns/return-consumer-plan.js";
 import { scanReturnInbox } from "../runtime/returns/return-inbox.js";
 import {
   buildRuntimeLoopPreflight,
@@ -34,6 +35,7 @@ const RUNTIME_LOOP_ACCEPTANCE_RECORD_DRY_RUN_ROUTE =
   "/api/hud/runtime-loop/acceptance-record-dry-run";
 const RUNTIME_LOOP_REFRESH_ROUTE = "/api/hud/runtime-loop/refresh";
 const RETURN_INBOX_ROUTE = "/api/hud/return-inbox";
+const RETURN_CONSUMER_PLAN_ROUTE = "/api/hud/return-consumer-plan";
 const RUNTIME_LOOP_STATE_RELATIVE_PATH = "runtime/main/tmp/runtime-loop-state.json";
 const POLICY_RULES_RELATIVE_PATH = "runtime/policy/policy-rules.json";
 const POLICY_ACTION_AUDIT_RELATIVE_PATH = "runtime/policy/action-audit.jsonl";
@@ -234,7 +236,8 @@ export async function handleHudStateHttpRequest(
     requestPath !== RUNTIME_LOOP_PROPOSAL_ACCEPTANCE_ROUTE &&
     requestPath !== RUNTIME_LOOP_ACCEPTANCE_RECORD_DRY_RUN_ROUTE &&
     requestPath !== RUNTIME_LOOP_REFRESH_ROUTE &&
-    requestPath !== RETURN_INBOX_ROUTE
+    requestPath !== RETURN_INBOX_ROUTE &&
+    requestPath !== RETURN_CONSUMER_PLAN_ROUTE
   ) {
     return false;
   }
@@ -251,6 +254,22 @@ export async function handleHudStateHttpRequest(
     sendJson(res, 200, {
       ok: true,
       data: scanReturnInbox(workspaceRoot),
+    });
+    return true;
+  }
+
+  if (requestPath === RETURN_CONSUMER_PLAN_ROUTE) {
+    if (req.method !== "GET") {
+      res.setHeader("Allow", "GET");
+      res.statusCode = 405;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Method Not Allowed");
+      return true;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      data: scanReturnConsumerPlan(workspaceRoot),
     });
     return true;
   }

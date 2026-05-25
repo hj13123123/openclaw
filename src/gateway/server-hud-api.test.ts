@@ -638,6 +638,76 @@ describe("server HUD API runtime loop freshness", () => {
     expect(readFileSync(returnPath, "utf8")).toBe(before);
   });
 
+  it("returns return consumer plans without consuming files", async () => {
+    const workspaceRoot = makeWorkspace();
+    const returnPath = path.join(workspaceRoot, "system", "returns", "inbox", "return-a.json");
+    writeJson(returnPath, {
+      packageId: "rrpkg-a",
+      packageVersion: "1.0",
+      returnType: "completion",
+      producedAt: "2026-05-20T00:00:00.000Z",
+      role: {
+        roleId: "engineering-executive",
+        roleType: "executor",
+      },
+      task: {
+        ticketId: "TASK-A",
+      },
+      deliveryReceipt: {
+        receiptId: "delivery-a",
+      },
+      returnSummary: {
+        status: "completed",
+      },
+      candidateEligibility: {
+        eligible: false,
+      },
+      recommendedNextAction: {
+        action: "accept",
+        target: "main",
+        description: "accept result",
+      },
+    });
+
+    const before = readFileSync(returnPath, "utf8");
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq("/api/hud/return-consumer-plan", "GET"),
+      response.res,
+      workspaceRoot,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      data: expect.objectContaining({
+        mode: "observe-only",
+        inboxPath: "system/returns/inbox",
+        processedPath: "system/returns/processed",
+        totalCount: 1,
+        processCount: 1,
+        skipCount: 0,
+        plans: [
+          expect.objectContaining({
+            status: "process",
+            sourceFile: "return-a.json",
+            returnId: "rrpkg-a",
+            taskId: "TASK-A",
+          }),
+        ],
+        constraintsVerified: {
+          consumed: "no",
+          archived: "no",
+          receiptWritten: "no",
+          taskGraphMutated: "no",
+          applied: "no",
+        },
+      }),
+    });
+    expect(readFileSync(returnPath, "utf8")).toBe(before);
+  });
+
   it("recovers malformed HUD state snapshots with a runtime refresh", async () => {
     const workspaceRoot = makeWorkspace();
     const hudStatePath = path.join(workspaceRoot, "runtime", "main", "tmp", "task-hud-state.json");
@@ -685,6 +755,20 @@ describe("server HUD API runtime loop freshness", () => {
     const response = makeResponse();
     const handled = await handleHudStateHttpRequest(
       makeReq("/api/hud/return-inbox", "POST"),
+      response.res,
+      makeWorkspace(),
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(405);
+    expect(response.text()).toBe("Method Not Allowed");
+    expect(response.res.setHeader).toHaveBeenCalledWith("Allow", "GET");
+  });
+
+  it("rejects return consumer plan writes", async () => {
+    const response = makeResponse();
+    const handled = await handleHudStateHttpRequest(
+      makeReq("/api/hud/return-consumer-plan", "POST"),
       response.res,
       makeWorkspace(),
     );
