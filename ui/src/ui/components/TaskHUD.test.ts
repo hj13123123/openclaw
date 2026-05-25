@@ -53,6 +53,34 @@ describe("TaskHUD task graph validation", () => {
                 mirrorObserveAttention: 2,
               },
             },
+            mirrorObserve: {
+              available: true,
+              reportPath: "runtime/main/tmp/mirror-observe.json",
+              mirrorId: "mirror-test",
+              mode: "observe-only",
+              stats: {
+                observationCount: 4,
+                findingCount: 4,
+                bySeverity: { attention: 2, info: 2 },
+              },
+              constraintsVerified: {
+                promoted: "none",
+                applyPerformed: "no",
+              },
+            },
+            autoEvolutionObserve: {
+              available: true,
+              mode: "observe-only",
+              stats: {
+                totalSuggestions: 3,
+                byPriority: { P1: 3 },
+                bySource: { mirror: 1, promote_gate: 1, hud: 1 },
+              },
+              constraintsVerified: {
+                codeWritten: "no",
+                autoEvolutionApplied: "no",
+              },
+            },
             taskGraphs: {
               items: [
                 {
@@ -300,6 +328,13 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("警告 4");
     expect(compactText).toContain("returnConsumerSkipped");
     expect(compactText).toContain("mirrorObserveAttention");
+    expect(compactText).toContain("观察层");
+    expect(compactText).toContain("Mirror Observe");
+    expect(compactText).toContain("observations 4");
+    expect(compactText).toContain("mirror-test");
+    expect(compactText).toContain("Auto-Evolution Observe");
+    expect(compactText).toContain("suggestions 3");
+    expect(compactText).toContain("autoEvolutionApplied · no");
     expect(compactText).toContain("任务图验真");
     expect(compactText).toContain("错误 0");
     expect(compactText).toContain("警告 1");

@@ -58,6 +58,24 @@ type ReturnConsumerPlanState = {
   constraintsVerified?: Record<string, string>;
 };
 
+type ObserveSummaryState = {
+  available?: boolean;
+  reportPath?: string | null;
+  mirrorId?: string | null;
+  generatedAt?: string | null;
+  mode?: string | null;
+  stats?: {
+    observationCount?: number;
+    findingCount?: number;
+    totalSuggestions?: number;
+    bySeverity?: Record<string, number>;
+    byPriority?: Record<string, number>;
+    bySource?: Record<string, number>;
+  } | null;
+  constraintsVerified?: Record<string, string> | null;
+  verdict?: string | null;
+};
+
 type TaskGraphItem = {
   graphId: string;
   title?: string | null;
@@ -373,6 +391,8 @@ type HUDState = {
   taskGraphs?: {
     items?: TaskGraphItem[];
   };
+  mirrorObserve?: ObserveSummaryState;
+  autoEvolutionObserve?: ObserveSummaryState;
   recentCompletions?: {
     totalToday: number;
     lastCompletedAt: string | null;
@@ -1005,8 +1025,8 @@ export class TaskHUD extends LitElement {
       ${this.renderTaskGraphs(this.hud?.taskGraphs?.items ?? [])}
       ${this.renderRecentCompletions(this.hud?.recentCompletions?.items ?? [])}
       ${this.renderScheduler()} ${this.renderRuntimeLoop()} ${this.renderTaskState()}
-      ${this.renderPromoteGate()} ${this.renderKnowledgeBase()} ${this.renderPolicy()}
-      ${this.renderWarnings()}
+      ${this.renderObserveLayer()} ${this.renderPromoteGate()} ${this.renderKnowledgeBase()}
+      ${this.renderPolicy()} ${this.renderWarnings()}
     `;
   }
 
@@ -1182,6 +1202,79 @@ export class TaskHUD extends LitElement {
             </div>
           `,
         )}
+      </section>
+    `;
+  }
+
+  private renderObserveLayer() {
+    const mirror = this.hud?.mirrorObserve;
+    const evolution = this.hud?.autoEvolutionObserve;
+    if (!mirror?.available && !evolution?.available) return nothing;
+    return html`
+      <section class="section">
+        <h4 class="section-title">观察层</h4>
+        ${mirror?.available
+          ? html`
+              <div class="row">
+                <div>
+                  <div class="primary">Mirror Observe</div>
+                  <div class="secondary">
+                    observations ${mirror.stats?.observationCount ?? 0} · findings
+                    ${mirror.stats?.findingCount ?? 0} · attention
+                    ${mirror.stats?.bySeverity?.attention ?? 0}
+                  </div>
+                  <div class="secondary">
+                    ${text(mirror.mirrorId, mirror.reportPath ?? "unknown")}
+                  </div>
+                  <details class="details">
+                    <summary>查看 Mirror 约束</summary>
+                    ${Object.entries(mirror.constraintsVerified ?? {})
+                      .slice(0, 6)
+                      .map(
+                        ([label, value]) => html`
+                          <div class="issue">
+                            <div class="secondary">${label} · ${text(value, "unknown")}</div>
+                          </div>
+                        `,
+                      )}
+                  </details>
+                </div>
+                <span class="badge">${text(mirror.mode, "observe-only")}</span>
+              </div>
+            `
+          : nothing}
+        ${evolution?.available
+          ? html`
+              <div class="row">
+                <div>
+                  <div class="primary">Auto-Evolution Observe</div>
+                  <div class="secondary">
+                    suggestions ${evolution.stats?.totalSuggestions ?? 0} · P0
+                    ${evolution.stats?.byPriority?.P0 ?? 0} · P1
+                    ${evolution.stats?.byPriority?.P1 ?? 0}
+                  </div>
+                  <div class="secondary">
+                    mirror ${evolution.stats?.bySource?.mirror ?? 0} · promote
+                    ${evolution.stats?.bySource?.promote_gate ?? 0} · hud
+                    ${evolution.stats?.bySource?.hud ?? 0}
+                  </div>
+                  <details class="details">
+                    <summary>查看 Evolution 约束</summary>
+                    ${Object.entries(evolution.constraintsVerified ?? {})
+                      .slice(0, 6)
+                      .map(
+                        ([label, value]) => html`
+                          <div class="issue">
+                            <div class="secondary">${label} · ${text(value, "unknown")}</div>
+                          </div>
+                        `,
+                      )}
+                  </details>
+                </div>
+                <span class="badge">${text(evolution.mode, "observe-only")}</span>
+              </div>
+            `
+          : nothing}
       </section>
     `;
   }
