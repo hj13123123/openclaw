@@ -363,6 +363,14 @@ describe("HUD state core", () => {
       candidateCount: 0,
       errorCount: 0,
     });
+    expect(state.returnConsumerPlan).toMatchObject({
+      mode: "observe-only",
+      scannedAt: generatedAt,
+      totalCount: 0,
+      processCount: 0,
+      skipCount: 0,
+      warningCount: 0,
+    });
   });
 
   it("adds D7 control and recovery summaries to watchdog conditions", () => {
@@ -418,6 +426,46 @@ describe("HUD state core", () => {
         controlSignalScanError: 1,
         recoveryCandidates: 3,
         recoveryCandidateScanError: 1,
+      },
+    });
+  });
+
+  it("adds return consumer plan summary to watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      returnConsumerPlan: {
+        mode: "observe-only",
+        scannedAt: generatedAt,
+        inboxPath: "system/returns/inbox",
+        processedPath: "system/returns/processed",
+        totalCount: 4,
+        processCount: 1,
+        skipCount: 3,
+        byReason: [{ reason: "schema-invalid", count: 3 }],
+        warningCount: 2,
+        constraintsVerified: {
+          consumed: "no",
+          archived: "no",
+          receiptWritten: "no",
+          taskGraphMutated: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.returnConsumerPlan).toMatchObject({
+      totalCount: 4,
+      processCount: 1,
+      skipCount: 3,
+      byReason: [{ reason: "schema-invalid", count: 3 }],
+      warningCount: 2,
+    });
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 6,
+      byCondition: {
+        returnConsumerProcessable: 1,
+        returnConsumerSkipped: 3,
+        returnConsumerPlanWarning: 2,
       },
     });
   });

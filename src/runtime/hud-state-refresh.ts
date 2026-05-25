@@ -13,6 +13,7 @@ import {
   type HudPendingReturnItem,
   type HudMirrorObserveSummary,
   type HudPositionState,
+  type HudReturnConsumerPlanSummary,
   type HudSemanticRebuildSummary,
   type HudState,
   type HudTaskGraphItem,
@@ -24,6 +25,7 @@ import {
   type MirrorObserveReport,
 } from "./mirror/mirror-observe.js";
 import { scanRecoveryCandidates } from "./recovery-candidates.js";
+import { scanReturnConsumerPlan } from "./returns/return-consumer-plan.js";
 import { scanReturnInbox } from "./returns/return-inbox.js";
 import {
   TASK_GRAPH_SOURCE_RELATIVE_PATH,
@@ -139,6 +141,22 @@ function readPendingReturns(workspaceRoot: string, warnings: string[]): HudPendi
     needsReview: item.needsReview,
     summary: item.summary,
   }));
+}
+
+function readReturnConsumerPlan(workspaceRoot: string): HudReturnConsumerPlanSummary {
+  const scan = scanReturnConsumerPlan(workspaceRoot, { limit: 0 });
+  return {
+    mode: scan.mode,
+    scannedAt: scan.scannedAt,
+    inboxPath: scan.inboxPath,
+    processedPath: scan.processedPath,
+    totalCount: scan.totalCount,
+    processCount: scan.processCount,
+    skipCount: scan.skipCount,
+    byReason: scan.byReason,
+    warningCount: scan.warnings.length,
+    constraintsVerified: scan.constraintsVerified,
+  };
 }
 
 function readCaseLibraryState(
@@ -479,6 +497,7 @@ export function generateHudStateFromWorkspace(
     generatedAt,
     positionStatesByAgentId: readPositionStates(workspaceRoot, warnings),
     pendingReturnItems: readPendingReturns(workspaceRoot, warnings),
+    returnConsumerPlan: readReturnConsumerPlan(workspaceRoot),
     totalCaseFiles,
     lastCaseAt,
     taskGraphItems: readTaskGraphs(workspaceRoot, warnings),

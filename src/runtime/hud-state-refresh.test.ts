@@ -218,6 +218,23 @@ describe("HUD state refresh", () => {
         sourceRole: "engineering-executive",
         summary: "return summary",
       });
+      expect(written.returnConsumerPlan).toMatchObject({
+        mode: "observe-only",
+        inboxPath: "system/returns/inbox",
+        processedPath: "system/returns/processed",
+        totalCount: 1,
+        processCount: 0,
+        skipCount: 1,
+        byReason: [{ reason: "schema-invalid", count: 1 }],
+        warningCount: 0,
+        constraintsVerified: {
+          consumed: "no",
+          archived: "no",
+          receiptWritten: "no",
+          taskGraphMutated: "no",
+          applied: "no",
+        },
+      });
       expect(written.caseLibrary.totalCases).toBe(1);
       expect(written.taskGraphs).toMatchObject({
         total: 1,
@@ -292,6 +309,7 @@ describe("HUD state refresh", () => {
         autoEvolutionObserveP1: 2,
         pendingControlSignals: 1,
         recoveryCandidates: 1,
+        returnConsumerSkipped: 1,
       });
     }));
 

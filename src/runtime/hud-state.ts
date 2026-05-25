@@ -1,5 +1,6 @@
 import type { ControlSignalScanResult } from "./control-signals.js";
 import type { RecoveryCandidateScanResult } from "./recovery-candidates.js";
+import type { ReturnConsumerPlanScanResult } from "./returns/return-consumer-plan.js";
 
 export type HudAgentStatus =
   | "completed"
@@ -166,10 +167,24 @@ export type HudRecoveryCandidatesSummary = Pick<
   | "constraintsVerified"
 > & { errorCount: number };
 
+export type HudReturnConsumerPlanSummary = Pick<
+  ReturnConsumerPlanScanResult,
+  | "mode"
+  | "scannedAt"
+  | "inboxPath"
+  | "processedPath"
+  | "totalCount"
+  | "processCount"
+  | "skipCount"
+  | "byReason"
+  | "constraintsVerified"
+> & { warningCount: number };
+
 export interface HudStateInput {
   generatedAt: string;
   positionStatesByAgentId?: Record<string, HudPositionState>;
   pendingReturnItems?: HudPendingReturnItem[];
+  returnConsumerPlan?: HudReturnConsumerPlanSummary;
   totalCaseFiles?: number;
   lastCaseAt?: string | null;
   taskGraphItems?: HudTaskGraphItem[];
@@ -215,6 +230,7 @@ export interface HudState {
     lastScanAt: string;
     pendingItems: HudPendingReturnItem[];
   };
+  returnConsumerPlan: HudReturnConsumerPlanSummary;
   taskGraphs: {
     total: number;
     active: number;
@@ -447,12 +463,34 @@ function defaultRecoveryCandidatesSummary(): HudRecoveryCandidatesSummary {
   };
 }
 
+function defaultReturnConsumerPlanSummary(scannedAt: string): HudReturnConsumerPlanSummary {
+  return {
+    mode: "observe-only",
+    scannedAt,
+    inboxPath: "system/returns/inbox",
+    processedPath: "system/returns/processed",
+    totalCount: 0,
+    processCount: 0,
+    skipCount: 0,
+    byReason: [],
+    warningCount: 0,
+    constraintsVerified: {
+      consumed: "no",
+      archived: "no",
+      receiptWritten: "no",
+      taskGraphMutated: "no",
+      applied: "no",
+    },
+  };
+}
+
 function buildWatchdogConditions(
   mirrorObserve: HudMirrorObserveSummary,
   autoEvolutionObserve: HudAutoEvolutionObserveSummary,
   taskGraphItems: readonly HudTaskGraphItem[],
   controlSignals: HudControlSignalsSummary,
   recoveryCandidates: HudRecoveryCandidatesSummary,
+  returnConsumerPlan: HudReturnConsumerPlanSummary,
 ): Record<string, number> {
   const byCondition: Record<string, number> = {};
   const taskGraphValidationErrorCount = taskGraphItems.filter(
@@ -527,6 +565,15 @@ function buildWatchdogConditions(
   if (recoveryCandidates.errorCount > 0) {
     byCondition.recoveryCandidateScanError = recoveryCandidates.errorCount;
   }
+  if (returnConsumerPlan.processCount > 0) {
+    byCondition.returnConsumerProcessable = returnConsumerPlan.processCount;
+  }
+  if (returnConsumerPlan.skipCount > 0) {
+    byCondition.returnConsumerSkipped = returnConsumerPlan.skipCount;
+  }
+  if (returnConsumerPlan.warningCount > 0) {
+    byCondition.returnConsumerPlanWarning = returnConsumerPlan.warningCount;
+  }
   return byCondition;
 }
 
@@ -544,12 +591,15 @@ export function generateHudState(input: HudStateInput): HudState {
   const semanticRebuild = input.semanticRebuild ?? defaultSemanticRebuildSummary();
   const controlSignals = input.controlSignals ?? defaultControlSignalsSummary();
   const recoveryCandidates = input.recoveryCandidates ?? defaultRecoveryCandidatesSummary();
+  const returnConsumerPlan =
+    input.returnConsumerPlan ?? defaultReturnConsumerPlanSummary(input.generatedAt);
   const watchdogConditions = buildWatchdogConditions(
     mirrorObserve,
     autoEvolutionObserve,
     taskGraphItems,
     controlSignals,
     recoveryCandidates,
+    returnConsumerPlan,
   );
   const watchdogConditionAlertCount = Object.values(watchdogConditions).reduce(
     (sum, count) => sum + count,
@@ -598,6 +648,7 @@ export function generateHudState(input: HudStateInput): HudState {
       lastScanAt: input.generatedAt,
       pendingItems: pendingReturnItems,
     },
+    returnConsumerPlan,
     taskGraphs: {
       total: input.taskGraphItems?.length ?? 0,
       active: (input.taskGraphItems ?? []).filter((item) => item.aggregateStatus !== "completed")
