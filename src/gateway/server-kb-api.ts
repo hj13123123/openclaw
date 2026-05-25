@@ -22,6 +22,7 @@ const KB_SEMANTIC_REBUILD_DRY_RUN_ROUTE = "/api/kb/semantic-rebuild-plan/rebuild
 const KB_SEMANTIC_REBUILD_APPROVAL_ROUTE = "/api/kb/semantic-rebuild-plan/rebuild-approval";
 const KB_SEMANTIC_REBUILD_APPROVAL_RECORDS_ROUTE =
   "/api/kb/semantic-rebuild-plan/rebuild-approval-records";
+const KB_SEMANTIC_REBUILD_EXECUTION_ROUTE = "/api/kb/semantic-rebuild-plan/rebuild-execution";
 const SEMANTIC_REBUILD_PLAN_REPORT_DIR = "runtime/main/tmp";
 const SEMANTIC_REBUILD_PLAN_REPORT_PREFIX = "kb-semantic-rebuild-plan-";
 const SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX = ".json";
@@ -413,6 +414,40 @@ type SemanticRebuildApprovalRecordList = {
   invalidRecords: number;
   latestRecord: SemanticRebuildApprovalRecordSummary | null;
   records: SemanticRebuildApprovalRecordSummary[];
+  constraintsVerified: {
+    fileWrites: "no";
+    stateWritten: "no";
+    embeddingCalls: "no";
+    keywordIndexWritten: "no";
+    vectorIndexWritten: "no";
+    realRebuildTriggered: "no";
+    applied: "no";
+  };
+};
+
+type SemanticRebuildExecutionEntryBlockReason =
+  | SemanticRebuildPreflightBlockReason
+  | "approval_record_missing"
+  | "approval_record_invalid"
+  | "approval_not_human_approved"
+  | "approval_constraints_invalid"
+  | "approval_record_drift"
+  | "execution_dry_run_not_ready";
+
+type SemanticRebuildExecutionEntry = {
+  available: boolean;
+  mode: "semantic-rebuild-execution-entry";
+  checkedAt: string;
+  requestMethod: "GET" | "POST";
+  status: "ready_for_real_rebuild_implementation" | "blocked";
+  wouldExecute: false;
+  executed: false;
+  readyForRealRebuildImplementation: boolean;
+  blockReasons: SemanticRebuildExecutionEntryBlockReason[];
+  latestApprovalRecord: SemanticRebuildApprovalRecordSummary | null;
+  approvalRecords: SemanticRebuildApprovalRecordList;
+  dryRun: SemanticRebuildExecutionDryRun;
+  nextAction: "implement_real_rebuild_executor" | "resolve_blockers";
   constraintsVerified: {
     fileWrites: "no";
     stateWritten: "no";
@@ -831,6 +866,40 @@ async function readLatestSemanticRebuildAcceptanceRecordEntry(
   }
 }
 
+async function readLatestSemanticRebuildApprovalRecordEntry(
+  workspaceRoot: string,
+): Promise<{ recordPath: string; record: SemanticRebuildApprovalRecord | null } | null> {
+  const reportDir = path.join(workspaceRoot, ...SEMANTIC_REBUILD_PLAN_REPORT_DIR.split("/"));
+  let entries: string[];
+  try {
+    entries = await readdir(reportDir);
+  } catch {
+    return null;
+  }
+  const latest = entries
+    .filter(
+      (entry) =>
+        entry.startsWith(SEMANTIC_REBUILD_APPROVAL_PREFIX) &&
+        entry.endsWith(SEMANTIC_REBUILD_PLAN_REPORT_SUFFIX),
+    )
+    .sort()
+    .at(-1);
+  if (!latest) {
+    return null;
+  }
+
+  const recordPath = [SEMANTIC_REBUILD_PLAN_REPORT_DIR, latest].join("/");
+  try {
+    const parsed = JSON.parse(await readFile(path.join(reportDir, latest), "utf8")) as unknown;
+    return {
+      recordPath,
+      record: isSemanticRebuildApprovalRecord(parsed) ? parsed : null,
+    };
+  } catch {
+    return { recordPath, record: null };
+  }
+}
+
 function sameSemanticBoundary(
   left: KnowledgeSemanticRebuildPlan,
   right: KnowledgeSemanticRebuildPlan,
@@ -893,6 +962,23 @@ function approvalRecordConstraints<T extends "yes" | "no">(recordWritten: T) {
     realRebuildTriggered: "no" as const,
     applied: "no" as const,
   };
+}
+
+function approvalRecordConstraintsValid(record: SemanticRebuildApprovalRecord): boolean {
+  return (
+    record.status === "rebuild_human_approved" &&
+    record.requiredApproval === "human" &&
+    record.nextAction === "await_rebuild_execution" &&
+    record.approved === true &&
+    record.rebuildTriggered === false &&
+    record.constraintsVerified.approvalRecordWritten === "yes" &&
+    record.constraintsVerified.stateWritten === "no" &&
+    record.constraintsVerified.embeddingCalls === "no" &&
+    record.constraintsVerified.keywordIndexWritten === "no" &&
+    record.constraintsVerified.vectorIndexWritten === "no" &&
+    record.constraintsVerified.realRebuildTriggered === "no" &&
+    record.constraintsVerified.applied === "no"
+  );
 }
 
 function acceptanceRecordConstraintsValid(record: SemanticRebuildAcceptanceRecord): boolean {
@@ -1450,6 +1536,78 @@ export async function listSemanticRebuildApprovalRecords(
   };
 }
 
+function approvalRecordMatchesExecutionDryRun(
+  record: SemanticRebuildApprovalRecord,
+  dryRun: SemanticRebuildExecutionDryRun,
+): boolean {
+  const plannedExecution = dryRun.plannedExecution;
+  return (
+    dryRun.readyForExecutionHumanGate &&
+    plannedExecution !== null &&
+    record.acceptanceId === plannedExecution.acceptanceId &&
+    record.proposalId === plannedExecution.proposalId &&
+    record.proposalPath === plannedExecution.proposalPath &&
+    record.acceptanceRecordPath === plannedExecution.recordPath &&
+    record.plannedBatches === plannedExecution.plannedBatches &&
+    record.totalItems === plannedExecution.totalItems
+  );
+}
+
+export async function checkSemanticRebuildExecutionEntry(
+  workspaceRoot: string,
+  options?: KbHttpOptions,
+  requestMethod: "GET" | "POST" = "GET",
+): Promise<SemanticRebuildExecutionEntry> {
+  const checkedAt = new Date().toISOString();
+  const dryRun = await buildSemanticRebuildExecutionDryRun(workspaceRoot, options);
+  const approvalRecords = await listSemanticRebuildApprovalRecords(workspaceRoot);
+  const latest = await readLatestSemanticRebuildApprovalRecordEntry(workspaceRoot);
+  const blockReasons: SemanticRebuildExecutionEntryBlockReason[] = [];
+  let latestApprovalRecord: SemanticRebuildApprovalRecordSummary | null = null;
+
+  if (!latest) {
+    blockReasons.push("approval_record_missing");
+  } else if (!latest.record) {
+    blockReasons.push("approval_record_invalid");
+  } else {
+    latestApprovalRecord = summarizeApprovalRecord(latest.recordPath, latest.record);
+    if (latest.record.status !== "rebuild_human_approved" || latest.record.approved !== true) {
+      blockReasons.push("approval_not_human_approved");
+    }
+    if (!approvalRecordConstraintsValid(latest.record)) {
+      blockReasons.push("approval_constraints_invalid");
+    }
+    if (!approvalRecordMatchesExecutionDryRun(latest.record, dryRun)) {
+      blockReasons.push("approval_record_drift");
+    }
+  }
+
+  if (!dryRun.readyForExecutionHumanGate) {
+    blockReasons.push("execution_dry_run_not_ready", ...dryRun.blockReasons);
+  }
+
+  const uniqueBlockReasons = [...new Set(blockReasons)];
+  const readyForRealRebuildImplementation = uniqueBlockReasons.length === 0;
+  return {
+    available: latestApprovalRecord !== null,
+    mode: "semantic-rebuild-execution-entry",
+    checkedAt,
+    requestMethod,
+    status: readyForRealRebuildImplementation ? "ready_for_real_rebuild_implementation" : "blocked",
+    wouldExecute: false,
+    executed: false,
+    readyForRealRebuildImplementation,
+    blockReasons: uniqueBlockReasons,
+    latestApprovalRecord,
+    approvalRecords,
+    dryRun,
+    nextAction: readyForRealRebuildImplementation
+      ? "implement_real_rebuild_executor"
+      : "resolve_blockers",
+    constraintsVerified: preflightConstraints(),
+  };
+}
+
 export function isKbApiPath(pathname: string): boolean {
   return (
     pathname === KB_STATE_ROUTE ||
@@ -1461,7 +1619,8 @@ export function isKbApiPath(pathname: string): boolean {
     pathname === KB_SEMANTIC_REBUILD_PREFLIGHT_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_DRY_RUN_ROUTE ||
     pathname === KB_SEMANTIC_REBUILD_APPROVAL_ROUTE ||
-    pathname === KB_SEMANTIC_REBUILD_APPROVAL_RECORDS_ROUTE
+    pathname === KB_SEMANTIC_REBUILD_APPROVAL_RECORDS_ROUTE ||
+    pathname === KB_SEMANTIC_REBUILD_EXECUTION_ROUTE
   );
 }
 
@@ -1721,6 +1880,33 @@ export async function handleKbHttpRequest(
           realRebuildTriggered: "no",
           applied: "no",
         },
+      });
+    }
+    return true;
+  }
+
+  if (requestPath === KB_SEMANTIC_REBUILD_EXECUTION_ROUTE) {
+    if (req.method !== "GET" && req.method !== "POST") {
+      sendMethodNotAllowed(res, "GET, POST");
+      return true;
+    }
+
+    try {
+      sendJson(
+        res,
+        200,
+        await checkSemanticRebuildExecutionEntry(workspaceRoot, options, req.method),
+      );
+    } catch (error) {
+      sendJson(res, 500, {
+        available: false,
+        mode: "semantic-rebuild-execution-entry",
+        status: "blocked",
+        wouldExecute: false,
+        executed: false,
+        readyForRealRebuildImplementation: false,
+        error: `KB semantic rebuild execution entry failed: ${error instanceof Error ? error.message : String(error)}`,
+        constraintsVerified: preflightConstraints(),
       });
     }
     return true;

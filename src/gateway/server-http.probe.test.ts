@@ -209,6 +209,38 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("routes KB semantic rebuild execution entry through the HTTP fast path", async () => {
+    await withGatewayServer({
+      prefix: "kb-semantic-rebuild-execution-fast-path",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = createRequest({
+          path: "/api/kb/semantic-rebuild-plan/rebuild-execution",
+        });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual(
+          expect.objectContaining({
+            available: expect.any(Boolean),
+            mode: "semantic-rebuild-execution-entry",
+            status: expect.stringMatching(/^(ready_for_real_rebuild_implementation|blocked)$/u),
+            wouldExecute: false,
+            executed: false,
+            readyForRealRebuildImplementation: expect.any(Boolean),
+            constraintsVerified: expect.objectContaining({
+              fileWrites: "no",
+              embeddingCalls: "no",
+              realRebuildTriggered: "no",
+              applied: "no",
+            }),
+          }),
+        );
+      },
+    });
+  });
+
   it("returns detailed readiness payload for local /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: true,

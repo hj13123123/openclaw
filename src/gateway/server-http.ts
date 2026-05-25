@@ -300,7 +300,8 @@ function isKbStatePath(pathname: string): boolean {
     pathname === "/api/kb/semantic-rebuild-plan/rebuild-preflight" ||
     pathname === "/api/kb/semantic-rebuild-plan/rebuild-dry-run" ||
     pathname === "/api/kb/semantic-rebuild-plan/rebuild-approval" ||
-    pathname === "/api/kb/semantic-rebuild-plan/rebuild-approval-records"
+    pathname === "/api/kb/semantic-rebuild-plan/rebuild-approval-records" ||
+    pathname === "/api/kb/semantic-rebuild-plan/rebuild-execution"
   );
 }
 
