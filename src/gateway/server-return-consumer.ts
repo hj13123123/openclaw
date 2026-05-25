@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildReturnConsumptionArtifacts } from "../runtime/returns/return-consumer-artifacts.js";
 import {
   extractReturnPackageIdentity,
   planReturnConsumption,
@@ -186,22 +187,17 @@ function processReturnFile(workspaceRoot: string, fileName: string): ProcessResu
 
   fs.renameSync(inboxPath, processedPath);
   const stamp = compactStamp();
-  const receiptId = `receipt-rrpkg-${safeFilePart(plan.taskId || "unknown-task")}-${stamp}`;
-  const receiptPath = path.join(processedDir, `${receiptId}.json`);
-  writeJson(receiptPath, {
-    receiptId,
+  const artifacts = buildReturnConsumptionArtifacts({
+    plan,
+    pkg: parsed,
     consumedAt: new Date().toISOString(),
-    sourcePackage: sourceFile,
-    sourceReturnId: plan.returnId,
-    taskId: plan.taskId,
-    consumer: "gateway-return-consumer-v1",
-    status: "consumed",
-    verificationChecklist: parsed.verificationChecklist,
-    processedBy: "system",
+    stamp,
   });
+  const receiptPath = path.join(processedDir, artifacts.receiptFileName);
+  writeJson(receiptPath, artifacts.receipt);
 
   // P0-4.5b: Write bridge queue marker (non-blocking, fire-and-forget)
-  writeBridgeQueueMarker(workspaceRoot, plan.returnId, plan.taskId, sourceFile, receiptId);
+  writeBridgeQueueMarker(workspaceRoot, artifacts);
 
   return {
     status: "processed",
@@ -271,23 +267,13 @@ function releaseLock(lockPath: string): void {
 
 function writeBridgeQueueMarker(
   workspaceRoot: string,
-  packageId: string | undefined,
-  taskId: string | undefined,
-  returnFile: string,
-  receiptId: string,
+  artifacts: ReturnType<typeof buildReturnConsumptionArtifacts>,
 ): void {
-  if (!packageId || !taskId) return; // fail-closed: incomplete marker
+  if (!artifacts.bridgeMarker || !artifacts.bridgeMarkerFileName) return;
   try {
     const queueDir = path.join(workspaceRoot, "runtime", "main", "tmp", "bridge-queue");
     fs.mkdirSync(queueDir, { recursive: true });
-    const marker = {
-      packageId,
-      taskId,
-      returnFile,
-      receiptFile: `${receiptId}.json`,
-      writtenAt: new Date().toISOString(),
-    };
-    writeJson(path.join(queueDir, `${safeFilePart(packageId)}.json`), marker);
+    writeJson(path.join(queueDir, artifacts.bridgeMarkerFileName), artifacts.bridgeMarker);
   } catch {
     // fail-soft: queue marker failure must not block consumer
   }
@@ -352,15 +338,6 @@ function readUtf8JsonText(filePath: string): string {
 function writeJson(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function safeFilePart(value: string): string {
-  return (
-    value
-      .replace(/[<>:"/\\|?*\u0000-\u001f]/gu, "_")
-      .replace(/\s+/gu, "_")
-      .slice(0, 120) || "unknown"
-  );
 }
 
 function compactStamp(): string {
