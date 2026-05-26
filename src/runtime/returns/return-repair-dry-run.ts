@@ -60,6 +60,31 @@ export interface ReturnRepairDryRunResult {
   };
 }
 
+export interface ReturnRepairPackagePreviewResult {
+  mode: "observe-only";
+  dryRun: true;
+  plannedAt: string;
+  inboxPath: string;
+  sourceFile: string;
+  returnId: string | null;
+  taskId: string | null;
+  compatibility: ReturnCompatibility | null;
+  repairable: boolean;
+  blockedReasons: string[];
+  fieldActions: ReturnRepairAction[];
+  remainingValidationErrors: string[];
+  proposedPackage: RoleReturnPackageV1 | null;
+  constraintsVerified: {
+    readOnly: "yes";
+    returnWritten: "no";
+    originalReturnMutated: "no";
+    archived: "no";
+    receiptWritten: "no";
+    consumerTriggered: "no";
+    applied: "no";
+  };
+}
+
 export interface ReturnRepairDryRunOptions {
   plannedAt?: string;
   limit?: number;
@@ -229,14 +254,14 @@ function previewPackage(
   };
 }
 
-function planRepair(params: {
+function materializeRepair(params: {
   workspaceRoot: string;
   sourceFile: string;
   returnId: string | null;
   taskId: string | null;
   compatibility: ReturnCompatibility;
   plannedAt: string;
-}): ReturnRepairDryRunPlan {
+}): { plan: ReturnRepairDryRunPlan; proposedPackage: RoleReturnPackageV1 | null } {
   const record = readReturnPackage(params.workspaceRoot, params.sourceFile);
   const blockedReasons: string[] = [];
   const fieldActions: ReturnRepairAction[] = [];
@@ -248,15 +273,18 @@ function planRepair(params: {
 
   if (!record || !params.taskId || blockedReasons.length > 0) {
     return {
-      sourceFile: params.sourceFile,
-      returnId: params.returnId,
-      taskId: params.taskId,
-      compatibility: params.compatibility,
-      repairable: false,
-      blockedReasons,
-      fieldActions,
-      remainingValidationErrors: [],
-      proposedPackagePreview: null,
+      plan: {
+        sourceFile: params.sourceFile,
+        returnId: params.returnId,
+        taskId: params.taskId,
+        compatibility: params.compatibility,
+        repairable: false,
+        blockedReasons,
+        fieldActions,
+        remainingValidationErrors: [],
+        proposedPackagePreview: null,
+      },
+      proposedPackage: null,
     };
   }
 
@@ -269,15 +297,86 @@ function planRepair(params: {
   });
   const remainingValidationErrors = validateRoleReturnPackageV1(proposedPackage);
   return {
-    sourceFile: params.sourceFile,
-    returnId: params.returnId,
-    taskId: params.taskId,
-    compatibility: params.compatibility,
-    repairable: remainingValidationErrors.length === 0,
-    blockedReasons: remainingValidationErrors.length === 0 ? [] : ["proposed_package_invalid"],
-    fieldActions,
-    remainingValidationErrors,
-    proposedPackagePreview: previewPackage(proposedPackage),
+    plan: {
+      sourceFile: params.sourceFile,
+      returnId: params.returnId,
+      taskId: params.taskId,
+      compatibility: params.compatibility,
+      repairable: remainingValidationErrors.length === 0,
+      blockedReasons: remainingValidationErrors.length === 0 ? [] : ["proposed_package_invalid"],
+      fieldActions,
+      remainingValidationErrors,
+      proposedPackagePreview: previewPackage(proposedPackage),
+    },
+    proposedPackage,
+  };
+}
+
+function constraints(): ReturnRepairPackagePreviewResult["constraintsVerified"] {
+  return {
+    readOnly: "yes",
+    returnWritten: "no",
+    originalReturnMutated: "no",
+    archived: "no",
+    receiptWritten: "no",
+    consumerTriggered: "no",
+    applied: "no",
+  };
+}
+
+export function buildReturnRepairPackagePreview(
+  workspaceRoot: string,
+  sourceFile: string,
+  options: { plannedAt?: string } = {},
+): ReturnRepairPackagePreviewResult {
+  const plannedAt = options.plannedAt ?? new Date().toISOString();
+  const diagnosis = scanReturnDiagnosis(workspaceRoot, {
+    scannedAt: plannedAt,
+    limit: Number.MAX_SAFE_INTEGER,
+  });
+  const item = diagnosis.items.find((candidate) => candidate.sourceFile === sourceFile);
+  if (!item) {
+    return {
+      mode: "observe-only",
+      dryRun: true,
+      plannedAt,
+      inboxPath: RETURNS_INBOX_RELATIVE_PATH,
+      sourceFile,
+      returnId: null,
+      taskId: null,
+      compatibility: null,
+      repairable: false,
+      blockedReasons: ["diagnosis_item_missing"],
+      fieldActions: [],
+      remainingValidationErrors: [],
+      proposedPackage: null,
+      constraintsVerified: constraints(),
+    };
+  }
+
+  const materialized = materializeRepair({
+    workspaceRoot,
+    sourceFile: item.sourceFile,
+    returnId: item.returnId,
+    taskId: item.taskId,
+    compatibility: item.compatibility,
+    plannedAt,
+  });
+  return {
+    mode: "observe-only",
+    dryRun: true,
+    plannedAt,
+    inboxPath: RETURNS_INBOX_RELATIVE_PATH,
+    sourceFile: item.sourceFile,
+    returnId: item.returnId,
+    taskId: item.taskId,
+    compatibility: item.compatibility,
+    repairable: materialized.plan.repairable,
+    blockedReasons: materialized.plan.blockedReasons,
+    fieldActions: materialized.plan.fieldActions,
+    remainingValidationErrors: materialized.plan.remainingValidationErrors,
+    proposedPackage: materialized.proposedPackage,
+    constraintsVerified: constraints(),
   };
 }
 
@@ -294,15 +393,16 @@ export function buildReturnRepairDryRun(
   const candidateItems = diagnosis.items.filter(
     (item) => item.suggestedAction === "repair-to-v1-dry-run",
   );
-  const plans = candidateItems.map((item) =>
-    planRepair({
-      workspaceRoot,
-      sourceFile: item.sourceFile,
-      returnId: item.returnId,
-      taskId: item.taskId,
-      compatibility: item.compatibility,
-      plannedAt,
-    }),
+  const plans = candidateItems.map(
+    (item) =>
+      materializeRepair({
+        workspaceRoot,
+        sourceFile: item.sourceFile,
+        returnId: item.returnId,
+        taskId: item.taskId,
+        compatibility: item.compatibility,
+        plannedAt,
+      }).plan,
   );
 
   return {

@@ -102,6 +102,9 @@ let returnDiagnosisApiModulePromise:
 let returnRepairDryRunApiModulePromise:
   | Promise<typeof import("./server-return-repair-dry-run-api.js")>
   | undefined;
+let returnRepairPackagePreviewApiModulePromise:
+  | Promise<typeof import("./server-return-repair-package-preview-api.js")>
+  | undefined;
 let returnReconciliationGateApiModulePromise:
   | Promise<typeof import("./server-return-reconciliation-gate-api.js")>
   | undefined;
@@ -198,6 +201,12 @@ function getReturnDiagnosisApiModule() {
 function getReturnRepairDryRunApiModule() {
   returnRepairDryRunApiModulePromise ??= import("./server-return-repair-dry-run-api.js");
   return returnRepairDryRunApiModulePromise;
+}
+
+function getReturnRepairPackagePreviewApiModule() {
+  returnRepairPackagePreviewApiModulePromise ??=
+    import("./server-return-repair-package-preview-api.js");
+  return returnRepairPackagePreviewApiModulePromise;
 }
 
 function getReturnReconciliationGateApiModule() {
@@ -546,6 +555,10 @@ function isReturnDiagnosisStatePath(pathname: string): boolean {
 
 function isReturnRepairDryRunStatePath(pathname: string): boolean {
   return pathname === "/api/returns/repair-dry-run";
+}
+
+function isReturnRepairPackagePreviewStatePath(pathname: string): boolean {
+  return pathname === "/api/returns/repair-package-preview";
 }
 
 function isReturnReconciliationGateStatePath(pathname: string): boolean {
@@ -1367,6 +1380,14 @@ export function createGatewayHttpServer(opts: {
         const handled = await (
           await getReturnRepairDryRunApiModule()
         ).handleReturnRepairDryRunHttpRequest(req, res, hudWorkspaceRoot);
+        if (handled) {
+          return;
+        }
+      }
+      if (isReturnRepairPackagePreviewStatePath(requestPath)) {
+        const handled = await (
+          await getReturnRepairPackagePreviewApiModule()
+        ).handleReturnRepairPackagePreviewHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }

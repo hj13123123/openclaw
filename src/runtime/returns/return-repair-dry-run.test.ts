@@ -2,7 +2,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildReturnRepairDryRun } from "./return-repair-dry-run.js";
+import {
+  buildReturnRepairDryRun,
+  buildReturnRepairPackagePreview,
+} from "./return-repair-dry-run.js";
 
 const timestamp = "2026-05-20T00:00:00.000Z";
 
@@ -140,6 +143,40 @@ describe("return repair dry-run planner", () => {
           }),
         ]),
       );
+      expect(
+        buildReturnRepairPackagePreview(workspaceRoot, "return-canonical-v2.json", {
+          plannedAt: "2026-05-22T09:00:00.000Z",
+        }),
+      ).toMatchObject({
+        mode: "observe-only",
+        dryRun: true,
+        sourceFile: "return-canonical-v2.json",
+        taskId: "TASK-CANONICAL",
+        repairable: true,
+        proposedPackage: {
+          packageId: "rrpkg-canonical-v2",
+          packageVersion: "1.0",
+          task: {
+            ticketId: "TASK-CANONICAL",
+            taskTitle: "Canonical task",
+          },
+          deliveryReceipt: {
+            deliveryStatus: "delivered",
+          },
+          returnSummary: {
+            status: "completed",
+          },
+        },
+        constraintsVerified: {
+          readOnly: "yes",
+          returnWritten: "no",
+          originalReturnMutated: "no",
+          archived: "no",
+          receiptWritten: "no",
+          consumerTriggered: "no",
+          applied: "no",
+        },
+      });
       for (const [filePath, contents] of before) {
         expect(existsSync(filePath)).toBe(true);
         expect(readFileSync(filePath, "utf8")).toBe(contents);
