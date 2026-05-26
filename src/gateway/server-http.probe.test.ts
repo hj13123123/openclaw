@@ -1080,6 +1080,24 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("routes position config cleanup applies through the HTTP fast path", async () => {
+    await withGatewayServer({
+      prefix: "position-config-cleanup-apply-fast-path",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = createRequest({
+          path: "/api/positions/cleanup-apply",
+        });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(405);
+        expect(getBody()).toBe("Method Not Allowed");
+        expect(res.setHeader).toHaveBeenCalledWith("Allow", "POST");
+      },
+    });
+  });
+
   it("routes promotion candidate scans through the HTTP fast path", async () => {
     await withGatewayServer({
       prefix: "promotion-candidates-scan-fast-path",
