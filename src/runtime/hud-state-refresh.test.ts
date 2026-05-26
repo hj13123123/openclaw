@@ -54,6 +54,23 @@ describe("HUD state refresh", () => {
         currentState: "available",
         updatedAt: "2026-05-20T00:00:00.000Z",
       });
+      writeJson(workspaceRoot, ".claw/positions.json", {
+        enabledPositions: ["main", "engineering-executive", "front-end-executive", "patrol"],
+        positionModelMapping: {
+          main: {},
+          "engineering-executive": {},
+          "front-end-executive": {},
+          patrol: {},
+          "evolution-curator": {},
+        },
+        positionOverrides: {
+          main: {},
+          "engineering-executive": {},
+          "front-end-executive": {},
+          patrol: {},
+          "evolution-curator": {},
+        },
+      });
       writeJson(workspaceRoot, "system/returns/inbox/return-a.json", {
         routing: {
           taskId: "TASK-A",
@@ -245,6 +262,17 @@ describe("HUD state refresh", () => {
       expect(
         written.agentGroups.find((agent) => agent.agentId === "evolution-curator"),
       ).toBeUndefined();
+      expect(written.positionConfigAudit).toMatchObject({
+        enabledPositions: ["engineering-executive", "front-end-executive", "main", "patrol"],
+        configuredOnlyPositions: ["evolution-curator"],
+        constraintsVerified: {
+          readOnly: "yes",
+          positionConfigWritten: "no",
+          agentsListMutated: "no",
+          sessionsSent: "no",
+          applied: "no",
+        },
+      });
       expect(written.returnInbox.pendingCount).toBe(1);
       expect(written.returnInbox.pendingItems[0]).toMatchObject({
         returnId: "return-a.json",

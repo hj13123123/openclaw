@@ -139,6 +139,21 @@ type ControlSignalsState = {
   constraintsVerified?: Record<string, string>;
 };
 
+type PositionConfigAuditState = {
+  mode?: string;
+  available?: boolean;
+  enabledPositions?: string[];
+  officialPositionIds?: string[];
+  nonV2EnabledPositions?: string[];
+  configuredOnlyPositions?: string[];
+  missingEnabledModelMappings?: string[];
+  missingEnabledOverrides?: string[];
+  positionModelMappingCount?: number;
+  positionOverrideCount?: number;
+  warnings?: string[];
+  constraintsVerified?: Record<string, string>;
+};
+
 type RecoveryCandidatesState = {
   mode?: string;
   frozen?: boolean;
@@ -554,6 +569,7 @@ type HUDState = {
   returnReconciliationGate?: ReturnReconciliationGateState;
   returnReconciliationApplyPlan?: ReturnReconciliationApplyPlanState;
   controlSignals?: ControlSignalsState;
+  positionConfigAudit?: PositionConfigAuditState;
   recoveryCandidates?: RecoveryCandidatesState;
   promotionCandidates?: PromotionCandidatesState;
   schedulerTickPlan?: SchedulerTickPlanState;
@@ -1207,6 +1223,10 @@ export class TaskHUD extends LitElement {
   }
 
   private renderAgents(agents: AgentState[]) {
+    const positionAudit = this.hud?.positionConfigAudit;
+    const positionAuditConstraints = positionAudit?.constraintsVerified ?? {};
+    const configuredOnlyPositions = positionAudit?.configuredOnlyPositions ?? [];
+    const nonV2EnabledPositions = positionAudit?.nonV2EnabledPositions ?? [];
     return html`
       <section class="section">
         <h4 class="section-title">岗位状态</h4>
@@ -1247,6 +1267,63 @@ export class TaskHUD extends LitElement {
                 })}
               </div>
             `}
+        ${positionAudit
+          ? html`
+              <div class="row">
+                <div>
+                  <div class="primary">
+                    position config ${positionAudit.available ? "available" : "missing"} -
+                    ${text(positionAudit.mode, "observe-only")}
+                  </div>
+                  <div class="secondary">
+                    enabled ${(positionAudit.enabledPositions ?? []).length}/
+                    ${(positionAudit.officialPositionIds ?? []).length} - configured-only
+                    ${configuredOnlyPositions.length} - non-v2 enabled
+                    ${nonV2EnabledPositions.length}
+                  </div>
+                  ${configuredOnlyPositions.length > 0 || nonV2EnabledPositions.length > 0
+                    ? html`
+                        <details class="details">
+                          <summary>view position config audit</summary>
+                          ${configuredOnlyPositions.map(
+                            (positionId) => html`
+                              <div class="issue">
+                                <div class="secondary">configured-only / ${positionId}</div>
+                              </div>
+                            `,
+                          )}
+                          ${nonV2EnabledPositions.map(
+                            (positionId) => html`
+                              <div class="issue">
+                                <div class="secondary">non-v2 enabled / ${positionId}</div>
+                              </div>
+                            `,
+                          )}
+                          ${[
+                            [
+                              "positionConfigWritten",
+                              positionAuditConstraints.positionConfigWritten,
+                            ],
+                            ["agentsListMutated", positionAuditConstraints.agentsListMutated],
+                            ["sessionsSent", positionAuditConstraints.sessionsSent],
+                            ["applied", positionAuditConstraints.applied],
+                          ].map(
+                            ([label, value]) => html`
+                              <div class="issue">
+                                <div class="secondary">${label} / ${text(value, "unknown")}</div>
+                              </div>
+                            `,
+                          )}
+                        </details>
+                      `
+                    : nothing}
+                </div>
+                <span class="badge"
+                  >${configuredOnlyPositions.length > 0 ? "stale config" : "aligned"}</span
+                >
+              </div>
+            `
+          : nothing}
       </section>
     `;
   }

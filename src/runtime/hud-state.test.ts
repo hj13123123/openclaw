@@ -506,6 +506,44 @@ describe("HUD state core", () => {
     });
   });
 
+  it("adds position config audit issues to watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      positionConfigAudit: {
+        mode: "observe-only",
+        auditedAt: generatedAt,
+        configPath: ".claw/positions.json",
+        available: true,
+        enabledPositions: ["engineering-executive", "front-end-executive", "main", "patrol"],
+        officialPositionIds: ["main", "engineering-executive", "front-end-executive", "patrol"],
+        nonV2EnabledPositions: [],
+        configuredOnlyPositions: ["evolution-curator"],
+        missingEnabledModelMappings: [],
+        missingEnabledOverrides: [],
+        positionModelMappingCount: 5,
+        positionOverrideCount: 5,
+        warnings: ["configured_only_positions_present"],
+        constraintsVerified: {
+          readOnly: "yes",
+          positionConfigWritten: "no",
+          agentsListMutated: "no",
+          sessionsSent: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.positionConfigAudit).toMatchObject({
+      configuredOnlyPositions: ["evolution-curator"],
+    });
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 1,
+      byCondition: {
+        positionConfigConfiguredOnly: 1,
+      },
+    });
+  });
+
   it("adds task graph return preview mismatches to watchdog conditions", () => {
     const state = generateHudState({
       generatedAt,

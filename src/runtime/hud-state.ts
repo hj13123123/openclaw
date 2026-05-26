@@ -1,5 +1,6 @@
 import type { ControlSignalScanResult } from "./control-signals.js";
 import type { PromotionCandidatesScan } from "./distillation/promotion-candidates.js";
+import type { PositionConfigAuditResult } from "./position-config-audit.js";
 import type { RecoveryCandidateScanResult } from "./recovery-candidates.js";
 import type { ReturnConsumerPlanScanResult } from "./returns/return-consumer-plan.js";
 import type { ReturnDiagnosisScanResult } from "./returns/return-diagnosis.js";
@@ -163,6 +164,24 @@ export type HudControlSignalsSummary = Pick<
   | "constraintsVerified"
 >;
 
+export type HudPositionConfigAuditSummary = Pick<
+  PositionConfigAuditResult,
+  | "mode"
+  | "auditedAt"
+  | "configPath"
+  | "available"
+  | "enabledPositions"
+  | "officialPositionIds"
+  | "nonV2EnabledPositions"
+  | "configuredOnlyPositions"
+  | "missingEnabledModelMappings"
+  | "missingEnabledOverrides"
+  | "positionModelMappingCount"
+  | "positionOverrideCount"
+  | "warnings"
+  | "constraintsVerified"
+>;
+
 export type HudRecoveryCandidatesSummary = Pick<
   RecoveryCandidateScanResult,
   | "mode"
@@ -317,6 +336,7 @@ export interface HudStateInput {
   autoEvolutionObserve?: HudAutoEvolutionObserveSummary;
   semanticRebuild?: HudSemanticRebuildSummary;
   controlSignals?: HudControlSignalsSummary;
+  positionConfigAudit?: HudPositionConfigAuditSummary;
   recoveryCandidates?: HudRecoveryCandidatesSummary;
   promotionCandidates?: HudPromotionCandidatesSummary;
   schedulerTickPlan?: HudSchedulerTickPlanSummary;
@@ -374,6 +394,7 @@ export interface HudState {
   autoEvolutionObserve: HudAutoEvolutionObserveSummary;
   semanticRebuild: HudSemanticRebuildSummary;
   controlSignals: HudControlSignalsSummary;
+  positionConfigAudit: HudPositionConfigAuditSummary;
   recoveryCandidates: HudRecoveryCandidatesSummary;
   promotionCandidates: HudPromotionCandidatesSummary;
   schedulerTickPlan: HudSchedulerTickPlanSummary;
@@ -571,6 +592,31 @@ function defaultControlSignalsSummary(): HudControlSignalsSummary {
       taskGraphMutated: "no",
       sessionsSent: "no",
       autoDispatchTriggered: "no",
+      applied: "no",
+    },
+  };
+}
+
+function defaultPositionConfigAuditSummary(generatedAt: string): HudPositionConfigAuditSummary {
+  return {
+    mode: "observe-only",
+    auditedAt: generatedAt,
+    configPath: ".claw/positions.json",
+    available: false,
+    enabledPositions: [],
+    officialPositionIds: ["main", "engineering-executive", "front-end-executive", "patrol"],
+    nonV2EnabledPositions: [],
+    configuredOnlyPositions: [],
+    missingEnabledModelMappings: [],
+    missingEnabledOverrides: [],
+    positionModelMappingCount: 0,
+    positionOverrideCount: 0,
+    warnings: [],
+    constraintsVerified: {
+      readOnly: "yes",
+      positionConfigWritten: "no",
+      agentsListMutated: "no",
+      sessionsSent: "no",
       applied: "no",
     },
   };
@@ -862,6 +908,7 @@ function buildWatchdogConditions(
   autoEvolutionObserve: HudAutoEvolutionObserveSummary,
   taskGraphItems: readonly HudTaskGraphItem[],
   controlSignals: HudControlSignalsSummary,
+  positionConfigAudit: HudPositionConfigAuditSummary,
   recoveryCandidates: HudRecoveryCandidatesSummary,
   returnConsumerPlan: HudReturnConsumerPlanSummary,
   returnDiagnosis: HudReturnDiagnosisSummary,
@@ -938,6 +985,12 @@ function buildWatchdogConditions(
   }
   if (controlSignals.errorCount > 0) {
     byCondition.controlSignalScanError = controlSignals.errorCount;
+  }
+  if (positionConfigAudit.configuredOnlyPositions.length > 0) {
+    byCondition.positionConfigConfiguredOnly = positionConfigAudit.configuredOnlyPositions.length;
+  }
+  if (positionConfigAudit.nonV2EnabledPositions.length > 0) {
+    byCondition.positionConfigNonV2Enabled = positionConfigAudit.nonV2EnabledPositions.length;
   }
   if (recoveryCandidates.candidateCount > 0) {
     byCondition.recoveryCandidates = recoveryCandidates.candidateCount;
@@ -1023,6 +1076,8 @@ export function generateHudState(input: HudStateInput): HudState {
   const autoEvolutionObserve = input.autoEvolutionObserve ?? defaultAutoEvolutionObserveSummary();
   const semanticRebuild = input.semanticRebuild ?? defaultSemanticRebuildSummary();
   const controlSignals = input.controlSignals ?? defaultControlSignalsSummary();
+  const positionConfigAudit =
+    input.positionConfigAudit ?? defaultPositionConfigAuditSummary(input.generatedAt);
   const recoveryCandidates = input.recoveryCandidates ?? defaultRecoveryCandidatesSummary();
   const returnConsumerPlan =
     input.returnConsumerPlan ?? defaultReturnConsumerPlanSummary(input.generatedAt);
@@ -1046,6 +1101,7 @@ export function generateHudState(input: HudStateInput): HudState {
     autoEvolutionObserve,
     taskGraphItems,
     controlSignals,
+    positionConfigAudit,
     recoveryCandidates,
     returnConsumerPlan,
     returnDiagnosis,
@@ -1123,6 +1179,7 @@ export function generateHudState(input: HudStateInput): HudState {
     autoEvolutionObserve,
     semanticRebuild,
     controlSignals,
+    positionConfigAudit,
     recoveryCandidates,
     promotionCandidates,
     schedulerTickPlan,

@@ -162,6 +162,31 @@ describe("TaskHUD task graph validation", () => {
                 applied: "no",
               },
             },
+            positionConfigAudit: {
+              mode: "observe-only",
+              available: true,
+              enabledPositions: ["engineering-executive", "front-end-executive", "main", "patrol"],
+              officialPositionIds: [
+                "main",
+                "engineering-executive",
+                "front-end-executive",
+                "patrol",
+              ],
+              nonV2EnabledPositions: [],
+              configuredOnlyPositions: ["evolution-curator"],
+              missingEnabledModelMappings: [],
+              missingEnabledOverrides: [],
+              positionModelMappingCount: 5,
+              positionOverrideCount: 5,
+              warnings: ["configured_only_positions_present"],
+              constraintsVerified: {
+                readOnly: "yes",
+                positionConfigWritten: "no",
+                agentsListMutated: "no",
+                sessionsSent: "no",
+                applied: "no",
+              },
+            },
             recoveryCandidates: {
               mode: "observe-only",
               frozen: true,
@@ -595,6 +620,10 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("blocked reasons frozen");
     expect(compactText).toContain("view apply-plan constraints");
     expect(compactText).toContain("dispatchTriggered / no");
+    expect(compactText).toContain("position config available");
+    expect(compactText).toContain("configured-only 1");
+    expect(compactText).toContain("configured-only / evolution-curator");
+    expect(compactText).toContain("positionConfigWritten / no");
     expect(compactText).toContain("returnConsumed 路 no");
     expect(compactText).toContain("6 告警");
     expect(compactText).toContain("回执消费计划");

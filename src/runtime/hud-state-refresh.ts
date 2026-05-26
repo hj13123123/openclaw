@@ -9,6 +9,7 @@ import {
   type HudPendingReturnItem,
   type HudMirrorObserveSummary,
   type HudPositionState,
+  type HudPositionConfigAuditSummary,
   type HudPromotionCandidatesSummary,
   type HudReturnDiagnosisSummary,
   type HudReturnReconciliationApplyPlanSummary,
@@ -23,6 +24,7 @@ import {
 } from "./hud-state.js";
 import { readSemanticRebuildSummary } from "./kb-semantic-rebuild-state.js";
 import { readMirrorObserveState } from "./mirror/mirror-observe.js";
+import { auditPositionConfig } from "./position-config-audit.js";
 import { scanRecoveryCandidates } from "./recovery-candidates.js";
 import { scanReturnConsumerPlan } from "./returns/return-consumer-plan.js";
 import { scanReturnDiagnosis } from "./returns/return-diagnosis.js";
@@ -261,6 +263,29 @@ function readSchedulerTickPlan(
   };
 }
 
+function readPositionConfigAudit(
+  workspaceRoot: string,
+  generatedAt: string,
+): HudPositionConfigAuditSummary {
+  const audit = auditPositionConfig(workspaceRoot, { auditedAt: generatedAt });
+  return {
+    mode: audit.mode,
+    auditedAt: audit.auditedAt,
+    configPath: audit.configPath,
+    available: audit.available,
+    enabledPositions: audit.enabledPositions,
+    officialPositionIds: audit.officialPositionIds,
+    nonV2EnabledPositions: audit.nonV2EnabledPositions,
+    configuredOnlyPositions: audit.configuredOnlyPositions,
+    missingEnabledModelMappings: audit.missingEnabledModelMappings,
+    missingEnabledOverrides: audit.missingEnabledOverrides,
+    positionModelMappingCount: audit.positionModelMappingCount,
+    positionOverrideCount: audit.positionOverrideCount,
+    warnings: audit.warnings,
+    constraintsVerified: audit.constraintsVerified,
+  };
+}
+
 function readTaskGraphReturnPreview(
   workspaceRoot: string,
   observedAt: string,
@@ -483,6 +508,7 @@ export function generateHudStateFromWorkspace(
     mirrorObserve: readLatestMirrorObserve(workspaceRoot, warnings),
     autoEvolutionObserve: readLatestAutoEvolutionObserve(workspaceRoot, warnings),
     semanticRebuild: readSemanticRebuildSummary(workspaceRoot),
+    positionConfigAudit: readPositionConfigAudit(workspaceRoot, generatedAt),
     controlSignals: (() => {
       const scan = scanControlSignals(workspaceRoot);
       return {
