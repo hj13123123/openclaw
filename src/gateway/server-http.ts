@@ -108,6 +108,9 @@ let returnReconciliationGateApiModulePromise:
 let returnReconciliationApplyPlanApiModulePromise:
   | Promise<typeof import("./server-return-reconciliation-apply-plan-api.js")>
   | undefined;
+let positionConfigAuditApiModulePromise:
+  | Promise<typeof import("./server-position-config-audit-api.js")>
+  | undefined;
 let promotionCandidatesApiModulePromise:
   | Promise<typeof import("./server-promotion-candidates-api.js")>
   | undefined;
@@ -197,6 +200,11 @@ function getReturnReconciliationApplyPlanApiModule() {
   returnReconciliationApplyPlanApiModulePromise ??=
     import("./server-return-reconciliation-apply-plan-api.js");
   return returnReconciliationApplyPlanApiModulePromise;
+}
+
+function getPositionConfigAuditApiModule() {
+  positionConfigAuditApiModulePromise ??= import("./server-position-config-audit-api.js");
+  return positionConfigAuditApiModulePromise;
 }
 
 function getPromotionCandidatesApiModule() {
@@ -519,6 +527,10 @@ function isReturnReconciliationGateStatePath(pathname: string): boolean {
 
 function isReturnReconciliationApplyPlanStatePath(pathname: string): boolean {
   return pathname === "/api/returns/reconciliation-apply-plan";
+}
+
+function isPositionConfigAuditStatePath(pathname: string): boolean {
+  return pathname === "/api/positions/audit";
 }
 
 function isPromotionCandidatesStatePath(pathname: string): boolean {
@@ -1332,6 +1344,14 @@ export function createGatewayHttpServer(opts: {
         const handled = await (
           await getReturnReconciliationApplyPlanApiModule()
         ).handleReturnReconciliationApplyPlanHttpRequest(req, res, hudWorkspaceRoot);
+        if (handled) {
+          return;
+        }
+      }
+      if (isPositionConfigAuditStatePath(requestPath)) {
+        const handled = await (
+          await getPositionConfigAuditApiModule()
+        ).handlePositionConfigAuditHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }
