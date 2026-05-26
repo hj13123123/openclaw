@@ -2042,7 +2042,17 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
       </main>
-      <longma-cockpit></longma-cockpit>
+      <longma-cockpit
+        .connected=${state.connected}
+        .chatSending=${state.chatSending}
+        .chatError=${state.lastError}
+        .sendMessage=${async (message: string) => {
+          state.chatMessage = message;
+          requestHostUpdate?.();
+          await state.handleSendChat();
+          requestHostUpdate?.();
+        }}
+      ></longma-cockpit>
       <task-hud></task-hud>
       ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)} ${nothing}
     </div>
