@@ -80,7 +80,7 @@ describe("task graph core", () => {
       graph({
         nodes: [
           node("a", "completed", { role: "main" }),
-          node("b", "planned", { role: "evolution-curator", dependsOn: ["a"] }),
+          node("b", "planned", { role: "patrol", dependsOn: ["a"] }),
         ],
         edges: [{ from: "a", to: "b", type: "hard" }],
       }),
@@ -91,6 +91,23 @@ describe("task graph core", () => {
     expect(result.calculatedAggregateStatus).toBe("planned");
     expect(result.calculatedNextRunnable).toEqual(["b"]);
     expect(result.calculatedBlockers).toEqual([]);
+  });
+
+  it("keeps legacy curator roles parseable while flagging them as non-V2 roles", () => {
+    const result = validateTaskGraph(
+      graph({
+        nodes: [node("a", "planned", { role: "evolution-curator" })],
+      }),
+    );
+
+    expect(result.valid).toBe(true);
+    expect(result.warnings).toMatchObject([
+      {
+        check: "role_enum",
+        field: "nodes[0].role",
+        actual: "evolution-curator",
+      },
+    ]);
   });
 
   it("reconciles planned nodes to ready when hard dependencies are complete", () => {

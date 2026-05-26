@@ -582,7 +582,6 @@ const AGENT_NAME_MAP: Record<string, string> = {
   "engineering-executive": "工程执行岗",
   "front-end-executive": "前端执行岗",
   patrol: "巡检岗",
-  "evolution-curator": "进化策展岗",
 };
 
 const STATUS_LABELS: Record<string, string> = {

@@ -22,8 +22,6 @@ export const TASK_GRAPH_ROLES = [
   "engineering-executive",
   "front-end-executive",
   "patrol",
-  "curator",
-  "evolution-curator",
 ] as const;
 
 export type TaskGraphRole = (typeof TASK_GRAPH_ROLES)[number];
