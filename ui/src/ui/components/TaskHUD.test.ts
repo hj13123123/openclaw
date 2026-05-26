@@ -67,6 +67,24 @@ describe("TaskHUD task graph validation", () => {
                 applied: "no",
               },
             },
+            returnRepairDryRun: {
+              mode: "observe-only",
+              dryRun: true,
+              totalDiagnosed: 2,
+              candidateCount: 2,
+              repairableCount: 2,
+              blockedCount: 0,
+              warningCount: 0,
+              constraintsVerified: {
+                readOnly: "yes",
+                returnWritten: "no",
+                originalReturnMutated: "no",
+                archived: "no",
+                receiptWritten: "no",
+                consumerTriggered: "no",
+                applied: "no",
+              },
+            },
             controlSignals: {
               mode: "observe-only",
               status: "frozen",
@@ -461,6 +479,11 @@ describe("TaskHUD task graph validation", () => {
     const compactText = text.replace(/\s+/g, " ");
     expect(fetchMock).toHaveBeenCalledWith("/api/task-graph/validation");
     expect(compactText).toContain("Return diagnosis");
+    expect(compactText).toContain("repair dry-run 2/2");
+    expect(compactText).toContain("blocked 0");
+    expect(compactText).toContain("repair constraints");
+    expect(compactText).toContain("originalReturnMutated");
+    expect(compactText).toContain("consumerTriggered");
     expect(compactText).toContain("diagnosable 2");
     expect(compactText).toContain("v2-shaped 路 2");
     expect(compactText).toContain("repair-to-v1-dry-run 路 2");

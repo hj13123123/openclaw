@@ -3,6 +3,7 @@ import type { PromotionCandidatesScan } from "./distillation/promotion-candidate
 import type { RecoveryCandidateScanResult } from "./recovery-candidates.js";
 import type { ReturnConsumerPlanScanResult } from "./returns/return-consumer-plan.js";
 import type { ReturnDiagnosisScanResult } from "./returns/return-diagnosis.js";
+import type { ReturnRepairDryRunResult } from "./returns/return-repair-dry-run.js";
 import type { SchedulerTickPlan } from "./scheduler-tick-plan.js";
 import type { TaskGraphReturnPreviewResult } from "./task-graph.js";
 
@@ -197,6 +198,19 @@ export type HudReturnDiagnosisSummary = Pick<
   | "constraintsVerified"
 > & { warningCount: number };
 
+export type HudReturnRepairDryRunSummary = Pick<
+  ReturnRepairDryRunResult,
+  | "mode"
+  | "dryRun"
+  | "plannedAt"
+  | "inboxPath"
+  | "totalDiagnosed"
+  | "candidateCount"
+  | "repairableCount"
+  | "blockedCount"
+  | "constraintsVerified"
+> & { warningCount: number };
+
 export type HudPromotionCandidatesSummary = Pick<
   PromotionCandidatesScan,
   | "available"
@@ -252,6 +266,7 @@ export interface HudStateInput {
   pendingReturnItems?: HudPendingReturnItem[];
   returnConsumerPlan?: HudReturnConsumerPlanSummary;
   returnDiagnosis?: HudReturnDiagnosisSummary;
+  returnRepairDryRun?: HudReturnRepairDryRunSummary;
   totalCaseFiles?: number;
   lastCaseAt?: string | null;
   taskGraphItems?: HudTaskGraphItem[];
@@ -302,6 +317,7 @@ export interface HudState {
   };
   returnConsumerPlan: HudReturnConsumerPlanSummary;
   returnDiagnosis: HudReturnDiagnosisSummary;
+  returnRepairDryRun: HudReturnRepairDryRunSummary;
   taskGraphs: {
     total: number;
     active: number;
@@ -581,6 +597,29 @@ function defaultReturnDiagnosisSummary(scannedAt: string): HudReturnDiagnosisSum
   };
 }
 
+function defaultReturnRepairDryRunSummary(plannedAt: string): HudReturnRepairDryRunSummary {
+  return {
+    mode: "observe-only",
+    dryRun: true,
+    plannedAt,
+    inboxPath: "system/returns/inbox",
+    totalDiagnosed: 0,
+    candidateCount: 0,
+    repairableCount: 0,
+    blockedCount: 0,
+    warningCount: 0,
+    constraintsVerified: {
+      readOnly: "yes",
+      returnWritten: "no",
+      originalReturnMutated: "no",
+      archived: "no",
+      receiptWritten: "no",
+      consumerTriggered: "no",
+      applied: "no",
+    },
+  };
+}
+
 function defaultPromotionCandidatesSummary(): HudPromotionCandidatesSummary {
   return {
     available: false,
@@ -686,6 +725,7 @@ function buildWatchdogConditions(
   recoveryCandidates: HudRecoveryCandidatesSummary,
   returnConsumerPlan: HudReturnConsumerPlanSummary,
   returnDiagnosis: HudReturnDiagnosisSummary,
+  returnRepairDryRun: HudReturnRepairDryRunSummary,
   promotionCandidates: HudPromotionCandidatesSummary,
   schedulerTickPlan: HudSchedulerTickPlanSummary,
   taskGraphReturnPreview: HudTaskGraphReturnPreviewSummary,
@@ -778,6 +818,12 @@ function buildWatchdogConditions(
   if (returnDiagnosis.warningCount > 0) {
     byCondition.returnDiagnosisWarning = returnDiagnosis.warningCount;
   }
+  if (returnRepairDryRun.blockedCount > 0) {
+    byCondition.returnRepairDryRunBlocked = returnRepairDryRun.blockedCount;
+  }
+  if (returnRepairDryRun.warningCount > 0) {
+    byCondition.returnRepairDryRunWarning = returnRepairDryRun.warningCount;
+  }
   if (promotionCandidates.stats.invalid > 0) {
     byCondition.invalidPromotionCandidates = promotionCandidates.stats.invalid;
   }
@@ -826,6 +872,8 @@ export function generateHudState(input: HudStateInput): HudState {
   const returnConsumerPlan =
     input.returnConsumerPlan ?? defaultReturnConsumerPlanSummary(input.generatedAt);
   const returnDiagnosis = input.returnDiagnosis ?? defaultReturnDiagnosisSummary(input.generatedAt);
+  const returnRepairDryRun =
+    input.returnRepairDryRun ?? defaultReturnRepairDryRunSummary(input.generatedAt);
   const promotionCandidates = input.promotionCandidates ?? defaultPromotionCandidatesSummary();
   const schedulerTickPlan =
     input.schedulerTickPlan ?? defaultSchedulerTickPlanSummary(input.generatedAt);
@@ -839,6 +887,7 @@ export function generateHudState(input: HudStateInput): HudState {
     recoveryCandidates,
     returnConsumerPlan,
     returnDiagnosis,
+    returnRepairDryRun,
     promotionCandidates,
     schedulerTickPlan,
     taskGraphReturnPreview,
@@ -892,6 +941,7 @@ export function generateHudState(input: HudStateInput): HudState {
     },
     returnConsumerPlan,
     returnDiagnosis,
+    returnRepairDryRun,
     taskGraphs: {
       total: input.taskGraphItems?.length ?? 0,
       active: (input.taskGraphItems ?? []).filter((item) => item.aggregateStatus !== "completed")

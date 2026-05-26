@@ -384,6 +384,15 @@ describe("HUD state core", () => {
       diagnosableCount: 0,
       warningCount: 0,
     });
+    expect(state.returnRepairDryRun).toMatchObject({
+      mode: "observe-only",
+      dryRun: true,
+      plannedAt: generatedAt,
+      candidateCount: 0,
+      repairableCount: 0,
+      blockedCount: 0,
+      warningCount: 0,
+    });
     expect(state.promotionCandidates).toMatchObject({
       available: false,
       status: "missing",
@@ -598,6 +607,45 @@ describe("HUD state core", () => {
       byCondition: {
         returnDiagnosisIssue: 2,
         returnDiagnosisWarning: 1,
+      },
+    });
+  });
+
+  it("adds blocked return repair dry-run plans to watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      returnRepairDryRun: {
+        mode: "observe-only",
+        dryRun: true,
+        plannedAt: generatedAt,
+        inboxPath: "system/returns/inbox",
+        totalDiagnosed: 3,
+        candidateCount: 3,
+        repairableCount: 2,
+        blockedCount: 1,
+        warningCount: 1,
+        constraintsVerified: {
+          readOnly: "yes",
+          returnWritten: "no",
+          originalReturnMutated: "no",
+          archived: "no",
+          receiptWritten: "no",
+          consumerTriggered: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.returnRepairDryRun).toMatchObject({
+      candidateCount: 3,
+      repairableCount: 2,
+      blockedCount: 1,
+    });
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 2,
+      byCondition: {
+        returnRepairDryRunBlocked: 1,
+        returnRepairDryRunWarning: 1,
       },
     });
   });

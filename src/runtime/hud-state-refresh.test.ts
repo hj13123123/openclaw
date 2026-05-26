@@ -287,6 +287,25 @@ describe("HUD state refresh", () => {
           applied: "no",
         },
       });
+      expect(written.returnRepairDryRun).toMatchObject({
+        mode: "observe-only",
+        dryRun: true,
+        inboxPath: "system/returns/inbox",
+        totalDiagnosed: 1,
+        candidateCount: 0,
+        repairableCount: 0,
+        blockedCount: 0,
+        warningCount: 0,
+        constraintsVerified: {
+          readOnly: "yes",
+          returnWritten: "no",
+          originalReturnMutated: "no",
+          archived: "no",
+          receiptWritten: "no",
+          consumerTriggered: "no",
+          applied: "no",
+        },
+      });
       expect(written.caseLibrary.totalCases).toBe(1);
       expect(written.taskGraphs).toMatchObject({
         total: 1,

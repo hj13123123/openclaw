@@ -69,6 +69,17 @@ type ReturnDiagnosisState = {
   constraintsVerified?: Record<string, string>;
 };
 
+type ReturnRepairDryRunState = {
+  mode?: string;
+  dryRun?: boolean;
+  totalDiagnosed?: number;
+  candidateCount?: number;
+  repairableCount?: number;
+  blockedCount?: number;
+  warningCount?: number;
+  constraintsVerified?: Record<string, string>;
+};
+
 type ControlSignalsState = {
   mode?: string;
   status?: string;
@@ -483,6 +494,7 @@ type HUDState = {
   };
   returnConsumerPlan?: ReturnConsumerPlanState;
   returnDiagnosis?: ReturnDiagnosisState;
+  returnRepairDryRun?: ReturnRepairDryRunState;
   controlSignals?: ControlSignalsState;
   recoveryCandidates?: RecoveryCandidatesState;
   promotionCandidates?: PromotionCandidatesState;
@@ -1283,18 +1295,34 @@ export class TaskHUD extends LitElement {
   }
 
   private renderReturnDiagnosis() {
-    const diagnosis = this.hud?.returnDiagnosis;
-    if (!diagnosis || Number(diagnosis.totalCount ?? 0) <= 0) return nothing;
-    const compatibility = diagnosis.byCompatibility ?? [];
-    const actions = diagnosis.bySuggestedAction ?? [];
-    const issueCodes = diagnosis.byIssueCode ?? [];
-    const constraints = diagnosis.constraintsVerified ?? {};
+    const rawDiagnosis = this.hud?.returnDiagnosis;
+    const repair = this.hud?.returnRepairDryRun;
+    if (
+      (!rawDiagnosis || Number(rawDiagnosis.totalCount ?? 0) <= 0) &&
+      (!repair || Number(repair.candidateCount ?? 0) <= 0)
+    )
+      return nothing;
+    const diagnosis = rawDiagnosis ?? {
+      mode: repair?.mode,
+      totalCount: repair?.totalDiagnosed ?? 0,
+      diagnosableCount: 0,
+      warningCount: 0,
+      byCompatibility: [],
+      bySuggestedAction: [],
+      byIssueCode: [],
+      constraintsVerified: {},
+    };
+    const compatibility = diagnosis?.byCompatibility ?? [];
+    const actions = diagnosis?.bySuggestedAction ?? [];
+    const issueCodes = diagnosis?.byIssueCode ?? [];
+    const constraints = diagnosis?.constraintsVerified ?? {};
+    const repairConstraints = repair?.constraintsVerified ?? {};
     return html`
       <section class="section">
         <h4 class="section-title">Return diagnosis</h4>
         <div class="row">
           <div>
-            <div class="primary">${text(diagnosis.mode, "observe-only")}</div>
+            <div class="primary">${text(diagnosis?.mode ?? repair?.mode, "observe-only")}</div>
             <div class="secondary">
               total ${diagnosis.totalCount ?? 0} 路 diagnosable ${diagnosis.diagnosableCount ?? 0}
               路 warnings ${diagnosis.warningCount ?? 0}
@@ -1347,6 +1375,14 @@ export class TaskHUD extends LitElement {
                   </details>
                 `
               : nothing}
+            ${repair
+              ? html`
+                  <div class="secondary">
+                    repair dry-run ${repair.repairableCount ?? 0}/${repair.candidateCount ?? 0} 路
+                    blocked ${repair.blockedCount ?? 0} 路 warnings ${repair.warningCount ?? 0}
+                  </div>
+                `
+              : nothing}
             <details class="details">
               <summary>view diagnosis constraints</summary>
               ${[
@@ -1363,6 +1399,26 @@ export class TaskHUD extends LitElement {
                 `,
               )}
             </details>
+            ${repair
+              ? html`
+                  <details class="details">
+                    <summary>view repair constraints</summary>
+                    ${[
+                      ["returnWritten", repairConstraints.returnWritten],
+                      ["originalReturnMutated", repairConstraints.originalReturnMutated],
+                      ["receiptWritten", repairConstraints.receiptWritten],
+                      ["consumerTriggered", repairConstraints.consumerTriggered],
+                      ["applied", repairConstraints.applied],
+                    ].map(
+                      ([label, value]) => html`
+                        <div class="issue">
+                          <div class="secondary">${label} 路 ${text(value, "unknown")}</div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                `
+              : nothing}
           </div>
           <span class="badge">D5</span>
         </div>

@@ -11,6 +11,7 @@ import {
   type HudPositionState,
   type HudPromotionCandidatesSummary,
   type HudReturnDiagnosisSummary,
+  type HudReturnRepairDryRunSummary,
   type HudSchedulerTickPlanSummary,
   type HudTaskGraphReturnPreviewSummary,
   type HudReturnConsumerPlanSummary,
@@ -23,6 +24,7 @@ import { scanRecoveryCandidates } from "./recovery-candidates.js";
 import { scanReturnConsumerPlan } from "./returns/return-consumer-plan.js";
 import { scanReturnDiagnosis } from "./returns/return-diagnosis.js";
 import { scanReturnInbox } from "./returns/return-inbox.js";
+import { buildReturnRepairDryRun } from "./returns/return-repair-dry-run.js";
 import { buildSchedulerTickPlan } from "./scheduler-tick-plan.js";
 import {
   TASK_GRAPH_SOURCE_RELATIVE_PATH,
@@ -163,6 +165,22 @@ function readReturnDiagnosis(workspaceRoot: string): HudReturnDiagnosisSummary {
     byIssueCode: scan.byIssueCode,
     warningCount: scan.warnings.length,
     constraintsVerified: scan.constraintsVerified,
+  };
+}
+
+function readReturnRepairDryRun(workspaceRoot: string): HudReturnRepairDryRunSummary {
+  const plan = buildReturnRepairDryRun(workspaceRoot, { limit: 0 });
+  return {
+    mode: plan.mode,
+    dryRun: plan.dryRun,
+    plannedAt: plan.plannedAt,
+    inboxPath: plan.inboxPath,
+    totalDiagnosed: plan.totalDiagnosed,
+    candidateCount: plan.candidateCount,
+    repairableCount: plan.repairableCount,
+    blockedCount: plan.blockedCount,
+    warningCount: plan.warnings.length,
+    constraintsVerified: plan.constraintsVerified,
   };
 }
 
@@ -393,6 +411,7 @@ export function generateHudStateFromWorkspace(
     pendingReturnItems: readPendingReturns(workspaceRoot, warnings),
     returnConsumerPlan: readReturnConsumerPlan(workspaceRoot),
     returnDiagnosis: readReturnDiagnosis(workspaceRoot),
+    returnRepairDryRun: readReturnRepairDryRun(workspaceRoot),
     totalCaseFiles,
     lastCaseAt,
     taskGraphItems: readTaskGraphs(workspaceRoot, warnings, taskGraphValidationSummary.reports),
