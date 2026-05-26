@@ -763,6 +763,53 @@ describe("HUD state core", () => {
     });
   });
 
+  it("carries return reconciliation apply-plan summaries without adding synthetic alerts", () => {
+    const state = generateHudState({
+      generatedAt,
+      returnReconciliationApplyPlan: {
+        mode: "observe-only",
+        dryRun: true,
+        plannedAt: generatedAt,
+        status: "blocked",
+        frozen: true,
+        readyForControlledApply: false,
+        blockedReasons: ["frozen"],
+        nextAction: "await_unfreeze_or_human_approval",
+        repair: {
+          candidateCount: 2,
+          repairableCount: 2,
+          blockedCount: 0,
+        },
+        returnLink: {
+          candidateCount: 2,
+          linkableCount: 2,
+          blockedCount: 0,
+        },
+        stepCount: 5,
+        readyStepCount: 4,
+        blockedStepCount: 1,
+        constraintsVerified: {
+          readOnly: "yes",
+          returnWritten: "no",
+          taskGraphWritten: "no",
+          receiptWritten: "no",
+          consumerTriggered: "no",
+          dispatchTriggered: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.returnReconciliationApplyPlan).toMatchObject({
+      status: "blocked",
+      blockedReasons: ["frozen"],
+      stepCount: 5,
+      readyStepCount: 4,
+      blockedStepCount: 1,
+    });
+    expect(state.watchdogSnapshot.totalAlerts).toBe(0);
+  });
+
   it("adds D9 promotion candidate scan issues to watchdog conditions", () => {
     const state = generateHudState({
       generatedAt,

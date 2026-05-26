@@ -3,6 +3,7 @@ import type { PromotionCandidatesScan } from "./distillation/promotion-candidate
 import type { RecoveryCandidateScanResult } from "./recovery-candidates.js";
 import type { ReturnConsumerPlanScanResult } from "./returns/return-consumer-plan.js";
 import type { ReturnDiagnosisScanResult } from "./returns/return-diagnosis.js";
+import type { ReturnReconciliationApplyPlanResult } from "./returns/return-reconciliation-apply-plan.js";
 import type { ReturnReconciliationGateResult } from "./returns/return-reconciliation-gate.js";
 import type { ReturnRepairDryRunResult } from "./returns/return-repair-dry-run.js";
 import type { SchedulerTickPlan } from "./scheduler-tick-plan.js";
@@ -215,6 +216,24 @@ export type HudReturnRepairDryRunSummary = Pick<
 
 export type HudReturnReconciliationGateSummary = ReturnReconciliationGateResult;
 
+export type HudReturnReconciliationApplyPlanSummary = Pick<
+  ReturnReconciliationApplyPlanResult,
+  | "mode"
+  | "dryRun"
+  | "plannedAt"
+  | "status"
+  | "frozen"
+  | "readyForControlledApply"
+  | "blockedReasons"
+  | "nextAction"
+  | "repair"
+  | "returnLink"
+  | "stepCount"
+  | "readyStepCount"
+  | "blockedStepCount"
+  | "constraintsVerified"
+>;
+
 export type HudPromotionCandidatesSummary = Pick<
   PromotionCandidatesScan,
   | "available"
@@ -287,6 +306,7 @@ export interface HudStateInput {
   returnDiagnosis?: HudReturnDiagnosisSummary;
   returnRepairDryRun?: HudReturnRepairDryRunSummary;
   returnReconciliationGate?: HudReturnReconciliationGateSummary;
+  returnReconciliationApplyPlan?: HudReturnReconciliationApplyPlanSummary;
   totalCaseFiles?: number;
   lastCaseAt?: string | null;
   taskGraphItems?: HudTaskGraphItem[];
@@ -340,6 +360,7 @@ export interface HudState {
   returnDiagnosis: HudReturnDiagnosisSummary;
   returnRepairDryRun: HudReturnRepairDryRunSummary;
   returnReconciliationGate: HudReturnReconciliationGateSummary;
+  returnReconciliationApplyPlan: HudReturnReconciliationApplyPlanSummary;
   taskGraphs: {
     total: number;
     active: number;
@@ -676,6 +697,43 @@ function defaultReturnReconciliationGateSummary(
   };
 }
 
+function defaultReturnReconciliationApplyPlanSummary(
+  plannedAt: string,
+): HudReturnReconciliationApplyPlanSummary {
+  return {
+    mode: "observe-only",
+    dryRun: true,
+    plannedAt,
+    status: "empty",
+    frozen: false,
+    readyForControlledApply: false,
+    blockedReasons: [],
+    nextAction: "no_action",
+    repair: {
+      candidateCount: 0,
+      repairableCount: 0,
+      blockedCount: 0,
+    },
+    returnLink: {
+      candidateCount: 0,
+      linkableCount: 0,
+      blockedCount: 0,
+    },
+    stepCount: 0,
+    readyStepCount: 0,
+    blockedStepCount: 0,
+    constraintsVerified: {
+      readOnly: "yes",
+      returnWritten: "no",
+      taskGraphWritten: "no",
+      receiptWritten: "no",
+      consumerTriggered: "no",
+      dispatchTriggered: "no",
+      applied: "no",
+    },
+  };
+}
+
 function defaultPromotionCandidatesSummary(): HudPromotionCandidatesSummary {
   return {
     available: false,
@@ -973,6 +1031,9 @@ export function generateHudState(input: HudStateInput): HudState {
     input.returnRepairDryRun ?? defaultReturnRepairDryRunSummary(input.generatedAt);
   const returnReconciliationGate =
     input.returnReconciliationGate ?? defaultReturnReconciliationGateSummary(input.generatedAt);
+  const returnReconciliationApplyPlan =
+    input.returnReconciliationApplyPlan ??
+    defaultReturnReconciliationApplyPlanSummary(input.generatedAt);
   const promotionCandidates = input.promotionCandidates ?? defaultPromotionCandidatesSummary();
   const schedulerTickPlan =
     input.schedulerTickPlan ?? defaultSchedulerTickPlanSummary(input.generatedAt);
@@ -1046,6 +1107,7 @@ export function generateHudState(input: HudStateInput): HudState {
     returnDiagnosis,
     returnRepairDryRun,
     returnReconciliationGate,
+    returnReconciliationApplyPlan,
     taskGraphs: {
       total: input.taskGraphItems?.length ?? 0,
       active: (input.taskGraphItems ?? []).filter((item) => item.aggregateStatus !== "completed")

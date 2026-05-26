@@ -100,6 +100,30 @@ type ReturnReconciliationGateState = {
   constraintsVerified?: Record<string, string>;
 };
 
+type ReturnReconciliationApplyPlanState = {
+  mode?: string;
+  dryRun?: boolean;
+  status?: string;
+  frozen?: boolean;
+  readyForControlledApply?: boolean;
+  blockedReasons?: string[];
+  nextAction?: string;
+  repair?: {
+    candidateCount?: number;
+    repairableCount?: number;
+    blockedCount?: number;
+  };
+  returnLink?: {
+    candidateCount?: number;
+    linkableCount?: number;
+    blockedCount?: number;
+  };
+  stepCount?: number;
+  readyStepCount?: number;
+  blockedStepCount?: number;
+  constraintsVerified?: Record<string, string>;
+};
+
 type ControlSignalsState = {
   mode?: string;
   status?: string;
@@ -528,6 +552,7 @@ type HUDState = {
   returnDiagnosis?: ReturnDiagnosisState;
   returnRepairDryRun?: ReturnRepairDryRunState;
   returnReconciliationGate?: ReturnReconciliationGateState;
+  returnReconciliationApplyPlan?: ReturnReconciliationApplyPlanState;
   controlSignals?: ControlSignalsState;
   recoveryCandidates?: RecoveryCandidatesState;
   promotionCandidates?: PromotionCandidatesState;
@@ -1332,10 +1357,12 @@ export class TaskHUD extends LitElement {
     const rawDiagnosis = this.hud?.returnDiagnosis;
     const repair = this.hud?.returnRepairDryRun;
     const gate = this.hud?.returnReconciliationGate;
+    const applyPlan = this.hud?.returnReconciliationApplyPlan;
     if (
       (!rawDiagnosis || Number(rawDiagnosis.totalCount ?? 0) <= 0) &&
       (!repair || Number(repair.candidateCount ?? 0) <= 0) &&
-      (!gate || gate.status === "empty")
+      (!gate || gate.status === "empty") &&
+      (!applyPlan || applyPlan.status === "empty")
     )
       return nothing;
     const diagnosis = rawDiagnosis ?? {
@@ -1354,6 +1381,8 @@ export class TaskHUD extends LitElement {
     const constraints = diagnosis?.constraintsVerified ?? {};
     const repairConstraints = repair?.constraintsVerified ?? {};
     const gateConstraints = gate?.constraintsVerified ?? {};
+    const applyPlanConstraints = applyPlan?.constraintsVerified ?? {};
+    const applyPlanBlockedReasons = applyPlan?.blockedReasons ?? [];
     return html`
       <section class="section">
         <h4 class="section-title">Return diagnosis</h4>
@@ -1438,6 +1467,21 @@ export class TaskHUD extends LitElement {
                   </div>
                 `
               : nothing}
+            ${applyPlan
+              ? html`
+                  <div class="secondary">
+                    reconciliation apply-plan ${text(applyPlan.status, "unknown")} - steps
+                    ${applyPlan.readyStepCount ?? 0}/${applyPlan.stepCount ?? 0} ready - blocked
+                    ${applyPlan.blockedStepCount ?? 0}
+                  </div>
+                  <div class="secondary">
+                    next ${text(applyPlan.nextAction, "no_action")} - blocked reasons
+                    ${applyPlanBlockedReasons.length > 0
+                      ? applyPlanBlockedReasons.join(", ")
+                      : "none"}
+                  </div>
+                `
+              : nothing}
             <details class="details">
               <summary>view diagnosis constraints</summary>
               ${[
@@ -1489,6 +1533,27 @@ export class TaskHUD extends LitElement {
                       ([label, value]) => html`
                         <div class="issue">
                           <div class="secondary">${label} - ${text(value, "unknown")}</div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                `
+              : nothing}
+            ${applyPlan
+              ? html`
+                  <details class="details">
+                    <summary>view apply-plan constraints</summary>
+                    ${[
+                      ["returnWritten", applyPlanConstraints.returnWritten],
+                      ["taskGraphWritten", applyPlanConstraints.taskGraphWritten],
+                      ["receiptWritten", applyPlanConstraints.receiptWritten],
+                      ["consumerTriggered", applyPlanConstraints.consumerTriggered],
+                      ["dispatchTriggered", applyPlanConstraints.dispatchTriggered],
+                      ["applied", applyPlanConstraints.applied],
+                    ].map(
+                      ([label, value]) => html`
+                        <div class="issue">
+                          <div class="secondary">${label} / ${text(value, "unknown")}</div>
                         </div>
                       `,
                     )}

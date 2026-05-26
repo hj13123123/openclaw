@@ -11,6 +11,7 @@ import {
   type HudPositionState,
   type HudPromotionCandidatesSummary,
   type HudReturnDiagnosisSummary,
+  type HudReturnReconciliationApplyPlanSummary,
   type HudReturnRepairDryRunSummary,
   type HudReturnReconciliationGateSummary,
   type HudSchedulerTickPlanSummary,
@@ -26,6 +27,7 @@ import { scanRecoveryCandidates } from "./recovery-candidates.js";
 import { scanReturnConsumerPlan } from "./returns/return-consumer-plan.js";
 import { scanReturnDiagnosis } from "./returns/return-diagnosis.js";
 import { scanReturnInbox } from "./returns/return-inbox.js";
+import { buildReturnReconciliationApplyPlan } from "./returns/return-reconciliation-apply-plan.js";
 import { evaluateReturnReconciliationGate } from "./returns/return-reconciliation-gate.js";
 import { buildReturnRepairDryRun } from "./returns/return-repair-dry-run.js";
 import { buildSchedulerTickPlan } from "./scheduler-tick-plan.js";
@@ -193,6 +195,32 @@ function readReturnReconciliationGate(
   checkedAt: string,
 ): HudReturnReconciliationGateSummary {
   return evaluateReturnReconciliationGate(workspaceRoot, { checkedAt });
+}
+
+function readReturnReconciliationApplyPlan(
+  workspaceRoot: string,
+  plannedAt: string,
+): HudReturnReconciliationApplyPlanSummary {
+  const plan = buildReturnReconciliationApplyPlan(workspaceRoot, {
+    plannedAt,
+    limit: 0,
+  });
+  return {
+    mode: plan.mode,
+    dryRun: plan.dryRun,
+    plannedAt: plan.plannedAt,
+    status: plan.status,
+    frozen: plan.frozen,
+    readyForControlledApply: plan.readyForControlledApply,
+    blockedReasons: plan.blockedReasons,
+    nextAction: plan.nextAction,
+    repair: plan.repair,
+    returnLink: plan.returnLink,
+    stepCount: plan.stepCount,
+    readyStepCount: plan.readyStepCount,
+    blockedStepCount: plan.blockedStepCount,
+    constraintsVerified: plan.constraintsVerified,
+  };
 }
 
 function readPromotionCandidates(workspaceRoot: string): HudPromotionCandidatesSummary {
@@ -445,6 +473,7 @@ export function generateHudStateFromWorkspace(
     returnDiagnosis: readReturnDiagnosis(workspaceRoot),
     returnRepairDryRun: readReturnRepairDryRun(workspaceRoot),
     returnReconciliationGate: readReturnReconciliationGate(workspaceRoot, generatedAt),
+    returnReconciliationApplyPlan: readReturnReconciliationApplyPlan(workspaceRoot, generatedAt),
     totalCaseFiles,
     lastCaseAt,
     taskGraphItems: readTaskGraphs(workspaceRoot, warnings, taskGraphValidationSummary.reports),

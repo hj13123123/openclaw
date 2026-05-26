@@ -112,6 +112,37 @@ describe("TaskHUD task graph validation", () => {
                 applied: "no",
               },
             },
+            returnReconciliationApplyPlan: {
+              mode: "observe-only",
+              dryRun: true,
+              status: "blocked",
+              frozen: true,
+              readyForControlledApply: false,
+              blockedReasons: ["frozen"],
+              nextAction: "await_unfreeze_or_human_approval",
+              repair: {
+                candidateCount: 2,
+                repairableCount: 2,
+                blockedCount: 0,
+              },
+              returnLink: {
+                candidateCount: 2,
+                linkableCount: 2,
+                blockedCount: 0,
+              },
+              stepCount: 5,
+              readyStepCount: 4,
+              blockedStepCount: 1,
+              constraintsVerified: {
+                readOnly: "yes",
+                returnWritten: "no",
+                taskGraphWritten: "no",
+                receiptWritten: "no",
+                consumerTriggered: "no",
+                dispatchTriggered: "no",
+                applied: "no",
+              },
+            },
             controlSignals: {
               mode: "observe-only",
               status: "frozen",
@@ -559,6 +590,11 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("repair-to-v1-dry-run 路 2");
     expect(compactText).toContain("consumer_schema_invalid 路 5");
     expect(compactText).toContain("diagnosis constraints");
+    expect(compactText).toContain("reconciliation apply-plan blocked");
+    expect(compactText).toContain("4/5 ready");
+    expect(compactText).toContain("blocked reasons frozen");
+    expect(compactText).toContain("view apply-plan constraints");
+    expect(compactText).toContain("dispatchTriggered / no");
     expect(compactText).toContain("returnConsumed 路 no");
     expect(compactText).toContain("6 告警");
     expect(compactText).toContain("回执消费计划");
