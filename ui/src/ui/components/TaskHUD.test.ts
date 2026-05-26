@@ -208,6 +208,28 @@ describe("TaskHUD task graph validation", () => {
                 applied: "no",
               },
             },
+            positionConfigCleanupGate: {
+              mode: "observe-only",
+              status: "ready",
+              frozen: true,
+              g2Approved: false,
+              readyForControlledApply: false,
+              applyBlockedReason: "frozen",
+              nextAction: "await_unfreeze_or_human_approval",
+              cleanup: {
+                staleConfiguredOnlyCount: 1,
+                removalStepCount: 2,
+                readyStepCount: 2,
+                blockedStepCount: 0,
+              },
+              constraintsVerified: {
+                readOnly: "yes",
+                positionConfigWritten: "no",
+                agentsListMutated: "no",
+                sessionsSent: "no",
+                applied: "no",
+              },
+            },
             recoveryCandidates: {
               mode: "observe-only",
               frozen: true,
@@ -648,6 +670,9 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("stale 1");
     expect(compactText).toContain("2/2");
     expect(compactText).toContain("cleanup candidate / evolution-curator");
+    expect(compactText).toContain("cleanup gate ready");
+    expect(compactText).toContain("applyBlockedReason / frozen");
+    expect(compactText).toContain("next await_unfreeze_or_human_approval");
     expect(compactText).toContain("positionConfigWritten / no");
     expect(compactText).toContain("returnConsumed 路 no");
     expect(compactText).toContain("6 告警");

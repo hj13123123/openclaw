@@ -287,6 +287,20 @@ describe("HUD state refresh", () => {
           applied: "no",
         },
       });
+      expect(written.positionConfigCleanupGate).toMatchObject({
+        status: "ready",
+        frozen: false,
+        g2Approved: false,
+        readyForControlledApply: true,
+        applyBlockedReason: null,
+        nextAction: "controlled_apply_can_be_planned",
+        cleanup: {
+          staleConfiguredOnlyCount: 1,
+          removalStepCount: 2,
+          readyStepCount: 2,
+          blockedStepCount: 0,
+        },
+      });
       expect(written.returnInbox.pendingCount).toBe(1);
       expect(written.returnInbox.pendingItems[0]).toMatchObject({
         returnId: "return-a.json",

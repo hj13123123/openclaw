@@ -10,6 +10,7 @@ import {
   type HudMirrorObserveSummary,
   type HudPositionState,
   type HudPositionConfigAuditSummary,
+  type HudPositionConfigCleanupGateSummary,
   type HudPositionConfigCleanupPlanSummary,
   type HudPromotionCandidatesSummary,
   type HudReturnDiagnosisSummary,
@@ -26,6 +27,7 @@ import {
 import { readSemanticRebuildSummary } from "./kb-semantic-rebuild-state.js";
 import { readMirrorObserveState } from "./mirror/mirror-observe.js";
 import { auditPositionConfig } from "./position-config-audit.js";
+import { evaluatePositionConfigCleanupGate } from "./position-config-cleanup-gate.js";
 import { buildPositionConfigCleanupPlan } from "./position-config-cleanup-plan.js";
 import { scanRecoveryCandidates } from "./recovery-candidates.js";
 import { scanReturnConsumerPlan } from "./returns/return-consumer-plan.js";
@@ -312,6 +314,25 @@ function readPositionConfigCleanupPlan(
   };
 }
 
+function readPositionConfigCleanupGate(
+  workspaceRoot: string,
+  generatedAt: string,
+): HudPositionConfigCleanupGateSummary {
+  const gate = evaluatePositionConfigCleanupGate(workspaceRoot, { checkedAt: generatedAt });
+  return {
+    mode: gate.mode,
+    checkedAt: gate.checkedAt,
+    status: gate.status,
+    frozen: gate.frozen,
+    g2Approved: gate.g2Approved,
+    readyForControlledApply: gate.readyForControlledApply,
+    applyBlockedReason: gate.applyBlockedReason,
+    nextAction: gate.nextAction,
+    cleanup: gate.cleanup,
+    constraintsVerified: gate.constraintsVerified,
+  };
+}
+
 function readTaskGraphReturnPreview(
   workspaceRoot: string,
   observedAt: string,
@@ -536,6 +557,7 @@ export function generateHudStateFromWorkspace(
     semanticRebuild: readSemanticRebuildSummary(workspaceRoot),
     positionConfigAudit: readPositionConfigAudit(workspaceRoot, generatedAt),
     positionConfigCleanupPlan: readPositionConfigCleanupPlan(workspaceRoot, generatedAt),
+    positionConfigCleanupGate: readPositionConfigCleanupGate(workspaceRoot, generatedAt),
     controlSignals: (() => {
       const scan = scanControlSignals(workspaceRoot);
       return {

@@ -1,6 +1,7 @@
 import type { ControlSignalScanResult } from "./control-signals.js";
 import type { PromotionCandidatesScan } from "./distillation/promotion-candidates.js";
 import type { PositionConfigAuditResult } from "./position-config-audit.js";
+import type { PositionConfigCleanupGateResult } from "./position-config-cleanup-gate.js";
 import type { PositionConfigCleanupPlanResult } from "./position-config-cleanup-plan.js";
 import type { RecoveryCandidateScanResult } from "./recovery-candidates.js";
 import type { ReturnConsumerPlanScanResult } from "./returns/return-consumer-plan.js";
@@ -202,6 +203,20 @@ export type HudPositionConfigCleanupPlanSummary = Pick<
   | "constraintsVerified"
 >;
 
+export type HudPositionConfigCleanupGateSummary = Pick<
+  PositionConfigCleanupGateResult,
+  | "mode"
+  | "checkedAt"
+  | "status"
+  | "frozen"
+  | "g2Approved"
+  | "readyForControlledApply"
+  | "applyBlockedReason"
+  | "nextAction"
+  | "cleanup"
+  | "constraintsVerified"
+>;
+
 export type HudRecoveryCandidatesSummary = Pick<
   RecoveryCandidateScanResult,
   | "mode"
@@ -358,6 +373,7 @@ export interface HudStateInput {
   controlSignals?: HudControlSignalsSummary;
   positionConfigAudit?: HudPositionConfigAuditSummary;
   positionConfigCleanupPlan?: HudPositionConfigCleanupPlanSummary;
+  positionConfigCleanupGate?: HudPositionConfigCleanupGateSummary;
   recoveryCandidates?: HudRecoveryCandidatesSummary;
   promotionCandidates?: HudPromotionCandidatesSummary;
   schedulerTickPlan?: HudSchedulerTickPlanSummary;
@@ -417,6 +433,7 @@ export interface HudState {
   controlSignals: HudControlSignalsSummary;
   positionConfigAudit: HudPositionConfigAuditSummary;
   positionConfigCleanupPlan: HudPositionConfigCleanupPlanSummary;
+  positionConfigCleanupGate: HudPositionConfigCleanupGateSummary;
   recoveryCandidates: HudRecoveryCandidatesSummary;
   promotionCandidates: HudPromotionCandidatesSummary;
   schedulerTickPlan: HudSchedulerTickPlanSummary;
@@ -662,6 +679,34 @@ function defaultPositionConfigCleanupPlanSummary(
     blockedStepCount: 0,
     readyForControlledApply: false,
     blockedReasons: [],
+    constraintsVerified: {
+      readOnly: "yes",
+      positionConfigWritten: "no",
+      agentsListMutated: "no",
+      sessionsSent: "no",
+      applied: "no",
+    },
+  };
+}
+
+function defaultPositionConfigCleanupGateSummary(
+  generatedAt: string,
+): HudPositionConfigCleanupGateSummary {
+  return {
+    mode: "observe-only",
+    checkedAt: generatedAt,
+    status: "empty",
+    frozen: false,
+    g2Approved: false,
+    readyForControlledApply: false,
+    applyBlockedReason: null,
+    nextAction: "no_action",
+    cleanup: {
+      staleConfiguredOnlyCount: 0,
+      removalStepCount: 0,
+      readyStepCount: 0,
+      blockedStepCount: 0,
+    },
     constraintsVerified: {
       readOnly: "yes",
       positionConfigWritten: "no",
@@ -960,6 +1005,7 @@ function buildWatchdogConditions(
   controlSignals: HudControlSignalsSummary,
   positionConfigAudit: HudPositionConfigAuditSummary,
   positionConfigCleanupPlan: HudPositionConfigCleanupPlanSummary,
+  positionConfigCleanupGate: HudPositionConfigCleanupGateSummary,
   recoveryCandidates: HudRecoveryCandidatesSummary,
   returnConsumerPlan: HudReturnConsumerPlanSummary,
   returnDiagnosis: HudReturnDiagnosisSummary,
@@ -1059,6 +1105,15 @@ function buildWatchdogConditions(
       positionConfigCleanupPlan.blockedReasons.length,
     );
   }
+  if (positionConfigCleanupGate.applyBlockedReason === "frozen") {
+    byCondition.positionConfigCleanupFrozenBlocked = 1;
+  }
+  if (positionConfigCleanupGate.applyBlockedReason === "cleanup_plan_blocked") {
+    byCondition.positionConfigCleanupGateBlocked = Math.max(
+      1,
+      positionConfigCleanupGate.cleanup.blockedStepCount,
+    );
+  }
   if (recoveryCandidates.candidateCount > 0) {
     byCondition.recoveryCandidates = recoveryCandidates.candidateCount;
   }
@@ -1147,6 +1202,8 @@ export function generateHudState(input: HudStateInput): HudState {
     input.positionConfigAudit ?? defaultPositionConfigAuditSummary(input.generatedAt);
   const positionConfigCleanupPlan =
     input.positionConfigCleanupPlan ?? defaultPositionConfigCleanupPlanSummary(input.generatedAt);
+  const positionConfigCleanupGate =
+    input.positionConfigCleanupGate ?? defaultPositionConfigCleanupGateSummary(input.generatedAt);
   const recoveryCandidates = input.recoveryCandidates ?? defaultRecoveryCandidatesSummary();
   const returnConsumerPlan =
     input.returnConsumerPlan ?? defaultReturnConsumerPlanSummary(input.generatedAt);
@@ -1172,6 +1229,7 @@ export function generateHudState(input: HudStateInput): HudState {
     controlSignals,
     positionConfigAudit,
     positionConfigCleanupPlan,
+    positionConfigCleanupGate,
     recoveryCandidates,
     returnConsumerPlan,
     returnDiagnosis,
@@ -1251,6 +1309,7 @@ export function generateHudState(input: HudStateInput): HudState {
     controlSignals,
     positionConfigAudit,
     positionConfigCleanupPlan,
+    positionConfigCleanupGate,
     recoveryCandidates,
     promotionCandidates,
     schedulerTickPlan,

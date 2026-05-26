@@ -585,6 +585,46 @@ describe("HUD state core", () => {
     });
   });
 
+  it("adds frozen position config cleanup gates to watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      positionConfigCleanupGate: {
+        mode: "observe-only",
+        checkedAt: generatedAt,
+        status: "ready",
+        frozen: true,
+        g2Approved: false,
+        readyForControlledApply: false,
+        applyBlockedReason: "frozen",
+        nextAction: "await_unfreeze_or_human_approval",
+        cleanup: {
+          staleConfiguredOnlyCount: 1,
+          removalStepCount: 2,
+          readyStepCount: 2,
+          blockedStepCount: 0,
+        },
+        constraintsVerified: {
+          readOnly: "yes",
+          positionConfigWritten: "no",
+          agentsListMutated: "no",
+          sessionsSent: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.positionConfigCleanupGate).toMatchObject({
+      applyBlockedReason: "frozen",
+      nextAction: "await_unfreeze_or_human_approval",
+    });
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 1,
+      byCondition: {
+        positionConfigCleanupFrozenBlocked: 1,
+      },
+    });
+  });
+
   it("adds task graph return preview mismatches to watchdog conditions", () => {
     const state = generateHudState({
       generatedAt,

@@ -170,6 +170,23 @@ type PositionConfigCleanupPlanState = {
   constraintsVerified?: Record<string, string>;
 };
 
+type PositionConfigCleanupGateState = {
+  mode?: string;
+  status?: string;
+  frozen?: boolean;
+  g2Approved?: boolean;
+  readyForControlledApply?: boolean;
+  applyBlockedReason?: string | null;
+  nextAction?: string;
+  cleanup?: {
+    staleConfiguredOnlyCount?: number;
+    removalStepCount?: number;
+    readyStepCount?: number;
+    blockedStepCount?: number;
+  };
+  constraintsVerified?: Record<string, string>;
+};
+
 type RecoveryCandidatesState = {
   mode?: string;
   frozen?: boolean;
@@ -587,6 +604,7 @@ type HUDState = {
   controlSignals?: ControlSignalsState;
   positionConfigAudit?: PositionConfigAuditState;
   positionConfigCleanupPlan?: PositionConfigCleanupPlanState;
+  positionConfigCleanupGate?: PositionConfigCleanupGateState;
   recoveryCandidates?: RecoveryCandidatesState;
   promotionCandidates?: PromotionCandidatesState;
   schedulerTickPlan?: SchedulerTickPlanState;
@@ -1242,8 +1260,10 @@ export class TaskHUD extends LitElement {
   private renderAgents(agents: AgentState[]) {
     const positionAudit = this.hud?.positionConfigAudit;
     const positionCleanupPlan = this.hud?.positionConfigCleanupPlan;
+    const positionCleanupGate = this.hud?.positionConfigCleanupGate;
     const positionAuditConstraints = positionAudit?.constraintsVerified ?? {};
     const positionCleanupConstraints = positionCleanupPlan?.constraintsVerified ?? {};
+    const positionCleanupGateConstraints = positionCleanupGate?.constraintsVerified ?? {};
     const configuredOnlyPositions = positionAudit?.configuredOnlyPositions ?? [];
     const nonV2EnabledPositions = positionAudit?.nonV2EnabledPositions ?? [];
     const staleCleanupPositions = positionCleanupPlan?.staleConfiguredOnlyPositions ?? [];
@@ -1398,6 +1418,63 @@ export class TaskHUD extends LitElement {
                 </div>
                 <span class="badge"
                   >${positionCleanupPlan.readyForControlledApply ? "ready" : "observe"}</span
+                >
+              </div>
+            `
+          : nothing}
+        ${positionCleanupGate
+          ? html`
+              <div class="row">
+                <div>
+                  <div class="primary">
+                    cleanup gate ${text(positionCleanupGate.status, "empty")} -
+                    ${positionCleanupGate.readyForControlledApply ? "apply-ready" : "blocked"}
+                  </div>
+                  <div class="secondary">
+                    frozen ${positionCleanupGate.frozen ? "yes" : "no"} - G2
+                    ${positionCleanupGate.g2Approved ? "yes" : "no"} - next
+                    ${text(positionCleanupGate.nextAction, "no_action")}
+                  </div>
+                  ${positionCleanupGate.applyBlockedReason ||
+                  (positionCleanupGate.cleanup?.removalStepCount ?? 0) > 0
+                    ? html`
+                        <details class="details">
+                          <summary>view cleanup gate</summary>
+                          <div class="issue">
+                            <div class="secondary">
+                              applyBlockedReason /
+                              ${text(positionCleanupGate.applyBlockedReason, "none")}
+                            </div>
+                          </div>
+                          <div class="issue">
+                            <div class="secondary">
+                              cleanup ready ${positionCleanupGate.cleanup?.readyStepCount ?? 0}/
+                              ${positionCleanupGate.cleanup?.removalStepCount ?? 0}
+                            </div>
+                          </div>
+                          ${[
+                            [
+                              "positionConfigWritten",
+                              positionCleanupGateConstraints.positionConfigWritten,
+                            ],
+                            ["agentsListMutated", positionCleanupGateConstraints.agentsListMutated],
+                            ["sessionsSent", positionCleanupGateConstraints.sessionsSent],
+                            ["applied", positionCleanupGateConstraints.applied],
+                          ].map(
+                            ([label, value]) => html`
+                              <div class="issue">
+                                <div class="secondary">${label} / ${text(value, "unknown")}</div>
+                              </div>
+                            `,
+                          )}
+                        </details>
+                      `
+                    : nothing}
+                </div>
+                <span class="badge"
+                  >${positionCleanupGate.applyBlockedReason
+                    ? positionCleanupGate.applyBlockedReason
+                    : "clear"}</span
                 >
               </div>
             `
