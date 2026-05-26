@@ -13,6 +13,7 @@ import {
   type HudReturnDiagnosisSummary,
   type HudReturnRepairDryRunSummary,
   type HudSchedulerTickPlanSummary,
+  type HudTaskGraphReturnLinkDryRunSummary,
   type HudTaskGraphReturnPreviewSummary,
   type HudReturnConsumerPlanSummary,
   type HudState,
@@ -26,6 +27,7 @@ import { scanReturnDiagnosis } from "./returns/return-diagnosis.js";
 import { scanReturnInbox } from "./returns/return-inbox.js";
 import { buildReturnRepairDryRun } from "./returns/return-repair-dry-run.js";
 import { buildSchedulerTickPlan } from "./scheduler-tick-plan.js";
+import { buildTaskGraphReturnLinkDryRun } from "./task-graph-return-link-dry-run.js";
 import {
   TASK_GRAPH_SOURCE_RELATIVE_PATH,
   buildTaskGraphReturnPreview,
@@ -246,6 +248,27 @@ function readTaskGraphReturnPreview(
   };
 }
 
+function readTaskGraphReturnLinkDryRun(
+  workspaceRoot: string,
+  plannedAt: string,
+): HudTaskGraphReturnLinkDryRunSummary {
+  const plan = buildTaskGraphReturnLinkDryRun(workspaceRoot, { plannedAt, limit: 0 });
+  return {
+    mode: plan.mode,
+    dryRun: plan.dryRun,
+    plannedAt: plan.plannedAt,
+    sourcePath: plan.sourcePath,
+    inboxPath: plan.inboxPath,
+    unmatchedReturnCount: plan.unmatchedReturnCount,
+    candidateCount: plan.candidateCount,
+    linkableCount: plan.linkableCount,
+    blockedCount: plan.blockedCount,
+    graphErrorCount: plan.graphErrorCount,
+    warningCount: plan.warnings.length,
+    constraintsVerified: plan.constraintsVerified,
+  };
+}
+
 function readCaseLibraryState(
   workspaceRoot: string,
   warnings: string[],
@@ -417,6 +440,7 @@ export function generateHudStateFromWorkspace(
     taskGraphItems: readTaskGraphs(workspaceRoot, warnings, taskGraphValidationSummary.reports),
     taskGraphSourcePath: `${TASK_GRAPH_SOURCE_REL}/`,
     taskGraphReturnPreview: readTaskGraphReturnPreview(workspaceRoot, generatedAt),
+    taskGraphReturnLinkDryRun: readTaskGraphReturnLinkDryRun(workspaceRoot, generatedAt),
     mirrorObserve: readLatestMirrorObserve(workspaceRoot, warnings),
     autoEvolutionObserve: readLatestAutoEvolutionObserve(workspaceRoot, warnings),
     semanticRebuild: readSemanticRebuildSummary(workspaceRoot),

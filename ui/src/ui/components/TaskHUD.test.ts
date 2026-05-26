@@ -242,6 +242,24 @@ describe("TaskHUD task graph validation", () => {
                   applied: "no",
                 },
               },
+              returnLinkDryRun: {
+                mode: "observe-only",
+                dryRun: true,
+                unmatchedReturnCount: 2,
+                candidateCount: 2,
+                linkableCount: 2,
+                blockedCount: 0,
+                graphErrorCount: 0,
+                warningCount: 0,
+                constraintsVerified: {
+                  readOnly: "yes",
+                  taskGraphWritten: "no",
+                  returnConsumed: "no",
+                  receiptWritten: "no",
+                  dispatchTriggered: "no",
+                  applied: "no",
+                },
+              },
               items: [
                 {
                   graphId: "graph-a",
@@ -530,6 +548,11 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("警告 1");
     expect(compactText).toContain("验真 警告");
     expect(compactText).toContain("return match");
+    expect(compactText).toContain("return link dry-run");
+    expect(compactText).toContain("candidates 2");
+    expect(compactText).toContain("linkable 2");
+    expect(compactText).toContain("view return link constraints");
+    expect(compactText).toContain("taskGraphWritten");
     expect(compactText).toContain("pending 2");
     expect(compactText).toContain("matched 0");
     expect(compactText).toContain("unmatched 2");

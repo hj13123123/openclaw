@@ -340,6 +340,23 @@ describe("HUD state refresh", () => {
           applied: "no",
         },
       });
+      expect(written.taskGraphs.returnLinkDryRun).toMatchObject({
+        mode: "observe-only",
+        dryRun: true,
+        candidateCount: 0,
+        linkableCount: 0,
+        blockedCount: 0,
+        graphErrorCount: 0,
+        warningCount: 0,
+        constraintsVerified: {
+          readOnly: "yes",
+          taskGraphWritten: "no",
+          returnConsumed: "no",
+          receiptWritten: "no",
+          dispatchTriggered: "no",
+          applied: "no",
+        },
+      });
       expect(
         readdirSync(path.join(workspaceRoot, "runtime/main/tmp")).some((name) =>
           name.startsWith("task-graph-validation-"),

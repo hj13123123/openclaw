@@ -393,6 +393,14 @@ describe("HUD state core", () => {
       blockedCount: 0,
       warningCount: 0,
     });
+    expect(state.taskGraphs.returnLinkDryRun).toMatchObject({
+      mode: "observe-only",
+      dryRun: true,
+      candidateCount: 0,
+      linkableCount: 0,
+      blockedCount: 0,
+      warningCount: 0,
+    });
     expect(state.promotionCandidates).toMatchObject({
       available: false,
       status: "missing",
@@ -524,6 +532,46 @@ describe("HUD state core", () => {
       byCondition: {
         taskGraphUnmatchedReturns: 2,
         taskGraphReturnPreviewError: 1,
+      },
+    });
+  });
+
+  it("adds blocked task graph return link dry-runs to watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      taskGraphReturnLinkDryRun: {
+        mode: "observe-only",
+        dryRun: true,
+        plannedAt: generatedAt,
+        sourcePath: "runtime/main/tmp/v2-task-graph-01/",
+        inboxPath: "system/returns/inbox",
+        unmatchedReturnCount: 3,
+        candidateCount: 3,
+        linkableCount: 2,
+        blockedCount: 1,
+        graphErrorCount: 0,
+        warningCount: 1,
+        constraintsVerified: {
+          readOnly: "yes",
+          taskGraphWritten: "no",
+          returnConsumed: "no",
+          receiptWritten: "no",
+          dispatchTriggered: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.taskGraphs.returnLinkDryRun).toMatchObject({
+      candidateCount: 3,
+      linkableCount: 2,
+      blockedCount: 1,
+    });
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 2,
+      byCondition: {
+        taskGraphReturnLinkBlocked: 1,
+        taskGraphReturnLinkWarning: 1,
       },
     });
   });

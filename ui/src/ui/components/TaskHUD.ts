@@ -204,6 +204,18 @@ type TaskGraphReturnPreviewState = {
   constraintsVerified?: Record<string, string>;
 };
 
+type TaskGraphReturnLinkDryRunState = {
+  mode?: string;
+  dryRun?: boolean;
+  unmatchedReturnCount?: number;
+  candidateCount?: number;
+  linkableCount?: number;
+  blockedCount?: number;
+  graphErrorCount?: number;
+  warningCount?: number;
+  constraintsVerified?: Record<string, string>;
+};
+
 type TaskGraphValidationIssue = {
   check?: string;
   field?: string;
@@ -507,6 +519,7 @@ type HUDState = {
   taskGraphs?: {
     items?: TaskGraphItem[];
     returnPreview?: TaskGraphReturnPreviewState;
+    returnLinkDryRun?: TaskGraphReturnLinkDryRunState;
   };
   mirrorObserve?: ObserveSummaryState;
   autoEvolutionObserve?: ObserveSummaryState;
@@ -1715,7 +1728,9 @@ export class TaskHUD extends LitElement {
   private renderTaskGraphs(graphs: TaskGraphItem[]) {
     const validationSummary = this.taskGraphValidation;
     const returnPreview = this.hud?.taskGraphs?.returnPreview;
+    const returnLink = this.hud?.taskGraphs?.returnLinkDryRun;
     const returnConstraints = returnPreview?.constraintsVerified ?? {};
+    const linkConstraints = returnLink?.constraintsVerified ?? {};
     return html`
       <section class="section">
         <h4 class="section-title">任务图</h4>
@@ -1789,6 +1804,42 @@ export class TaskHUD extends LitElement {
                 <span class="badge">
                   ${(returnPreview.unmatchedReturnCount ?? 0) > 0 ? "needs match" : "matched"}
                 </span>
+              </div>
+            `
+          : nothing}
+        ${returnLink && Number(returnLink.candidateCount ?? 0) > 0
+          ? html`
+              <div class="row">
+                <div>
+                  <div class="primary">return link dry-run</div>
+                  <div class="secondary">
+                    candidates ${returnLink.candidateCount ?? 0} 路 linkable
+                    ${returnLink.linkableCount ?? 0} 路 blocked ${returnLink.blockedCount ?? 0}
+                  </div>
+                  <div class="secondary">
+                    unmatched ${returnLink.unmatchedReturnCount ?? 0} 路 graph errors
+                    ${returnLink.graphErrorCount ?? 0} 路 warnings ${returnLink.warningCount ?? 0}
+                  </div>
+                  <details class="details">
+                    <summary>view return link constraints</summary>
+                    ${[
+                      ["taskGraphWritten", linkConstraints.taskGraphWritten],
+                      ["returnConsumed", linkConstraints.returnConsumed],
+                      ["receiptWritten", linkConstraints.receiptWritten],
+                      ["dispatchTriggered", linkConstraints.dispatchTriggered],
+                      ["applied", linkConstraints.applied],
+                    ].map(
+                      ([label, value]) => html`
+                        <div class="issue">
+                          <div class="secondary">${label} 路 ${text(value, "unknown")}</div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                </div>
+                <span class="badge"
+                  >${(returnLink.blockedCount ?? 0) > 0 ? "blocked" : "linkable"}</span
+                >
               </div>
             `
           : nothing}
