@@ -114,6 +114,9 @@ let positionConfigAuditApiModulePromise:
 let positionConfigCleanupPlanApiModulePromise:
   | Promise<typeof import("./server-position-config-cleanup-plan-api.js")>
   | undefined;
+let positionConfigCleanupGateApiModulePromise:
+  | Promise<typeof import("./server-position-config-cleanup-gate-api.js")>
+  | undefined;
 let promotionCandidatesApiModulePromise:
   | Promise<typeof import("./server-promotion-candidates-api.js")>
   | undefined;
@@ -214,6 +217,12 @@ function getPositionConfigCleanupPlanApiModule() {
   positionConfigCleanupPlanApiModulePromise ??=
     import("./server-position-config-cleanup-plan-api.js");
   return positionConfigCleanupPlanApiModulePromise;
+}
+
+function getPositionConfigCleanupGateApiModule() {
+  positionConfigCleanupGateApiModulePromise ??=
+    import("./server-position-config-cleanup-gate-api.js");
+  return positionConfigCleanupGateApiModulePromise;
 }
 
 function getPromotionCandidatesApiModule() {
@@ -544,6 +553,10 @@ function isPositionConfigAuditStatePath(pathname: string): boolean {
 
 function isPositionConfigCleanupPlanStatePath(pathname: string): boolean {
   return pathname === "/api/positions/cleanup-plan";
+}
+
+function isPositionConfigCleanupGateStatePath(pathname: string): boolean {
+  return pathname === "/api/positions/cleanup-gate";
 }
 
 function isPromotionCandidatesStatePath(pathname: string): boolean {
@@ -1373,6 +1386,14 @@ export function createGatewayHttpServer(opts: {
         const handled = await (
           await getPositionConfigCleanupPlanApiModule()
         ).handlePositionConfigCleanupPlanHttpRequest(req, res, hudWorkspaceRoot);
+        if (handled) {
+          return;
+        }
+      }
+      if (isPositionConfigCleanupGateStatePath(requestPath)) {
+        const handled = await (
+          await getPositionConfigCleanupGateApiModule()
+        ).handlePositionConfigCleanupGateHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }
