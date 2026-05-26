@@ -187,6 +187,27 @@ describe("TaskHUD task graph validation", () => {
                 applied: "no",
               },
             },
+            positionConfigCleanupPlan: {
+              mode: "observe-only",
+              dryRun: true,
+              status: "ready",
+              available: true,
+              staleConfiguredOnlyPositions: ["evolution-curator"],
+              retainedConfiguredOnlyOfficialPositions: [],
+              nonV2EnabledPositions: [],
+              removalStepCount: 2,
+              readyStepCount: 2,
+              blockedStepCount: 0,
+              readyForControlledApply: true,
+              blockedReasons: [],
+              constraintsVerified: {
+                readOnly: "yes",
+                positionConfigWritten: "no",
+                agentsListMutated: "no",
+                sessionsSent: "no",
+                applied: "no",
+              },
+            },
             recoveryCandidates: {
               mode: "observe-only",
               frozen: true,
@@ -623,6 +644,10 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("position config available");
     expect(compactText).toContain("configured-only 1");
     expect(compactText).toContain("configured-only / evolution-curator");
+    expect(compactText).toContain("position cleanup ready");
+    expect(compactText).toContain("stale 1");
+    expect(compactText).toContain("2/2");
+    expect(compactText).toContain("cleanup candidate / evolution-curator");
     expect(compactText).toContain("positionConfigWritten / no");
     expect(compactText).toContain("returnConsumed 路 no");
     expect(compactText).toContain("6 告警");

@@ -273,6 +273,20 @@ describe("HUD state refresh", () => {
           applied: "no",
         },
       });
+      expect(written.positionConfigCleanupPlan).toMatchObject({
+        status: "ready",
+        staleConfiguredOnlyPositions: ["evolution-curator"],
+        removalStepCount: 2,
+        readyStepCount: 2,
+        readyForControlledApply: true,
+        constraintsVerified: {
+          readOnly: "yes",
+          positionConfigWritten: "no",
+          agentsListMutated: "no",
+          sessionsSent: "no",
+          applied: "no",
+        },
+      });
       expect(written.returnInbox.pendingCount).toBe(1);
       expect(written.returnInbox.pendingItems[0]).toMatchObject({
         returnId: "return-a.json",

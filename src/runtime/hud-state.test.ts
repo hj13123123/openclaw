@@ -544,6 +544,47 @@ describe("HUD state core", () => {
     });
   });
 
+  it("adds ready position config cleanup plans to watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      positionConfigCleanupPlan: {
+        mode: "observe-only",
+        dryRun: true,
+        plannedAt: generatedAt,
+        status: "ready",
+        configPath: ".claw/positions.json",
+        available: true,
+        staleConfiguredOnlyPositions: ["evolution-curator"],
+        retainedConfiguredOnlyOfficialPositions: [],
+        nonV2EnabledPositions: [],
+        removalStepCount: 2,
+        readyStepCount: 2,
+        blockedStepCount: 0,
+        readyForControlledApply: true,
+        blockedReasons: [],
+        constraintsVerified: {
+          readOnly: "yes",
+          positionConfigWritten: "no",
+          agentsListMutated: "no",
+          sessionsSent: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.positionConfigCleanupPlan).toMatchObject({
+      status: "ready",
+      staleConfiguredOnlyPositions: ["evolution-curator"],
+      readyForControlledApply: true,
+    });
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 2,
+      byCondition: {
+        positionConfigCleanupReady: 2,
+      },
+    });
+  });
+
   it("adds task graph return preview mismatches to watchdog conditions", () => {
     const state = generateHudState({
       generatedAt,

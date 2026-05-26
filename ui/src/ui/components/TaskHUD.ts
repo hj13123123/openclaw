@@ -154,6 +154,22 @@ type PositionConfigAuditState = {
   constraintsVerified?: Record<string, string>;
 };
 
+type PositionConfigCleanupPlanState = {
+  mode?: string;
+  dryRun?: boolean;
+  status?: string;
+  available?: boolean;
+  staleConfiguredOnlyPositions?: string[];
+  retainedConfiguredOnlyOfficialPositions?: string[];
+  nonV2EnabledPositions?: string[];
+  removalStepCount?: number;
+  readyStepCount?: number;
+  blockedStepCount?: number;
+  readyForControlledApply?: boolean;
+  blockedReasons?: string[];
+  constraintsVerified?: Record<string, string>;
+};
+
 type RecoveryCandidatesState = {
   mode?: string;
   frozen?: boolean;
@@ -570,6 +586,7 @@ type HUDState = {
   returnReconciliationApplyPlan?: ReturnReconciliationApplyPlanState;
   controlSignals?: ControlSignalsState;
   positionConfigAudit?: PositionConfigAuditState;
+  positionConfigCleanupPlan?: PositionConfigCleanupPlanState;
   recoveryCandidates?: RecoveryCandidatesState;
   promotionCandidates?: PromotionCandidatesState;
   schedulerTickPlan?: SchedulerTickPlanState;
@@ -1224,9 +1241,13 @@ export class TaskHUD extends LitElement {
 
   private renderAgents(agents: AgentState[]) {
     const positionAudit = this.hud?.positionConfigAudit;
+    const positionCleanupPlan = this.hud?.positionConfigCleanupPlan;
     const positionAuditConstraints = positionAudit?.constraintsVerified ?? {};
+    const positionCleanupConstraints = positionCleanupPlan?.constraintsVerified ?? {};
     const configuredOnlyPositions = positionAudit?.configuredOnlyPositions ?? [];
     const nonV2EnabledPositions = positionAudit?.nonV2EnabledPositions ?? [];
+    const staleCleanupPositions = positionCleanupPlan?.staleConfiguredOnlyPositions ?? [];
+    const cleanupBlockedReasons = positionCleanupPlan?.blockedReasons ?? [];
     return html`
       <section class="section">
         <h4 class="section-title">岗位状态</h4>
@@ -1320,6 +1341,63 @@ export class TaskHUD extends LitElement {
                 </div>
                 <span class="badge"
                   >${configuredOnlyPositions.length > 0 ? "stale config" : "aligned"}</span
+                >
+              </div>
+            `
+          : nothing}
+        ${positionCleanupPlan
+          ? html`
+              <div class="row">
+                <div>
+                  <div class="primary">
+                    position cleanup ${text(positionCleanupPlan.status, "clean")} -
+                    ${text(positionCleanupPlan.mode, "observe-only")}
+                  </div>
+                  <div class="secondary">
+                    stale ${staleCleanupPositions.length} - ready
+                    ${positionCleanupPlan.readyStepCount ??
+                    0}/${positionCleanupPlan.removalStepCount ?? 0}
+                    - blocked ${positionCleanupPlan.blockedStepCount ?? 0}
+                  </div>
+                  ${staleCleanupPositions.length > 0 || cleanupBlockedReasons.length > 0
+                    ? html`
+                        <details class="details">
+                          <summary>view position cleanup plan</summary>
+                          ${staleCleanupPositions.map(
+                            (positionId) => html`
+                              <div class="issue">
+                                <div class="secondary">cleanup candidate / ${positionId}</div>
+                              </div>
+                            `,
+                          )}
+                          ${cleanupBlockedReasons.map(
+                            (reason) => html`
+                              <div class="issue">
+                                <div class="secondary">blocked reason / ${reason}</div>
+                              </div>
+                            `,
+                          )}
+                          ${[
+                            [
+                              "positionConfigWritten",
+                              positionCleanupConstraints.positionConfigWritten,
+                            ],
+                            ["agentsListMutated", positionCleanupConstraints.agentsListMutated],
+                            ["sessionsSent", positionCleanupConstraints.sessionsSent],
+                            ["applied", positionCleanupConstraints.applied],
+                          ].map(
+                            ([label, value]) => html`
+                              <div class="issue">
+                                <div class="secondary">${label} / ${text(value, "unknown")}</div>
+                              </div>
+                            `,
+                          )}
+                        </details>
+                      `
+                    : nothing}
+                </div>
+                <span class="badge"
+                  >${positionCleanupPlan.readyForControlledApply ? "ready" : "observe"}</span
                 >
               </div>
             `

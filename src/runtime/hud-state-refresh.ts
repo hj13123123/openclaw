@@ -10,6 +10,7 @@ import {
   type HudMirrorObserveSummary,
   type HudPositionState,
   type HudPositionConfigAuditSummary,
+  type HudPositionConfigCleanupPlanSummary,
   type HudPromotionCandidatesSummary,
   type HudReturnDiagnosisSummary,
   type HudReturnReconciliationApplyPlanSummary,
@@ -25,6 +26,7 @@ import {
 import { readSemanticRebuildSummary } from "./kb-semantic-rebuild-state.js";
 import { readMirrorObserveState } from "./mirror/mirror-observe.js";
 import { auditPositionConfig } from "./position-config-audit.js";
+import { buildPositionConfigCleanupPlan } from "./position-config-cleanup-plan.js";
 import { scanRecoveryCandidates } from "./recovery-candidates.js";
 import { scanReturnConsumerPlan } from "./returns/return-consumer-plan.js";
 import { scanReturnDiagnosis } from "./returns/return-diagnosis.js";
@@ -286,6 +288,30 @@ function readPositionConfigAudit(
   };
 }
 
+function readPositionConfigCleanupPlan(
+  workspaceRoot: string,
+  generatedAt: string,
+): HudPositionConfigCleanupPlanSummary {
+  const plan = buildPositionConfigCleanupPlan(workspaceRoot, { plannedAt: generatedAt });
+  return {
+    mode: plan.mode,
+    dryRun: plan.dryRun,
+    plannedAt: plan.plannedAt,
+    status: plan.status,
+    configPath: plan.configPath,
+    available: plan.available,
+    staleConfiguredOnlyPositions: plan.staleConfiguredOnlyPositions,
+    retainedConfiguredOnlyOfficialPositions: plan.retainedConfiguredOnlyOfficialPositions,
+    nonV2EnabledPositions: plan.nonV2EnabledPositions,
+    removalStepCount: plan.removalStepCount,
+    readyStepCount: plan.readyStepCount,
+    blockedStepCount: plan.blockedStepCount,
+    readyForControlledApply: plan.readyForControlledApply,
+    blockedReasons: plan.blockedReasons,
+    constraintsVerified: plan.constraintsVerified,
+  };
+}
+
 function readTaskGraphReturnPreview(
   workspaceRoot: string,
   observedAt: string,
@@ -509,6 +535,7 @@ export function generateHudStateFromWorkspace(
     autoEvolutionObserve: readLatestAutoEvolutionObserve(workspaceRoot, warnings),
     semanticRebuild: readSemanticRebuildSummary(workspaceRoot),
     positionConfigAudit: readPositionConfigAudit(workspaceRoot, generatedAt),
+    positionConfigCleanupPlan: readPositionConfigCleanupPlan(workspaceRoot, generatedAt),
     controlSignals: (() => {
       const scan = scanControlSignals(workspaceRoot);
       return {
