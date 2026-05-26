@@ -393,6 +393,25 @@ describe("HUD state core", () => {
       blockedCount: 0,
       warningCount: 0,
     });
+    expect(state.returnReconciliationGate).toMatchObject({
+      mode: "observe-only",
+      checkedAt: generatedAt,
+      status: "empty",
+      frozen: false,
+      readyForControlledApply: false,
+      applyBlockedReason: null,
+      nextAction: "no_action",
+      repair: {
+        candidateCount: 0,
+        repairableCount: 0,
+        blockedCount: 0,
+      },
+      returnLink: {
+        candidateCount: 0,
+        linkableCount: 0,
+        blockedCount: 0,
+      },
+    });
     expect(state.taskGraphs.returnLinkDryRun).toMatchObject({
       mode: "observe-only",
       dryRun: true,
@@ -694,6 +713,52 @@ describe("HUD state core", () => {
       byCondition: {
         returnRepairDryRunBlocked: 1,
         returnRepairDryRunWarning: 1,
+      },
+    });
+  });
+
+  it("adds return reconciliation dry-run blockers to watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      returnReconciliationGate: {
+        mode: "observe-only",
+        checkedAt: generatedAt,
+        status: "blocked",
+        frozen: false,
+        readyForControlledApply: false,
+        applyBlockedReason: "dry_run_blocked",
+        nextAction: "resolve_blockers",
+        repair: {
+          candidateCount: 3,
+          repairableCount: 2,
+          blockedCount: 1,
+        },
+        returnLink: {
+          candidateCount: 3,
+          linkableCount: 1,
+          blockedCount: 2,
+        },
+        constraintsVerified: {
+          readOnly: "yes",
+          returnWritten: "no",
+          taskGraphWritten: "no",
+          receiptWritten: "no",
+          consumerTriggered: "no",
+          dispatchTriggered: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.returnReconciliationGate).toMatchObject({
+      status: "blocked",
+      applyBlockedReason: "dry_run_blocked",
+      nextAction: "resolve_blockers",
+    });
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 3,
+      byCondition: {
+        returnReconciliationDryRunBlocked: 3,
       },
     });
   });

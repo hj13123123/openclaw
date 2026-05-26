@@ -85,6 +85,33 @@ describe("TaskHUD task graph validation", () => {
                 applied: "no",
               },
             },
+            returnReconciliationGate: {
+              mode: "observe-only",
+              status: "ready",
+              frozen: true,
+              readyForControlledApply: false,
+              applyBlockedReason: "frozen",
+              nextAction: "await_unfreeze_or_human_approval",
+              repair: {
+                candidateCount: 2,
+                repairableCount: 2,
+                blockedCount: 0,
+              },
+              returnLink: {
+                candidateCount: 2,
+                linkableCount: 2,
+                blockedCount: 0,
+              },
+              constraintsVerified: {
+                readOnly: "yes",
+                returnWritten: "no",
+                taskGraphWritten: "no",
+                receiptWritten: "no",
+                consumerTriggered: "no",
+                dispatchTriggered: "no",
+                applied: "no",
+              },
+            },
             controlSignals: {
               mode: "observe-only",
               status: "frozen",
@@ -499,6 +526,14 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("Return diagnosis");
     expect(compactText).toContain("repair dry-run 2/2");
     expect(compactText).toContain("blocked 0");
+    expect(compactText).toContain("reconciliation gate ready");
+    expect(compactText).toContain("frozen yes");
+    expect(compactText).toContain("next await_unfreeze_or_human_approval");
+    expect(compactText).toContain("gate repair 2/2");
+    expect(compactText).toContain("link 2/2");
+    expect(compactText).toContain("view reconciliation constraints");
+    expect(compactText).toContain("taskGraphWritten - no");
+    expect(compactText).toContain("dispatchTriggered - no");
     expect(compactText).toContain("repair constraints");
     expect(compactText).toContain("originalReturnMutated");
     expect(compactText).toContain("consumerTriggered");

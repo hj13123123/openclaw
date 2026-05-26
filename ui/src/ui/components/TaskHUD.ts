@@ -80,6 +80,26 @@ type ReturnRepairDryRunState = {
   constraintsVerified?: Record<string, string>;
 };
 
+type ReturnReconciliationGateState = {
+  mode?: string;
+  status?: string;
+  frozen?: boolean;
+  readyForControlledApply?: boolean;
+  applyBlockedReason?: string | null;
+  nextAction?: string;
+  repair?: {
+    candidateCount?: number;
+    repairableCount?: number;
+    blockedCount?: number;
+  };
+  returnLink?: {
+    candidateCount?: number;
+    linkableCount?: number;
+    blockedCount?: number;
+  };
+  constraintsVerified?: Record<string, string>;
+};
+
 type ControlSignalsState = {
   mode?: string;
   status?: string;
@@ -507,6 +527,7 @@ type HUDState = {
   returnConsumerPlan?: ReturnConsumerPlanState;
   returnDiagnosis?: ReturnDiagnosisState;
   returnRepairDryRun?: ReturnRepairDryRunState;
+  returnReconciliationGate?: ReturnReconciliationGateState;
   controlSignals?: ControlSignalsState;
   recoveryCandidates?: RecoveryCandidatesState;
   promotionCandidates?: PromotionCandidatesState;
@@ -1310,9 +1331,11 @@ export class TaskHUD extends LitElement {
   private renderReturnDiagnosis() {
     const rawDiagnosis = this.hud?.returnDiagnosis;
     const repair = this.hud?.returnRepairDryRun;
+    const gate = this.hud?.returnReconciliationGate;
     if (
       (!rawDiagnosis || Number(rawDiagnosis.totalCount ?? 0) <= 0) &&
-      (!repair || Number(repair.candidateCount ?? 0) <= 0)
+      (!repair || Number(repair.candidateCount ?? 0) <= 0) &&
+      (!gate || gate.status === "empty")
     )
       return nothing;
     const diagnosis = rawDiagnosis ?? {
@@ -1330,6 +1353,7 @@ export class TaskHUD extends LitElement {
     const issueCodes = diagnosis?.byIssueCode ?? [];
     const constraints = diagnosis?.constraintsVerified ?? {};
     const repairConstraints = repair?.constraintsVerified ?? {};
+    const gateConstraints = gate?.constraintsVerified ?? {};
     return html`
       <section class="section">
         <h4 class="section-title">Return diagnosis</h4>
@@ -1396,6 +1420,24 @@ export class TaskHUD extends LitElement {
                   </div>
                 `
               : nothing}
+            ${gate
+              ? html`
+                  <div class="secondary">
+                    reconciliation gate ${text(gate.status, "unknown")} - frozen
+                    ${gate.frozen ? "yes" : "no"} - ready
+                    ${gate.readyForControlledApply ? "yes" : "no"}
+                  </div>
+                  <div class="secondary">
+                    next ${text(gate.nextAction, "no_action")} - blocked
+                    ${text(gate.applyBlockedReason, "none")}
+                  </div>
+                  <div class="secondary">
+                    gate repair
+                    ${gate.repair?.repairableCount ?? 0}/${gate.repair?.candidateCount ?? 0} - link
+                    ${gate.returnLink?.linkableCount ?? 0}/${gate.returnLink?.candidateCount ?? 0}
+                  </div>
+                `
+              : nothing}
             <details class="details">
               <summary>view diagnosis constraints</summary>
               ${[
@@ -1426,6 +1468,27 @@ export class TaskHUD extends LitElement {
                       ([label, value]) => html`
                         <div class="issue">
                           <div class="secondary">${label} 路 ${text(value, "unknown")}</div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                `
+              : nothing}
+            ${gate
+              ? html`
+                  <details class="details">
+                    <summary>view reconciliation constraints</summary>
+                    ${[
+                      ["returnWritten", gateConstraints.returnWritten],
+                      ["taskGraphWritten", gateConstraints.taskGraphWritten],
+                      ["receiptWritten", gateConstraints.receiptWritten],
+                      ["consumerTriggered", gateConstraints.consumerTriggered],
+                      ["dispatchTriggered", gateConstraints.dispatchTriggered],
+                      ["applied", gateConstraints.applied],
+                    ].map(
+                      ([label, value]) => html`
+                        <div class="issue">
+                          <div class="secondary">${label} - ${text(value, "unknown")}</div>
                         </div>
                       `,
                     )}

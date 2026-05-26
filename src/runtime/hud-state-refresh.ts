@@ -12,6 +12,7 @@ import {
   type HudPromotionCandidatesSummary,
   type HudReturnDiagnosisSummary,
   type HudReturnRepairDryRunSummary,
+  type HudReturnReconciliationGateSummary,
   type HudSchedulerTickPlanSummary,
   type HudTaskGraphReturnLinkDryRunSummary,
   type HudTaskGraphReturnPreviewSummary,
@@ -25,6 +26,7 @@ import { scanRecoveryCandidates } from "./recovery-candidates.js";
 import { scanReturnConsumerPlan } from "./returns/return-consumer-plan.js";
 import { scanReturnDiagnosis } from "./returns/return-diagnosis.js";
 import { scanReturnInbox } from "./returns/return-inbox.js";
+import { evaluateReturnReconciliationGate } from "./returns/return-reconciliation-gate.js";
 import { buildReturnRepairDryRun } from "./returns/return-repair-dry-run.js";
 import { buildSchedulerTickPlan } from "./scheduler-tick-plan.js";
 import { buildTaskGraphReturnLinkDryRun } from "./task-graph-return-link-dry-run.js";
@@ -184,6 +186,13 @@ function readReturnRepairDryRun(workspaceRoot: string): HudReturnRepairDryRunSum
     warningCount: plan.warnings.length,
     constraintsVerified: plan.constraintsVerified,
   };
+}
+
+function readReturnReconciliationGate(
+  workspaceRoot: string,
+  checkedAt: string,
+): HudReturnReconciliationGateSummary {
+  return evaluateReturnReconciliationGate(workspaceRoot, { checkedAt });
 }
 
 function readPromotionCandidates(workspaceRoot: string): HudPromotionCandidatesSummary {
@@ -435,6 +444,7 @@ export function generateHudStateFromWorkspace(
     returnConsumerPlan: readReturnConsumerPlan(workspaceRoot),
     returnDiagnosis: readReturnDiagnosis(workspaceRoot),
     returnRepairDryRun: readReturnRepairDryRun(workspaceRoot),
+    returnReconciliationGate: readReturnReconciliationGate(workspaceRoot, generatedAt),
     totalCaseFiles,
     lastCaseAt,
     taskGraphItems: readTaskGraphs(workspaceRoot, warnings, taskGraphValidationSummary.reports),

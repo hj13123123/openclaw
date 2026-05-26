@@ -3,6 +3,7 @@ import type { PromotionCandidatesScan } from "./distillation/promotion-candidate
 import type { RecoveryCandidateScanResult } from "./recovery-candidates.js";
 import type { ReturnConsumerPlanScanResult } from "./returns/return-consumer-plan.js";
 import type { ReturnDiagnosisScanResult } from "./returns/return-diagnosis.js";
+import type { ReturnReconciliationGateResult } from "./returns/return-reconciliation-gate.js";
 import type { ReturnRepairDryRunResult } from "./returns/return-repair-dry-run.js";
 import type { SchedulerTickPlan } from "./scheduler-tick-plan.js";
 import type { TaskGraphReturnLinkDryRunResult } from "./task-graph-return-link-dry-run.js";
@@ -212,6 +213,8 @@ export type HudReturnRepairDryRunSummary = Pick<
   | "constraintsVerified"
 > & { warningCount: number };
 
+export type HudReturnReconciliationGateSummary = ReturnReconciliationGateResult;
+
 export type HudPromotionCandidatesSummary = Pick<
   PromotionCandidatesScan,
   | "available"
@@ -283,6 +286,7 @@ export interface HudStateInput {
   returnConsumerPlan?: HudReturnConsumerPlanSummary;
   returnDiagnosis?: HudReturnDiagnosisSummary;
   returnRepairDryRun?: HudReturnRepairDryRunSummary;
+  returnReconciliationGate?: HudReturnReconciliationGateSummary;
   totalCaseFiles?: number;
   lastCaseAt?: string | null;
   taskGraphItems?: HudTaskGraphItem[];
@@ -335,6 +339,7 @@ export interface HudState {
   returnConsumerPlan: HudReturnConsumerPlanSummary;
   returnDiagnosis: HudReturnDiagnosisSummary;
   returnRepairDryRun: HudReturnRepairDryRunSummary;
+  returnReconciliationGate: HudReturnReconciliationGateSummary;
   taskGraphs: {
     total: number;
     active: number;
@@ -638,6 +643,39 @@ function defaultReturnRepairDryRunSummary(plannedAt: string): HudReturnRepairDry
   };
 }
 
+function defaultReturnReconciliationGateSummary(
+  checkedAt: string,
+): HudReturnReconciliationGateSummary {
+  return {
+    mode: "observe-only",
+    checkedAt,
+    status: "empty",
+    frozen: false,
+    readyForControlledApply: false,
+    applyBlockedReason: null,
+    nextAction: "no_action",
+    repair: {
+      candidateCount: 0,
+      repairableCount: 0,
+      blockedCount: 0,
+    },
+    returnLink: {
+      candidateCount: 0,
+      linkableCount: 0,
+      blockedCount: 0,
+    },
+    constraintsVerified: {
+      readOnly: "yes",
+      returnWritten: "no",
+      taskGraphWritten: "no",
+      receiptWritten: "no",
+      consumerTriggered: "no",
+      dispatchTriggered: "no",
+      applied: "no",
+    },
+  };
+}
+
 function defaultPromotionCandidatesSummary(): HudPromotionCandidatesSummary {
   return {
     available: false,
@@ -770,6 +808,7 @@ function buildWatchdogConditions(
   returnConsumerPlan: HudReturnConsumerPlanSummary,
   returnDiagnosis: HudReturnDiagnosisSummary,
   returnRepairDryRun: HudReturnRepairDryRunSummary,
+  returnReconciliationGate: HudReturnReconciliationGateSummary,
   promotionCandidates: HudPromotionCandidatesSummary,
   schedulerTickPlan: HudSchedulerTickPlanSummary,
   taskGraphReturnPreview: HudTaskGraphReturnPreviewSummary,
@@ -869,6 +908,13 @@ function buildWatchdogConditions(
   if (returnRepairDryRun.warningCount > 0) {
     byCondition.returnRepairDryRunWarning = returnRepairDryRun.warningCount;
   }
+  if (returnReconciliationGate.applyBlockedReason === "dry_run_blocked") {
+    byCondition.returnReconciliationDryRunBlocked = Math.max(
+      1,
+      returnReconciliationGate.repair.blockedCount +
+        returnReconciliationGate.returnLink.blockedCount,
+    );
+  }
   if (promotionCandidates.stats.invalid > 0) {
     byCondition.invalidPromotionCandidates = promotionCandidates.stats.invalid;
   }
@@ -925,6 +971,8 @@ export function generateHudState(input: HudStateInput): HudState {
   const returnDiagnosis = input.returnDiagnosis ?? defaultReturnDiagnosisSummary(input.generatedAt);
   const returnRepairDryRun =
     input.returnRepairDryRun ?? defaultReturnRepairDryRunSummary(input.generatedAt);
+  const returnReconciliationGate =
+    input.returnReconciliationGate ?? defaultReturnReconciliationGateSummary(input.generatedAt);
   const promotionCandidates = input.promotionCandidates ?? defaultPromotionCandidatesSummary();
   const schedulerTickPlan =
     input.schedulerTickPlan ?? defaultSchedulerTickPlanSummary(input.generatedAt);
@@ -941,6 +989,7 @@ export function generateHudState(input: HudStateInput): HudState {
     returnConsumerPlan,
     returnDiagnosis,
     returnRepairDryRun,
+    returnReconciliationGate,
     promotionCandidates,
     schedulerTickPlan,
     taskGraphReturnPreview,
@@ -996,6 +1045,7 @@ export function generateHudState(input: HudStateInput): HudState {
     returnConsumerPlan,
     returnDiagnosis,
     returnRepairDryRun,
+    returnReconciliationGate,
     taskGraphs: {
       total: input.taskGraphItems?.length ?? 0,
       active: (input.taskGraphItems ?? []).filter((item) => item.aggregateStatus !== "completed")

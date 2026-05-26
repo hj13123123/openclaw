@@ -306,6 +306,34 @@ describe("HUD state refresh", () => {
           applied: "no",
         },
       });
+      expect(written.returnReconciliationGate).toMatchObject({
+        mode: "observe-only",
+        checkedAt: "2026-05-20T00:02:00.000Z",
+        status: "empty",
+        frozen: false,
+        readyForControlledApply: false,
+        applyBlockedReason: null,
+        nextAction: "no_action",
+        repair: {
+          candidateCount: 0,
+          repairableCount: 0,
+          blockedCount: 0,
+        },
+        returnLink: {
+          candidateCount: 0,
+          linkableCount: 0,
+          blockedCount: 0,
+        },
+        constraintsVerified: {
+          readOnly: "yes",
+          returnWritten: "no",
+          taskGraphWritten: "no",
+          receiptWritten: "no",
+          consumerTriggered: "no",
+          dispatchTriggered: "no",
+          applied: "no",
+        },
+      });
       expect(written.caseLibrary.totalCases).toBe(1);
       expect(written.taskGraphs).toMatchObject({
         total: 1,
