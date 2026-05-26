@@ -96,6 +96,9 @@ let controlSignalsApiModulePromise:
   | Promise<typeof import("./server-control-signals-api.js")>
   | undefined;
 let recoveryApiModulePromise: Promise<typeof import("./server-recovery-api.js")> | undefined;
+let returnDiagnosisApiModulePromise:
+  | Promise<typeof import("./server-return-diagnosis-api.js")>
+  | undefined;
 let promotionCandidatesApiModulePromise:
   | Promise<typeof import("./server-promotion-candidates-api.js")>
   | undefined;
@@ -164,6 +167,11 @@ function getControlSignalsApiModule() {
 function getRecoveryApiModule() {
   recoveryApiModulePromise ??= import("./server-recovery-api.js");
   return recoveryApiModulePromise;
+}
+
+function getReturnDiagnosisApiModule() {
+  returnDiagnosisApiModulePromise ??= import("./server-return-diagnosis-api.js");
+  return returnDiagnosisApiModulePromise;
 }
 
 function getPromotionCandidatesApiModule() {
@@ -466,6 +474,10 @@ function isControlSignalsStatePath(pathname: string): boolean {
 
 function isRecoveryStatePath(pathname: string): boolean {
   return pathname === "/api/recovery-candidates/scan";
+}
+
+function isReturnDiagnosisStatePath(pathname: string): boolean {
+  return pathname === "/api/returns/diagnosis";
 }
 
 function isPromotionCandidatesStatePath(pathname: string): boolean {
@@ -1247,6 +1259,14 @@ export function createGatewayHttpServer(opts: {
         const handled = await (
           await getRecoveryApiModule()
         ).handleRecoveryHttpRequest(req, res, hudWorkspaceRoot);
+        if (handled) {
+          return;
+        }
+      }
+      if (isReturnDiagnosisStatePath(requestPath)) {
+        const handled = await (
+          await getReturnDiagnosisApiModule()
+        ).handleReturnDiagnosisHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }

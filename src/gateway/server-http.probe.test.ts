@@ -852,6 +852,39 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("routes return diagnostics through the HTTP fast path", async () => {
+    await withGatewayServer({
+      prefix: "return-diagnosis-fast-path",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = createRequest({
+          path: "/api/returns/diagnosis",
+        });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual(
+          expect.objectContaining({
+            ok: true,
+            data: expect.objectContaining({
+              mode: "observe-only",
+              constraintsVerified: {
+                readOnly: "yes",
+                returnWritten: "no",
+                returnConsumed: "no",
+                archived: "no",
+                receiptWritten: "no",
+                taskGraphMutated: "no",
+                applied: "no",
+              },
+            }),
+          }),
+        );
+      },
+    });
+  });
+
   it("routes promotion candidate scans through the HTTP fast path", async () => {
     await withGatewayServer({
       prefix: "promotion-candidates-scan-fast-path",
