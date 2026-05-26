@@ -506,6 +506,21 @@ describe("TaskHUD task graph validation", () => {
           }),
         );
       }
+      if (url === "/api/hud/task-state") {
+        return Promise.resolve(
+          jsonResponse({
+            summary: {
+              total: 81,
+              queued: 0,
+              completed: 73,
+              failed: 0,
+              blocked: 7,
+              quarantined: 0,
+            },
+            tasks: [],
+          }),
+        );
+      }
       if (url === "/api/hud/scheduler-events?limit=8") return Promise.resolve(jsonResponse([]));
       return Promise.resolve(jsonResponse({}));
     });
@@ -524,6 +539,8 @@ describe("TaskHUD task graph validation", () => {
     const compactText = text.replace(/\s+/g, " ");
     expect(fetchMock).toHaveBeenCalledWith("/api/task-graph/validation");
     expect(compactText).toContain("Return diagnosis");
+    expect(compactText).toContain("0 当前任务");
+    expect(compactText).toContain("0 待验收");
     expect(compactText).toContain("repair dry-run 2/2");
     expect(compactText).toContain("blocked 0");
     expect(compactText).toContain("reconciliation gate ready");
@@ -543,7 +560,7 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("consumer_schema_invalid 路 5");
     expect(compactText).toContain("diagnosis constraints");
     expect(compactText).toContain("returnConsumed 路 no");
-    expect(compactText).toContain("6 警告");
+    expect(compactText).toContain("6 告警");
     expect(compactText).toContain("回执消费计划");
     expect(compactText).toContain("总数 2");
     expect(compactText).toContain("跳过 2");
@@ -602,6 +619,16 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("unknown role");
     expect(fetchMock).toHaveBeenCalledWith("/api/hud/runtime-loop");
     expect(compactText).toContain("运行态总线");
+    expect(fetchMock).toHaveBeenCalledWith("/api/hud/task-state");
+    expect(compactText).toContain("任务台账");
+    expect(compactText).toContain("历史任务台账");
+    expect(compactText).toContain("不等于当前运行任务");
+    expect(compactText).toContain("历史总数");
+    expect(compactText).toContain("81");
+    expect(compactText).toContain("历史完成");
+    expect(compactText).toContain("73");
+    expect(compactText).toContain("策略阻塞");
+    expect(compactText).toContain("7");
     expect(compactText).toContain("快照可用");
     expect(compactText).toContain("dispatch 2");
     expect(compactText).toContain("inbox 1");

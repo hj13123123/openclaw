@@ -1162,12 +1162,12 @@ export class TaskHUD extends LitElement {
       <div class="status">
         <div class="status-line">
           <span class="dot ${statusClass(status)}"></span>
-          <span class="primary">${labelStatus(status)} · 运行态</span>
+          <span class="primary">${labelStatus(status)} · 运行态总览</span>
         </div>
         <div class="counts">
-          <span><strong>${runningTasks.length}</strong> 运行</span>
-          <span><strong>${reviews.length}</strong> 验收</span>
-          <span><strong>${alertCount}</strong> 警告</span>
+          <span><strong>${runningTasks.length}</strong> 当前任务</span>
+          <span><strong>${reviews.length}</strong> 待验收</span>
+          <span><strong>${alertCount}</strong> 告警</span>
         </div>
       </div>
 
@@ -2035,14 +2035,16 @@ export class TaskHUD extends LitElement {
     return html`
       <section class="section">
         <h4 class="section-title">任务台账</h4>
-        <div class="secondary section-note">历史任务统计，不代表当前运行岗位数</div>
+        <div class="secondary section-note">
+          历史任务台账，包含已完成、策略阻塞和归档任务，不等于当前运行任务
+        </div>
         <div class="grid">
           ${[
-            ["总数", summary?.total ?? 0],
+            ["历史总数", summary?.total ?? 0],
             ["排队", summary?.queued ?? 0],
-            ["完成", summary?.completed ?? 0],
+            ["历史完成", summary?.completed ?? 0],
             ["失败", summary?.failed ?? 0],
-            ["阻塞", summary?.blocked ?? 0],
+            ["策略阻塞", summary?.blocked ?? 0],
             ["隔离", summary?.quarantined ?? 0],
           ].map(
             ([label, value]) => html`
