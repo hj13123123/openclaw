@@ -102,6 +102,9 @@ let returnDiagnosisApiModulePromise:
 let returnRepairDryRunApiModulePromise:
   | Promise<typeof import("./server-return-repair-dry-run-api.js")>
   | undefined;
+let returnReconciliationGateApiModulePromise:
+  | Promise<typeof import("./server-return-reconciliation-gate-api.js")>
+  | undefined;
 let promotionCandidatesApiModulePromise:
   | Promise<typeof import("./server-promotion-candidates-api.js")>
   | undefined;
@@ -180,6 +183,11 @@ function getReturnDiagnosisApiModule() {
 function getReturnRepairDryRunApiModule() {
   returnRepairDryRunApiModulePromise ??= import("./server-return-repair-dry-run-api.js");
   return returnRepairDryRunApiModulePromise;
+}
+
+function getReturnReconciliationGateApiModule() {
+  returnReconciliationGateApiModulePromise ??= import("./server-return-reconciliation-gate-api.js");
+  return returnReconciliationGateApiModulePromise;
 }
 
 function getPromotionCandidatesApiModule() {
@@ -494,6 +502,10 @@ function isReturnDiagnosisStatePath(pathname: string): boolean {
 
 function isReturnRepairDryRunStatePath(pathname: string): boolean {
   return pathname === "/api/returns/repair-dry-run";
+}
+
+function isReturnReconciliationGateStatePath(pathname: string): boolean {
+  return pathname === "/api/returns/reconciliation-gate";
 }
 
 function isPromotionCandidatesStatePath(pathname: string): boolean {
@@ -1291,6 +1303,14 @@ export function createGatewayHttpServer(opts: {
         const handled = await (
           await getReturnRepairDryRunApiModule()
         ).handleReturnRepairDryRunHttpRequest(req, res, hudWorkspaceRoot);
+        if (handled) {
+          return;
+        }
+      }
+      if (isReturnReconciliationGateStatePath(requestPath)) {
+        const handled = await (
+          await getReturnReconciliationGateApiModule()
+        ).handleReturnReconciliationGateHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }
