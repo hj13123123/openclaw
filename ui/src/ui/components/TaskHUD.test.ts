@@ -132,11 +132,12 @@ describe("TaskHUD task graph validation", () => {
               },
             },
             watchdogSnapshot: {
-              totalAlerts: 4,
+              totalAlerts: 6,
               healthyCount: 2,
               byCondition: {
                 returnConsumerSkipped: 2,
                 mirrorObserveAttention: 2,
+                taskGraphUnmatchedReturns: 2,
               },
             },
             mirrorObserve: {
@@ -168,6 +169,39 @@ describe("TaskHUD task graph validation", () => {
               },
             },
             taskGraphs: {
+              returnPreview: {
+                mode: "observe-only",
+                observedAt: "2026-05-21T00:00:00.000Z",
+                graphCount: 1,
+                nodeCount: 2,
+                pendingReturnCount: 2,
+                matchedNodeCount: 0,
+                missingNodeCount: 1,
+                ambiguousNodeCount: 0,
+                declaredReturnNodeCount: 1,
+                unmatchedReturnCount: 2,
+                graphErrorCount: 0,
+                sampleUnmatchedReturns: [
+                  {
+                    returnId: "return-rrpkg-DOMAIN1-L3-CANDIDATE-SCAN-MVP-J-20260515-171824.json",
+                    taskId: "DOMAIN1-L3-CANDIDATE-SCAN-MVP-J",
+                    reason: "no_matching_task_node",
+                  },
+                  {
+                    returnId:
+                      "return-rrpkg-DOMAIN1-L3-CONTROLLED-APPLY-SCAN-RECOMMENDED-K-20260515-184521.json",
+                    taskId: null,
+                    reason: "missing_task_id",
+                  },
+                ],
+                constraintsVerified: {
+                  graphMutated: "no",
+                  returnConsumed: "no",
+                  receiptWritten: "no",
+                  dispatchTriggered: "no",
+                  applied: "no",
+                },
+              },
               items: [
                 {
                   graphId: "graph-a",
@@ -404,7 +438,7 @@ describe("TaskHUD task graph validation", () => {
     const text = element.shadowRoot?.textContent ?? "";
     const compactText = text.replace(/\s+/g, " ");
     expect(fetchMock).toHaveBeenCalledWith("/api/task-graph/validation");
-    expect(compactText).toContain("4 警告");
+    expect(compactText).toContain("6 警告");
     expect(compactText).toContain("回执消费计划");
     expect(compactText).toContain("总数 2");
     expect(compactText).toContain("跳过 2");
@@ -428,9 +462,10 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("promotion state rolledback · 3");
     expect(compactText).toContain("promotion consistency ok · 5");
     expect(compactText).toContain("健康巡检");
-    expect(compactText).toContain("警告 4");
+    expect(compactText).toContain("警告 6");
     expect(compactText).toContain("returnConsumerSkipped");
     expect(compactText).toContain("mirrorObserveAttention");
+    expect(compactText).toContain("taskGraphUnmatchedReturns");
     expect(compactText).toContain("观察层");
     expect(compactText).toContain("Mirror Observe");
     expect(compactText).toContain("observations 4");
@@ -442,6 +477,14 @@ describe("TaskHUD task graph validation", () => {
     expect(compactText).toContain("错误 0");
     expect(compactText).toContain("警告 1");
     expect(compactText).toContain("验真 警告");
+    expect(compactText).toContain("return match");
+    expect(compactText).toContain("pending 2");
+    expect(compactText).toContain("matched 0");
+    expect(compactText).toContain("unmatched 2");
+    expect(compactText).toContain("view unmatched returns");
+    expect(compactText).toContain("no_matching_task_node");
+    expect(compactText).toContain("missing_task_id");
+    expect(compactText).toContain("returnConsumed · no");
     expect(compactText).toContain("问题 1");
     expect(compactText).toContain("查看验真明细");
     expect(compactText).toContain("role_enum");

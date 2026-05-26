@@ -162,6 +162,26 @@ type TaskGraphItem = {
   validationSeverity?: string | null;
 };
 
+type TaskGraphReturnPreviewState = {
+  mode?: string;
+  observedAt?: string;
+  graphCount?: number;
+  nodeCount?: number;
+  pendingReturnCount?: number;
+  matchedNodeCount?: number;
+  missingNodeCount?: number;
+  ambiguousNodeCount?: number;
+  declaredReturnNodeCount?: number;
+  unmatchedReturnCount?: number;
+  graphErrorCount?: number;
+  sampleUnmatchedReturns?: Array<{
+    returnId?: string;
+    taskId?: string | null;
+    reason?: string;
+  }>;
+  constraintsVerified?: Record<string, string>;
+};
+
 type TaskGraphValidationIssue = {
   check?: string;
   field?: string;
@@ -462,6 +482,7 @@ type HUDState = {
   };
   taskGraphs?: {
     items?: TaskGraphItem[];
+    returnPreview?: TaskGraphReturnPreviewState;
   };
   mirrorObserve?: ObserveSummaryState;
   autoEvolutionObserve?: ObserveSummaryState;
@@ -1537,6 +1558,8 @@ export class TaskHUD extends LitElement {
 
   private renderTaskGraphs(graphs: TaskGraphItem[]) {
     const validationSummary = this.taskGraphValidation;
+    const returnPreview = this.hud?.taskGraphs?.returnPreview;
+    const returnConstraints = returnPreview?.constraintsVerified ?? {};
     return html`
       <section class="section">
         <h4 class="section-title">任务图</h4>
@@ -1552,6 +1575,64 @@ export class TaskHUD extends LitElement {
                   </div>
                 </div>
                 <span class="badge">${validationSummary.valid ? "通过" : "需关注"}</span>
+              </div>
+            `
+          : nothing}
+        ${returnPreview
+          ? html`
+              <div class="row">
+                <div>
+                  <div class="primary">
+                    return match · ${text(returnPreview.mode, "observe-only")}
+                  </div>
+                  <div class="secondary">
+                    pending ${returnPreview.pendingReturnCount ?? 0} · matched
+                    ${returnPreview.matchedNodeCount ?? 0} · unmatched
+                    ${returnPreview.unmatchedReturnCount ?? 0}
+                  </div>
+                  <div class="secondary">
+                    nodes ${returnPreview.nodeCount ?? 0} · missing
+                    ${returnPreview.missingNodeCount ?? 0} · ambiguous
+                    ${returnPreview.ambiguousNodeCount ?? 0}
+                  </div>
+                  ${(returnPreview.sampleUnmatchedReturns?.length ?? 0) > 0
+                    ? html`
+                        <details class="details">
+                          <summary>view unmatched returns</summary>
+                          ${returnPreview.sampleUnmatchedReturns?.slice(0, 4).map(
+                            (item) => html`
+                              <div class="issue">
+                                <div class="secondary">
+                                  ${truncate(item.returnId, 42)} ·
+                                  ${text(item.taskId, "missing taskId")} ·
+                                  ${text(item.reason, "unknown")}
+                                </div>
+                              </div>
+                            `,
+                          )}
+                        </details>
+                      `
+                    : nothing}
+                  <details class="details">
+                    <summary>view return match constraints</summary>
+                    ${[
+                      ["graphMutated", returnConstraints.graphMutated],
+                      ["returnConsumed", returnConstraints.returnConsumed],
+                      ["receiptWritten", returnConstraints.receiptWritten],
+                      ["dispatchTriggered", returnConstraints.dispatchTriggered],
+                      ["applied", returnConstraints.applied],
+                    ].map(
+                      ([label, value]) => html`
+                        <div class="issue">
+                          <div class="secondary">${label} · ${text(value, "unknown")}</div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                </div>
+                <span class="badge">
+                  ${(returnPreview.unmatchedReturnCount ?? 0) > 0 ? "needs match" : "matched"}
+                </span>
               </div>
             `
           : nothing}

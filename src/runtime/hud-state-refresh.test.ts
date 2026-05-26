@@ -286,6 +286,23 @@ describe("HUD state refresh", () => {
         },
         nextRunnable: ["c"],
       });
+      expect(written.taskGraphs.returnPreview).toMatchObject({
+        mode: "observe-only",
+        observedAt: "2026-05-20T00:02:00.000Z",
+        graphCount: 1,
+        nodeCount: 2,
+        pendingReturnCount: 1,
+        matchedNodeCount: 1,
+        unmatchedReturnCount: 0,
+        graphErrorCount: 0,
+        constraintsVerified: {
+          graphMutated: "no",
+          returnConsumed: "no",
+          receiptWritten: "no",
+          dispatchTriggered: "no",
+          applied: "no",
+        },
+      });
       expect(
         readdirSync(path.join(workspaceRoot, "runtime/main/tmp")).some((name) =>
           name.startsWith("task-graph-validation-"),

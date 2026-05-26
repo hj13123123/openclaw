@@ -11,6 +11,7 @@ import {
   type HudPositionState,
   type HudPromotionCandidatesSummary,
   type HudSchedulerTickPlanSummary,
+  type HudTaskGraphReturnPreviewSummary,
   type HudReturnConsumerPlanSummary,
   type HudState,
   type HudTaskGraphItem,
@@ -23,6 +24,7 @@ import { scanReturnInbox } from "./returns/return-inbox.js";
 import { buildSchedulerTickPlan } from "./scheduler-tick-plan.js";
 import {
   TASK_GRAPH_SOURCE_RELATIVE_PATH,
+  buildTaskGraphReturnPreview,
   buildTaskGraphValidationSummary,
   type TaskGraphValidationReport,
 } from "./task-graph.js";
@@ -181,6 +183,30 @@ function readSchedulerTickPlan(
     sourceFiles: plan.sourceFiles,
     warningCount: plan.warnings.length,
     constraintsVerified: plan.constraintsVerified,
+  };
+}
+
+function readTaskGraphReturnPreview(
+  workspaceRoot: string,
+  observedAt: string,
+): HudTaskGraphReturnPreviewSummary {
+  const preview = buildTaskGraphReturnPreview(workspaceRoot, { observedAt });
+  return {
+    mode: preview.mode,
+    observedAt: preview.observedAt,
+    sourcePath: preview.sourcePath,
+    inboxPath: preview.inboxPath,
+    graphCount: preview.graphCount,
+    nodeCount: preview.nodeCount,
+    pendingReturnCount: preview.pendingReturnCount,
+    matchedNodeCount: preview.matchedNodeCount,
+    missingNodeCount: preview.missingNodeCount,
+    ambiguousNodeCount: preview.ambiguousNodeCount,
+    declaredReturnNodeCount: preview.declaredReturnNodeCount,
+    unmatchedReturnCount: preview.unmatchedReturnCount,
+    graphErrorCount: preview.graphErrors.length,
+    sampleUnmatchedReturns: preview.unmatchedReturns.slice(0, 5),
+    constraintsVerified: preview.constraintsVerified,
   };
 }
 
@@ -352,6 +378,7 @@ export function generateHudStateFromWorkspace(
     lastCaseAt,
     taskGraphItems: readTaskGraphs(workspaceRoot, warnings, taskGraphValidationSummary.reports),
     taskGraphSourcePath: `${TASK_GRAPH_SOURCE_REL}/`,
+    taskGraphReturnPreview: readTaskGraphReturnPreview(workspaceRoot, generatedAt),
     mirrorObserve: readLatestMirrorObserve(workspaceRoot, warnings),
     autoEvolutionObserve: readLatestAutoEvolutionObserve(workspaceRoot, warnings),
     semanticRebuild: readSemanticRebuildSummary(workspaceRoot),

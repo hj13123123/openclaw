@@ -3,6 +3,7 @@ import type { PromotionCandidatesScan } from "./distillation/promotion-candidate
 import type { RecoveryCandidateScanResult } from "./recovery-candidates.js";
 import type { ReturnConsumerPlanScanResult } from "./returns/return-consumer-plan.js";
 import type { SchedulerTickPlan } from "./scheduler-tick-plan.js";
+import type { TaskGraphReturnPreviewResult } from "./task-graph.js";
 
 export type HudAgentStatus =
   | "completed"
@@ -211,6 +212,26 @@ export type HudSchedulerTickPlanSummary = Pick<
   | "constraintsVerified"
 > & { warningCount: number };
 
+export type HudTaskGraphReturnPreviewSummary = Pick<
+  TaskGraphReturnPreviewResult,
+  | "mode"
+  | "observedAt"
+  | "sourcePath"
+  | "inboxPath"
+  | "graphCount"
+  | "nodeCount"
+  | "pendingReturnCount"
+  | "matchedNodeCount"
+  | "missingNodeCount"
+  | "ambiguousNodeCount"
+  | "declaredReturnNodeCount"
+  | "unmatchedReturnCount"
+  | "constraintsVerified"
+> & {
+  graphErrorCount: number;
+  sampleUnmatchedReturns: TaskGraphReturnPreviewResult["unmatchedReturns"];
+};
+
 export interface HudStateInput {
   generatedAt: string;
   positionStatesByAgentId?: Record<string, HudPositionState>;
@@ -220,6 +241,7 @@ export interface HudStateInput {
   lastCaseAt?: string | null;
   taskGraphItems?: HudTaskGraphItem[];
   taskGraphSourcePath?: string;
+  taskGraphReturnPreview?: HudTaskGraphReturnPreviewSummary;
   mirrorObserve?: HudMirrorObserveSummary;
   autoEvolutionObserve?: HudAutoEvolutionObserveSummary;
   semanticRebuild?: HudSemanticRebuildSummary;
@@ -270,6 +292,7 @@ export interface HudState {
     blocked: number;
     sourcePath: string;
     items: HudTaskGraphItem[];
+    returnPreview: HudTaskGraphReturnPreviewSummary;
   };
   mirrorObserve: HudMirrorObserveSummary;
   autoEvolutionObserve: HudAutoEvolutionObserveSummary;
@@ -588,6 +611,34 @@ function defaultSchedulerTickPlanSummary(generatedAt: string): HudSchedulerTickP
   };
 }
 
+function defaultTaskGraphReturnPreviewSummary(
+  observedAt: string,
+): HudTaskGraphReturnPreviewSummary {
+  return {
+    mode: "observe-only",
+    observedAt,
+    sourcePath: "runtime/main/tmp/v2-task-graph-01/",
+    inboxPath: "system/returns/inbox",
+    graphCount: 0,
+    nodeCount: 0,
+    pendingReturnCount: 0,
+    matchedNodeCount: 0,
+    missingNodeCount: 0,
+    ambiguousNodeCount: 0,
+    declaredReturnNodeCount: 0,
+    unmatchedReturnCount: 0,
+    graphErrorCount: 0,
+    sampleUnmatchedReturns: [],
+    constraintsVerified: {
+      graphMutated: "no",
+      returnConsumed: "no",
+      receiptWritten: "no",
+      dispatchTriggered: "no",
+      applied: "no",
+    },
+  };
+}
+
 function buildWatchdogConditions(
   mirrorObserve: HudMirrorObserveSummary,
   autoEvolutionObserve: HudAutoEvolutionObserveSummary,
@@ -597,6 +648,7 @@ function buildWatchdogConditions(
   returnConsumerPlan: HudReturnConsumerPlanSummary,
   promotionCandidates: HudPromotionCandidatesSummary,
   schedulerTickPlan: HudSchedulerTickPlanSummary,
+  taskGraphReturnPreview: HudTaskGraphReturnPreviewSummary,
 ): Record<string, number> {
   const byCondition: Record<string, number> = {};
   const taskGraphValidationErrorCount = taskGraphItems.filter(
@@ -702,6 +754,12 @@ function buildWatchdogConditions(
   if (schedulerTickPlan.decision === "already_running") {
     byCondition.schedulerAlreadyRunning = 1;
   }
+  if (taskGraphReturnPreview.unmatchedReturnCount > 0) {
+    byCondition.taskGraphUnmatchedReturns = taskGraphReturnPreview.unmatchedReturnCount;
+  }
+  if (taskGraphReturnPreview.graphErrorCount > 0) {
+    byCondition.taskGraphReturnPreviewError = taskGraphReturnPreview.graphErrorCount;
+  }
   return byCondition;
 }
 
@@ -724,6 +782,8 @@ export function generateHudState(input: HudStateInput): HudState {
   const promotionCandidates = input.promotionCandidates ?? defaultPromotionCandidatesSummary();
   const schedulerTickPlan =
     input.schedulerTickPlan ?? defaultSchedulerTickPlanSummary(input.generatedAt);
+  const taskGraphReturnPreview =
+    input.taskGraphReturnPreview ?? defaultTaskGraphReturnPreviewSummary(input.generatedAt);
   const watchdogConditions = buildWatchdogConditions(
     mirrorObserve,
     autoEvolutionObserve,
@@ -733,6 +793,7 @@ export function generateHudState(input: HudStateInput): HudState {
     returnConsumerPlan,
     promotionCandidates,
     schedulerTickPlan,
+    taskGraphReturnPreview,
   );
   const watchdogConditionAlertCount = Object.values(watchdogConditions).reduce(
     (sum, count) => sum + count,
@@ -790,6 +851,7 @@ export function generateHudState(input: HudStateInput): HudState {
         .length,
       sourcePath: input.taskGraphSourcePath ?? "runtime/main/tmp/v2-task-graph-01/",
       items: taskGraphItems,
+      returnPreview: taskGraphReturnPreview,
     },
     mirrorObserve,
     autoEvolutionObserve,

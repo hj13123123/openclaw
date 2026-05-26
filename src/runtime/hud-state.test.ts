@@ -132,6 +132,12 @@ describe("HUD state core", () => {
     expect(state.taskGraphs.total).toBe(6);
     expect(state.taskGraphs.active).toBe(5);
     expect(state.taskGraphs.blocked).toBe(1);
+    expect(state.taskGraphs.returnPreview).toMatchObject({
+      mode: "observe-only",
+      graphCount: 0,
+      pendingReturnCount: 0,
+      unmatchedReturnCount: 0,
+    });
     expect(state.taskGraphs.items.map((item) => item.graphId)).toEqual([
       "graph-a",
       "graph-b",
@@ -453,6 +459,55 @@ describe("HUD state core", () => {
         controlSignalScanError: 1,
         recoveryCandidates: 3,
         recoveryCandidateScanError: 1,
+      },
+    });
+  });
+
+  it("adds task graph return preview mismatches to watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      taskGraphReturnPreview: {
+        mode: "observe-only",
+        observedAt: generatedAt,
+        sourcePath: "runtime/main/tmp/v2-task-graph-01/",
+        inboxPath: "system/returns/inbox",
+        graphCount: 1,
+        nodeCount: 2,
+        pendingReturnCount: 2,
+        matchedNodeCount: 0,
+        missingNodeCount: 1,
+        ambiguousNodeCount: 0,
+        declaredReturnNodeCount: 1,
+        unmatchedReturnCount: 2,
+        graphErrorCount: 1,
+        sampleUnmatchedReturns: [
+          {
+            returnId: "return-a.json",
+            taskId: "TASK-A",
+            reason: "no_matching_task_node",
+          },
+        ],
+        constraintsVerified: {
+          graphMutated: "no",
+          returnConsumed: "no",
+          receiptWritten: "no",
+          dispatchTriggered: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.taskGraphs.returnPreview).toMatchObject({
+      graphCount: 1,
+      pendingReturnCount: 2,
+      unmatchedReturnCount: 2,
+      graphErrorCount: 1,
+    });
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 3,
+      byCondition: {
+        taskGraphUnmatchedReturns: 2,
+        taskGraphReturnPreviewError: 1,
       },
     });
   });
