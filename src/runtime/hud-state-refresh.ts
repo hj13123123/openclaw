@@ -10,6 +10,7 @@ import {
   type HudMirrorObserveSummary,
   type HudPositionState,
   type HudPromotionCandidatesSummary,
+  type HudReturnDiagnosisSummary,
   type HudSchedulerTickPlanSummary,
   type HudTaskGraphReturnPreviewSummary,
   type HudReturnConsumerPlanSummary,
@@ -20,6 +21,7 @@ import { readSemanticRebuildSummary } from "./kb-semantic-rebuild-state.js";
 import { readMirrorObserveState } from "./mirror/mirror-observe.js";
 import { scanRecoveryCandidates } from "./recovery-candidates.js";
 import { scanReturnConsumerPlan } from "./returns/return-consumer-plan.js";
+import { scanReturnDiagnosis } from "./returns/return-diagnosis.js";
 import { scanReturnInbox } from "./returns/return-inbox.js";
 import { buildSchedulerTickPlan } from "./scheduler-tick-plan.js";
 import {
@@ -143,6 +145,22 @@ function readReturnConsumerPlan(workspaceRoot: string): HudReturnConsumerPlanSum
     processCount: scan.processCount,
     skipCount: scan.skipCount,
     byReason: scan.byReason,
+    warningCount: scan.warnings.length,
+    constraintsVerified: scan.constraintsVerified,
+  };
+}
+
+function readReturnDiagnosis(workspaceRoot: string): HudReturnDiagnosisSummary {
+  const scan = scanReturnDiagnosis(workspaceRoot, { limit: 0 });
+  return {
+    mode: scan.mode,
+    scannedAt: scan.scannedAt,
+    inboxPath: scan.inboxPath,
+    totalCount: scan.totalCount,
+    diagnosableCount: scan.diagnosableCount,
+    byCompatibility: scan.byCompatibility,
+    bySuggestedAction: scan.bySuggestedAction,
+    byIssueCode: scan.byIssueCode,
     warningCount: scan.warnings.length,
     constraintsVerified: scan.constraintsVerified,
   };
@@ -374,6 +392,7 @@ export function generateHudStateFromWorkspace(
     positionStatesByAgentId: readPositionStates(workspaceRoot, warnings),
     pendingReturnItems: readPendingReturns(workspaceRoot, warnings),
     returnConsumerPlan: readReturnConsumerPlan(workspaceRoot),
+    returnDiagnosis: readReturnDiagnosis(workspaceRoot),
     totalCaseFiles,
     lastCaseAt,
     taskGraphItems: readTaskGraphs(workspaceRoot, warnings, taskGraphValidationSummary.reports),

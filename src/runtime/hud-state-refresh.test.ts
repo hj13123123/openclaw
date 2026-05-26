@@ -269,6 +269,24 @@ describe("HUD state refresh", () => {
           applied: "no",
         },
       });
+      expect(written.returnDiagnosis).toMatchObject({
+        mode: "observe-only",
+        inboxPath: "system/returns/inbox",
+        totalCount: 1,
+        diagnosableCount: 1,
+        byCompatibility: [{ compatibility: "v1-invalid", count: 1 }],
+        bySuggestedAction: [{ action: "manual-review", count: 1 }],
+        warningCount: 0,
+        constraintsVerified: {
+          readOnly: "yes",
+          returnWritten: "no",
+          returnConsumed: "no",
+          archived: "no",
+          receiptWritten: "no",
+          taskGraphMutated: "no",
+          applied: "no",
+        },
+      });
       expect(written.caseLibrary.totalCases).toBe(1);
       expect(written.taskGraphs).toMatchObject({
         total: 1,

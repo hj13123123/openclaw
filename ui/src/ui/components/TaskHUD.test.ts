@@ -45,6 +45,28 @@ describe("TaskHUD task graph validation", () => {
                 applied: "no",
               },
             },
+            returnDiagnosis: {
+              mode: "observe-only",
+              totalCount: 2,
+              diagnosableCount: 2,
+              warningCount: 0,
+              byCompatibility: [{ compatibility: "v2-shaped", count: 2 }],
+              bySuggestedAction: [{ action: "repair-to-v1-dry-run", count: 2 }],
+              byIssueCode: [
+                { code: "consumer_schema_invalid", count: 5 },
+                { code: "task_graph_unmatched", count: 2 },
+                { code: "v2_shape_not_consumer_v1", count: 2 },
+              ],
+              constraintsVerified: {
+                readOnly: "yes",
+                returnWritten: "no",
+                returnConsumed: "no",
+                archived: "no",
+                receiptWritten: "no",
+                taskGraphMutated: "no",
+                applied: "no",
+              },
+            },
             controlSignals: {
               mode: "observe-only",
               status: "frozen",
@@ -438,6 +460,13 @@ describe("TaskHUD task graph validation", () => {
     const text = element.shadowRoot?.textContent ?? "";
     const compactText = text.replace(/\s+/g, " ");
     expect(fetchMock).toHaveBeenCalledWith("/api/task-graph/validation");
+    expect(compactText).toContain("Return diagnosis");
+    expect(compactText).toContain("diagnosable 2");
+    expect(compactText).toContain("v2-shaped 路 2");
+    expect(compactText).toContain("repair-to-v1-dry-run 路 2");
+    expect(compactText).toContain("consumer_schema_invalid 路 5");
+    expect(compactText).toContain("diagnosis constraints");
+    expect(compactText).toContain("returnConsumed 路 no");
     expect(compactText).toContain("6 警告");
     expect(compactText).toContain("回执消费计划");
     expect(compactText).toContain("总数 2");

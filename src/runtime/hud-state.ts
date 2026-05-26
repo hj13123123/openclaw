@@ -2,6 +2,7 @@ import type { ControlSignalScanResult } from "./control-signals.js";
 import type { PromotionCandidatesScan } from "./distillation/promotion-candidates.js";
 import type { RecoveryCandidateScanResult } from "./recovery-candidates.js";
 import type { ReturnConsumerPlanScanResult } from "./returns/return-consumer-plan.js";
+import type { ReturnDiagnosisScanResult } from "./returns/return-diagnosis.js";
 import type { SchedulerTickPlan } from "./scheduler-tick-plan.js";
 import type { TaskGraphReturnPreviewResult } from "./task-graph.js";
 
@@ -183,6 +184,19 @@ export type HudReturnConsumerPlanSummary = Pick<
   | "constraintsVerified"
 > & { warningCount: number };
 
+export type HudReturnDiagnosisSummary = Pick<
+  ReturnDiagnosisScanResult,
+  | "mode"
+  | "scannedAt"
+  | "inboxPath"
+  | "totalCount"
+  | "diagnosableCount"
+  | "byCompatibility"
+  | "bySuggestedAction"
+  | "byIssueCode"
+  | "constraintsVerified"
+> & { warningCount: number };
+
 export type HudPromotionCandidatesSummary = Pick<
   PromotionCandidatesScan,
   | "available"
@@ -237,6 +251,7 @@ export interface HudStateInput {
   positionStatesByAgentId?: Record<string, HudPositionState>;
   pendingReturnItems?: HudPendingReturnItem[];
   returnConsumerPlan?: HudReturnConsumerPlanSummary;
+  returnDiagnosis?: HudReturnDiagnosisSummary;
   totalCaseFiles?: number;
   lastCaseAt?: string | null;
   taskGraphItems?: HudTaskGraphItem[];
@@ -286,6 +301,7 @@ export interface HudState {
     pendingItems: HudPendingReturnItem[];
   };
   returnConsumerPlan: HudReturnConsumerPlanSummary;
+  returnDiagnosis: HudReturnDiagnosisSummary;
   taskGraphs: {
     total: number;
     active: number;
@@ -542,6 +558,29 @@ function defaultReturnConsumerPlanSummary(scannedAt: string): HudReturnConsumerP
   };
 }
 
+function defaultReturnDiagnosisSummary(scannedAt: string): HudReturnDiagnosisSummary {
+  return {
+    mode: "observe-only",
+    scannedAt,
+    inboxPath: "system/returns/inbox",
+    totalCount: 0,
+    diagnosableCount: 0,
+    byCompatibility: [],
+    bySuggestedAction: [],
+    byIssueCode: [],
+    warningCount: 0,
+    constraintsVerified: {
+      readOnly: "yes",
+      returnWritten: "no",
+      returnConsumed: "no",
+      archived: "no",
+      receiptWritten: "no",
+      taskGraphMutated: "no",
+      applied: "no",
+    },
+  };
+}
+
 function defaultPromotionCandidatesSummary(): HudPromotionCandidatesSummary {
   return {
     available: false,
@@ -646,6 +685,7 @@ function buildWatchdogConditions(
   controlSignals: HudControlSignalsSummary,
   recoveryCandidates: HudRecoveryCandidatesSummary,
   returnConsumerPlan: HudReturnConsumerPlanSummary,
+  returnDiagnosis: HudReturnDiagnosisSummary,
   promotionCandidates: HudPromotionCandidatesSummary,
   schedulerTickPlan: HudSchedulerTickPlanSummary,
   taskGraphReturnPreview: HudTaskGraphReturnPreviewSummary,
@@ -732,6 +772,12 @@ function buildWatchdogConditions(
   if (returnConsumerPlan.warningCount > 0) {
     byCondition.returnConsumerPlanWarning = returnConsumerPlan.warningCount;
   }
+  if (returnDiagnosis.diagnosableCount > 0) {
+    byCondition.returnDiagnosisIssue = returnDiagnosis.diagnosableCount;
+  }
+  if (returnDiagnosis.warningCount > 0) {
+    byCondition.returnDiagnosisWarning = returnDiagnosis.warningCount;
+  }
   if (promotionCandidates.stats.invalid > 0) {
     byCondition.invalidPromotionCandidates = promotionCandidates.stats.invalid;
   }
@@ -779,6 +825,7 @@ export function generateHudState(input: HudStateInput): HudState {
   const recoveryCandidates = input.recoveryCandidates ?? defaultRecoveryCandidatesSummary();
   const returnConsumerPlan =
     input.returnConsumerPlan ?? defaultReturnConsumerPlanSummary(input.generatedAt);
+  const returnDiagnosis = input.returnDiagnosis ?? defaultReturnDiagnosisSummary(input.generatedAt);
   const promotionCandidates = input.promotionCandidates ?? defaultPromotionCandidatesSummary();
   const schedulerTickPlan =
     input.schedulerTickPlan ?? defaultSchedulerTickPlanSummary(input.generatedAt);
@@ -791,6 +838,7 @@ export function generateHudState(input: HudStateInput): HudState {
     controlSignals,
     recoveryCandidates,
     returnConsumerPlan,
+    returnDiagnosis,
     promotionCandidates,
     schedulerTickPlan,
     taskGraphReturnPreview,
@@ -843,6 +891,7 @@ export function generateHudState(input: HudStateInput): HudState {
       pendingItems: pendingReturnItems,
     },
     returnConsumerPlan,
+    returnDiagnosis,
     taskGraphs: {
       total: input.taskGraphItems?.length ?? 0,
       active: (input.taskGraphItems ?? []).filter((item) => item.aggregateStatus !== "completed")

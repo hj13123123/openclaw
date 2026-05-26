@@ -377,6 +377,13 @@ describe("HUD state core", () => {
       skipCount: 0,
       warningCount: 0,
     });
+    expect(state.returnDiagnosis).toMatchObject({
+      mode: "observe-only",
+      scannedAt: generatedAt,
+      totalCount: 0,
+      diagnosableCount: 0,
+      warningCount: 0,
+    });
     expect(state.promotionCandidates).toMatchObject({
       available: false,
       status: "missing",
@@ -548,6 +555,49 @@ describe("HUD state core", () => {
         returnConsumerProcessable: 1,
         returnConsumerSkipped: 3,
         returnConsumerPlanWarning: 2,
+      },
+    });
+  });
+
+  it("adds return diagnosis summary to watchdog conditions", () => {
+    const state = generateHudState({
+      generatedAt,
+      returnDiagnosis: {
+        mode: "observe-only",
+        scannedAt: generatedAt,
+        inboxPath: "system/returns/inbox",
+        totalCount: 2,
+        diagnosableCount: 2,
+        byCompatibility: [{ compatibility: "v2-shaped", count: 2 }],
+        bySuggestedAction: [{ action: "repair-to-v1-dry-run", count: 2 }],
+        byIssueCode: [
+          { code: "consumer_schema_invalid", count: 5 },
+          { code: "task_graph_unmatched", count: 2 },
+        ],
+        warningCount: 1,
+        constraintsVerified: {
+          readOnly: "yes",
+          returnWritten: "no",
+          returnConsumed: "no",
+          archived: "no",
+          receiptWritten: "no",
+          taskGraphMutated: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.returnDiagnosis).toMatchObject({
+      totalCount: 2,
+      diagnosableCount: 2,
+      byCompatibility: [{ compatibility: "v2-shaped", count: 2 }],
+      bySuggestedAction: [{ action: "repair-to-v1-dry-run", count: 2 }],
+    });
+    expect(state.watchdogSnapshot).toMatchObject({
+      totalAlerts: 3,
+      byCondition: {
+        returnDiagnosisIssue: 2,
+        returnDiagnosisWarning: 1,
       },
     });
   });

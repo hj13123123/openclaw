@@ -58,6 +58,17 @@ type ReturnConsumerPlanState = {
   constraintsVerified?: Record<string, string>;
 };
 
+type ReturnDiagnosisState = {
+  mode?: string;
+  totalCount?: number;
+  diagnosableCount?: number;
+  warningCount?: number;
+  byCompatibility?: Array<{ compatibility?: string; count?: number }>;
+  bySuggestedAction?: Array<{ action?: string; count?: number }>;
+  byIssueCode?: Array<{ code?: string; count?: number }>;
+  constraintsVerified?: Record<string, string>;
+};
+
 type ControlSignalsState = {
   mode?: string;
   status?: string;
@@ -471,6 +482,7 @@ type HUDState = {
     pendingItems?: ReturnPendingItem[];
   };
   returnConsumerPlan?: ReturnConsumerPlanState;
+  returnDiagnosis?: ReturnDiagnosisState;
   controlSignals?: ControlSignalsState;
   recoveryCandidates?: RecoveryCandidatesState;
   promotionCandidates?: PromotionCandidatesState;
@@ -1115,7 +1127,7 @@ export class TaskHUD extends LitElement {
 
       ${this.renderAgents(this.hud?.agentGroups ?? [])} ${this.renderActiveTasks(runningTasks)}
       ${this.renderReviews(reviews)} ${this.renderReturnConsumerPlan()}
-      ${this.renderSafetyControl()} ${this.renderWatchdog()}
+      ${this.renderReturnDiagnosis()} ${this.renderSafetyControl()} ${this.renderWatchdog()}
       ${this.renderTaskGraphs(this.hud?.taskGraphs?.items ?? [])}
       ${this.renderRecentCompletions(this.hud?.recentCompletions?.items ?? [])}
       ${this.renderScheduler()} ${this.renderRuntimeLoop()} ${this.renderTaskState()}
@@ -1265,6 +1277,94 @@ export class TaskHUD extends LitElement {
             </details>
           </div>
           <span class="badge">只读</span>
+        </div>
+      </section>
+    `;
+  }
+
+  private renderReturnDiagnosis() {
+    const diagnosis = this.hud?.returnDiagnosis;
+    if (!diagnosis || Number(diagnosis.totalCount ?? 0) <= 0) return nothing;
+    const compatibility = diagnosis.byCompatibility ?? [];
+    const actions = diagnosis.bySuggestedAction ?? [];
+    const issueCodes = diagnosis.byIssueCode ?? [];
+    const constraints = diagnosis.constraintsVerified ?? {};
+    return html`
+      <section class="section">
+        <h4 class="section-title">Return diagnosis</h4>
+        <div class="row">
+          <div>
+            <div class="primary">${text(diagnosis.mode, "observe-only")}</div>
+            <div class="secondary">
+              total ${diagnosis.totalCount ?? 0} 路 diagnosable ${diagnosis.diagnosableCount ?? 0}
+              路 warnings ${diagnosis.warningCount ?? 0}
+            </div>
+            ${compatibility.length > 0
+              ? html`
+                  <details class="details">
+                    <summary>view compatibility</summary>
+                    ${compatibility.slice(0, 5).map(
+                      (item) => html`
+                        <div class="issue">
+                          <div class="secondary">
+                            ${text(item.compatibility, "unknown")} 路 ${item.count ?? 0}
+                          </div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                `
+              : nothing}
+            ${actions.length > 0
+              ? html`
+                  <details class="details">
+                    <summary>view suggested actions</summary>
+                    ${actions.slice(0, 5).map(
+                      (item) => html`
+                        <div class="issue">
+                          <div class="secondary">
+                            ${text(item.action, "unknown")} 路 ${item.count ?? 0}
+                          </div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                `
+              : nothing}
+            ${issueCodes.length > 0
+              ? html`
+                  <details class="details">
+                    <summary>view issue codes</summary>
+                    ${issueCodes.slice(0, 6).map(
+                      (item) => html`
+                        <div class="issue">
+                          <div class="secondary">
+                            ${text(item.code, "unknown")} 路 ${item.count ?? 0}
+                          </div>
+                        </div>
+                      `,
+                    )}
+                  </details>
+                `
+              : nothing}
+            <details class="details">
+              <summary>view diagnosis constraints</summary>
+              ${[
+                ["returnConsumed", constraints.returnConsumed],
+                ["archived", constraints.archived],
+                ["receiptWritten", constraints.receiptWritten],
+                ["taskGraphMutated", constraints.taskGraphMutated],
+                ["applied", constraints.applied],
+              ].map(
+                ([label, value]) => html`
+                  <div class="issue">
+                    <div class="secondary">${label} 路 ${text(value, "unknown")}</div>
+                  </div>
+                `,
+              )}
+            </details>
+          </div>
+          <span class="badge">D5</span>
         </div>
       </section>
     `;
