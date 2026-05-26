@@ -473,7 +473,11 @@ function isAutoEvolutionStatePath(pathname: string): boolean {
 }
 
 function isTaskGraphStatePath(pathname: string): boolean {
-  return pathname === "/api/task-graph/validation" || pathname === "/api/task-graph/return-preview";
+  return (
+    pathname === "/api/task-graph/validation" ||
+    pathname === "/api/task-graph/return-preview" ||
+    pathname === "/api/task-graph/return-link-dry-run"
+  );
 }
 
 function isControlSignalsStatePath(pathname: string): boolean {

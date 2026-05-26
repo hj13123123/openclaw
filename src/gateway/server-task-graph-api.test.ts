@@ -82,6 +82,7 @@ describe("server task graph API", () => {
   it("matches only task graph validation API paths", () => {
     expect(isTaskGraphApiPath("/api/task-graph/validation")).toBe(true);
     expect(isTaskGraphApiPath("/api/task-graph/return-preview")).toBe(true);
+    expect(isTaskGraphApiPath("/api/task-graph/return-link-dry-run")).toBe(true);
     expect(isTaskGraphApiPath("/api/hud/state")).toBe(false);
     expect(isTaskGraphApiPath("/api/auto-evolution/state")).toBe(false);
   });
@@ -260,6 +261,57 @@ describe("server task graph API", () => {
             taskId: "TASK-A",
             matchStatus: "matched",
             matchedReturnIds: ["return-a.json"],
+          }),
+        ],
+      }),
+    });
+  });
+
+  it("returns return link dry-run plans without mutating task graphs", async () => {
+    const root = workspace();
+    writeJson(
+      path.join(root, "runtime", "main", "tmp", "v2-task-graph-01", "task-graph-a.json"),
+      graph({ status: "running", aggregateStatus: "running" }),
+    );
+    writeJson(path.join(root, "system", "returns", "inbox", "return-b.json"), {
+      routing: { taskId: "TASK-B", sourceRole: "front-end-executive", action: "complete" },
+      outcome: { summary: "done" },
+    });
+
+    const response = makeResponse();
+    const handled = await handleTaskGraphHttpRequest(
+      makeReq("/api/task-graph/return-link-dry-run", "GET"),
+      response.res,
+      root,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      data: expect.objectContaining({
+        mode: "observe-only",
+        dryRun: true,
+        candidateCount: 1,
+        linkableCount: 1,
+        blockedCount: 0,
+        constraintsVerified: {
+          readOnly: "yes",
+          taskGraphWritten: "no",
+          returnConsumed: "no",
+          receiptWritten: "no",
+          dispatchTriggered: "no",
+          applied: "no",
+        },
+        plans: [
+          expect.objectContaining({
+            returnId: "return-b.json",
+            taskId: "TASK-B",
+            linkable: true,
+            proposedNode: expect.objectContaining({
+              nodeId: "return-link-task-b",
+              role: "front-end-executive",
+            }),
           }),
         ],
       }),

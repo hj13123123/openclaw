@@ -1035,6 +1035,39 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("routes task graph return link dry-runs through the HTTP fast path", async () => {
+    await withGatewayServer({
+      prefix: "task-graph-return-link-dry-run-fast-path",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = createRequest({
+          path: "/api/task-graph/return-link-dry-run",
+        });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual(
+          expect.objectContaining({
+            ok: true,
+            data: expect.objectContaining({
+              mode: "observe-only",
+              dryRun: true,
+              constraintsVerified: {
+                readOnly: "yes",
+                taskGraphWritten: "no",
+                returnConsumed: "no",
+                receiptWritten: "no",
+                dispatchTriggered: "no",
+                applied: "no",
+              },
+            }),
+          }),
+        );
+      },
+    });
+  });
+
   it("returns detailed readiness payload for local /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: true,
