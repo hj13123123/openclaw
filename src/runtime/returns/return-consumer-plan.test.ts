@@ -77,6 +77,17 @@ describe("return consumer plan", () => {
       returnId: "legacy-return",
       taskId: "LEGACY-TASK",
     });
+    expect(
+      extractReturnPackageIdentity({
+        packageId: "v2-shaped-return",
+        task: {
+          taskId: "TASK-V2-SHAPE",
+        },
+      }),
+    ).toEqual({
+      returnId: "v2-shaped-return",
+      taskId: "TASK-V2-SHAPE",
+    });
   });
 
   it("plans a valid return for processing without writing anything", () => {

@@ -90,7 +90,9 @@ export function extractReturnPackageIdentity(pkg: RoleReturnPackageV1): {
 } {
   const returnId = asNonEmptyString(pkg.packageId) ?? asNonEmptyString(pkg.roleReturnPackageId);
   const taskId = isPlainObject(pkg.task)
-    ? asNonEmptyString(pkg.task.ticketId)
+    ? (asNonEmptyString(pkg.task.ticketId) ??
+      asNonEmptyString(pkg.task.taskId) ??
+      asNonEmptyString(pkg.taskId))
     : asNonEmptyString(pkg.taskId);
   return { returnId, taskId };
 }

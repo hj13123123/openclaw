@@ -88,6 +88,14 @@ function returnField(
   return nestedString(record, nestedPath) ?? firstString(record, [flatName]);
 }
 
+function returnTaskId(record: Record<string, unknown> | null): string | null {
+  return (
+    returnField(record, "routing.taskId", "taskId") ??
+    nestedString(record, "task.ticketId") ??
+    nestedString(record, "task.taskId")
+  );
+}
+
 function truncateText(value: string | null, maxLength = 120): string | null {
   if (!value) return value;
   return value.length <= maxLength ? value : value.slice(0, maxLength);
@@ -116,7 +124,7 @@ function readReturnInboxItem(
   const record = readJsonFile(filePath);
   const returnId = path.basename(filePath);
   if (!record) warnings.push(`Failed to parse return: ${returnId}`);
-  const taskId = returnField(record, "routing.taskId", "taskId");
+  const taskId = returnTaskId(record);
   const sourceRole = returnField(record, "routing.sourceRole", "sourceRole");
   const action = returnField(record, "routing.action", "action");
   const rawSummary = returnField(record, "outcome.summary", "summary");

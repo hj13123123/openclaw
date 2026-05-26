@@ -46,6 +46,11 @@ describe("return inbox scanner", () => {
           sourceRole: "front-end-executive",
         },
       });
+      const v2ShapePath = writeJson(workspaceRoot, "system/returns/inbox/return-v2-shape.json", {
+        task: {
+          taskId: "TASK-V2-SHAPE",
+        },
+      });
       writeJson(workspaceRoot, "system/returns/inbox/return.mock.skip.json", {
         taskId: "MOCK",
       });
@@ -57,6 +62,7 @@ describe("return inbox scanner", () => {
       const before = new Map([
         [completePath, readFileSync(completePath, "utf8")],
         [incompletePath, readFileSync(incompletePath, "utf8")],
+        [v2ShapePath, readFileSync(v2ShapePath, "utf8")],
         [malformedPath, readFileSync(malformedPath, "utf8")],
       ]);
 
@@ -67,9 +73,9 @@ describe("return inbox scanner", () => {
           mode: "observe-only",
           scannedAt: "2026-05-22T09:00:00.000Z",
           inboxPath: "system/returns/inbox",
-          pendingCount: 3,
+          pendingCount: 4,
           completeCount: 1,
-          incompleteCount: 2,
+          incompleteCount: 3,
           malformedCount: 1,
           skippedMockCount: 1,
           constraintsVerified: {
@@ -97,6 +103,13 @@ describe("return inbox scanner", () => {
             returnId: "return-b.json",
             taskId: "TASK-B",
             sourceRole: "front-end-executive",
+            summary: "[incomplete return]",
+            complete: false,
+            malformed: false,
+          }),
+          expect.objectContaining({
+            returnId: "return-v2-shape.json",
+            taskId: "TASK-V2-SHAPE",
             summary: "[incomplete return]",
             complete: false,
             malformed: false,
