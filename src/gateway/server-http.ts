@@ -99,6 +99,9 @@ let recoveryApiModulePromise: Promise<typeof import("./server-recovery-api.js")>
 let returnDiagnosisApiModulePromise:
   | Promise<typeof import("./server-return-diagnosis-api.js")>
   | undefined;
+let returnRepairDryRunApiModulePromise:
+  | Promise<typeof import("./server-return-repair-dry-run-api.js")>
+  | undefined;
 let promotionCandidatesApiModulePromise:
   | Promise<typeof import("./server-promotion-candidates-api.js")>
   | undefined;
@@ -172,6 +175,11 @@ function getRecoveryApiModule() {
 function getReturnDiagnosisApiModule() {
   returnDiagnosisApiModulePromise ??= import("./server-return-diagnosis-api.js");
   return returnDiagnosisApiModulePromise;
+}
+
+function getReturnRepairDryRunApiModule() {
+  returnRepairDryRunApiModulePromise ??= import("./server-return-repair-dry-run-api.js");
+  return returnRepairDryRunApiModulePromise;
 }
 
 function getPromotionCandidatesApiModule() {
@@ -478,6 +486,10 @@ function isRecoveryStatePath(pathname: string): boolean {
 
 function isReturnDiagnosisStatePath(pathname: string): boolean {
   return pathname === "/api/returns/diagnosis";
+}
+
+function isReturnRepairDryRunStatePath(pathname: string): boolean {
+  return pathname === "/api/returns/repair-dry-run";
 }
 
 function isPromotionCandidatesStatePath(pathname: string): boolean {
@@ -1267,6 +1279,14 @@ export function createGatewayHttpServer(opts: {
         const handled = await (
           await getReturnDiagnosisApiModule()
         ).handleReturnDiagnosisHttpRequest(req, res, hudWorkspaceRoot);
+        if (handled) {
+          return;
+        }
+      }
+      if (isReturnRepairDryRunStatePath(requestPath)) {
+        const handled = await (
+          await getReturnRepairDryRunApiModule()
+        ).handleReturnRepairDryRunHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }
