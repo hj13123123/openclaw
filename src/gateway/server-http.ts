@@ -105,6 +105,9 @@ let returnRepairDryRunApiModulePromise:
 let returnReconciliationGateApiModulePromise:
   | Promise<typeof import("./server-return-reconciliation-gate-api.js")>
   | undefined;
+let returnReconciliationApplyPlanApiModulePromise:
+  | Promise<typeof import("./server-return-reconciliation-apply-plan-api.js")>
+  | undefined;
 let promotionCandidatesApiModulePromise:
   | Promise<typeof import("./server-promotion-candidates-api.js")>
   | undefined;
@@ -188,6 +191,12 @@ function getReturnRepairDryRunApiModule() {
 function getReturnReconciliationGateApiModule() {
   returnReconciliationGateApiModulePromise ??= import("./server-return-reconciliation-gate-api.js");
   return returnReconciliationGateApiModulePromise;
+}
+
+function getReturnReconciliationApplyPlanApiModule() {
+  returnReconciliationApplyPlanApiModulePromise ??=
+    import("./server-return-reconciliation-apply-plan-api.js");
+  return returnReconciliationApplyPlanApiModulePromise;
 }
 
 function getPromotionCandidatesApiModule() {
@@ -506,6 +515,10 @@ function isReturnRepairDryRunStatePath(pathname: string): boolean {
 
 function isReturnReconciliationGateStatePath(pathname: string): boolean {
   return pathname === "/api/returns/reconciliation-gate";
+}
+
+function isReturnReconciliationApplyPlanStatePath(pathname: string): boolean {
+  return pathname === "/api/returns/reconciliation-apply-plan";
 }
 
 function isPromotionCandidatesStatePath(pathname: string): boolean {
@@ -1311,6 +1324,14 @@ export function createGatewayHttpServer(opts: {
         const handled = await (
           await getReturnReconciliationGateApiModule()
         ).handleReturnReconciliationGateHttpRequest(req, res, hudWorkspaceRoot);
+        if (handled) {
+          return;
+        }
+      }
+      if (isReturnReconciliationApplyPlanStatePath(requestPath)) {
+        const handled = await (
+          await getReturnReconciliationApplyPlanApiModule()
+        ).handleReturnReconciliationApplyPlanHttpRequest(req, res, hudWorkspaceRoot);
         if (handled) {
           return;
         }
