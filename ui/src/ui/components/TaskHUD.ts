@@ -76,6 +76,7 @@ type ReturnRepairDryRunState = {
   candidateCount?: number;
   repairableCount?: number;
   blockedCount?: number;
+  packagePreviewAvailableCount?: number;
   warningCount?: number;
   constraintsVerified?: Record<string, string>;
 };
@@ -1677,6 +1678,9 @@ export class TaskHUD extends LitElement {
                   <div class="secondary">
                     repair dry-run ${repair.repairableCount ?? 0}/${repair.candidateCount ?? 0} 路
                     blocked ${repair.blockedCount ?? 0} 路 warnings ${repair.warningCount ?? 0}
+                  </div>
+                  <div class="secondary">
+                    package preview available ${repair.packagePreviewAvailableCount ?? 0}
                   </div>
                 `
               : nothing}

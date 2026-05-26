@@ -809,6 +809,7 @@ describe("HUD state core", () => {
         candidateCount: 3,
         repairableCount: 2,
         blockedCount: 1,
+        packagePreviewAvailableCount: 2,
         warningCount: 1,
         constraintsVerified: {
           readOnly: "yes",

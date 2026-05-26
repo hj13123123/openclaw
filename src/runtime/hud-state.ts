@@ -266,7 +266,7 @@ export type HudReturnRepairDryRunSummary = Pick<
   | "repairableCount"
   | "blockedCount"
   | "constraintsVerified"
-> & { warningCount: number };
+> & { warningCount: number; packagePreviewAvailableCount: number };
 
 export type HudReturnReconciliationGateSummary = ReturnReconciliationGateResult;
 
@@ -792,6 +792,7 @@ function defaultReturnRepairDryRunSummary(plannedAt: string): HudReturnRepairDry
     candidateCount: 0,
     repairableCount: 0,
     blockedCount: 0,
+    packagePreviewAvailableCount: 0,
     warningCount: 0,
     constraintsVerified: {
       readOnly: "yes",

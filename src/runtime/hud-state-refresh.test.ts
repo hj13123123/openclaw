@@ -351,6 +351,7 @@ describe("HUD state refresh", () => {
         candidateCount: 0,
         repairableCount: 0,
         blockedCount: 0,
+        packagePreviewAvailableCount: 0,
         warningCount: 0,
         constraintsVerified: {
           readOnly: "yes",

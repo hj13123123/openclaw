@@ -191,6 +191,7 @@ function readReturnRepairDryRun(workspaceRoot: string): HudReturnRepairDryRunSum
     candidateCount: plan.candidateCount,
     repairableCount: plan.repairableCount,
     blockedCount: plan.blockedCount,
+    packagePreviewAvailableCount: plan.repairableCount,
     warningCount: plan.warnings.length,
     constraintsVerified: plan.constraintsVerified,
   };
