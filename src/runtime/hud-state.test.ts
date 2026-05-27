@@ -1063,6 +1063,31 @@ describe("HUD state core", () => {
         },
         verdict: "attention",
       },
+      mirrorObserve: {
+        available: true,
+        reportPath: "runtime/main/tmp/mirror-observe-a.json",
+        mirrorId: "mirror-a",
+        generatedAt,
+        mode: "observe-only",
+        stats: {
+          observationCount: 3,
+          findingCount: 2,
+          bySeverity: {
+            attention: 1,
+            warning: 1,
+          },
+        },
+        constraintsVerified: {
+          MEMORYWritten: "no",
+          ENGINEERING_RULESWritten: "no",
+          skillLibraryWritten: "no",
+          caseLibraryWritten: "no",
+          promoted: "none",
+          autoLoopTriggered: "no",
+          applyPerformed: "no",
+        },
+        verdict: "attention",
+      },
       recoveryCandidates: {
         mode: "observe-only",
         sourcePath: "runtime/main/tmp/v2-task-graph-01/",
@@ -1098,7 +1123,7 @@ describe("HUD state core", () => {
         },
         autonomousEvolution: {
           status: "needs_attention",
-          signalCount: 3,
+          signalCount: 5,
         },
         recoveryLoop: {
           status: "ready",

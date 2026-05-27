@@ -1200,13 +1200,19 @@ function buildLongmaV3SkillLane(
   );
 }
 
-function buildLongmaV3EvolutionLane(
-  autoEvolutionObserve: HudAutoEvolutionObserveSummary,
-): HudLongmaV3Lane {
+function buildLongmaV3EvolutionLane(input: {
+  autoEvolutionObserve: HudAutoEvolutionObserveSummary;
+  mirrorObserve: HudMirrorObserveSummary;
+}): HudLongmaV3Lane {
+  const { autoEvolutionObserve, mirrorObserve } = input;
   const suggestions = autoEvolutionObserve.stats?.totalSuggestions ?? 0;
   const highPriority =
     numberFromRecord(autoEvolutionObserve.stats?.byPriority, "P0") +
     numberFromRecord(autoEvolutionObserve.stats?.byPriority, "P1");
+  const mirrorFindings = mirrorObserve.stats?.findingCount ?? 0;
+  const mirrorAttention =
+    numberFromRecord(mirrorObserve.stats?.bySeverity, "critical") +
+    numberFromRecord(mirrorObserve.stats?.bySeverity, "attention");
   const constraintIssues = constraintViolationCount(autoEvolutionObserve.constraintsVerified, {
     MEMORYWritten: "no",
     ENGINEERING_RULESWritten: "no",
@@ -1217,22 +1223,30 @@ function buildLongmaV3EvolutionLane(
     applyPerformed: "no",
     autoEvolutionApplied: "no",
     continuousAutoLoopTriggered: "no",
+  }) + constraintViolationCount(mirrorObserve.constraintsVerified, {
+    MEMORYWritten: "no",
+    ENGINEERING_RULESWritten: "no",
+    skillLibraryWritten: "no",
+    caseLibraryWritten: "no",
+    promoted: "none",
+    autoLoopTriggered: "no",
+    applyPerformed: "no",
   });
   const status: HudLongmaV3LaneStatus =
-    highPriority > 0 || constraintIssues > 0
+    highPriority > 0 || mirrorAttention > 0 || constraintIssues > 0
       ? "needs_attention"
-      : suggestions > 0
+      : suggestions > 0 || mirrorFindings > 0
         ? "observe_only"
-        : autoEvolutionObserve.available
+        : autoEvolutionObserve.available || mirrorObserve.available
           ? "online"
           : "bootstrapping";
   return buildLongmaLane(
     "autonomous_evolution",
     "autonomous-evolution",
     status,
-    suggestions,
-    `${suggestions} suggestion(s), ${highPriority} high-priority`,
-    autoEvolutionObserve.reportPath,
+    suggestions + mirrorFindings,
+    `${suggestions} suggestion(s), ${highPriority} high-priority, ${mirrorFindings} mirror finding(s)`,
+    autoEvolutionObserve.reportPath ?? mirrorObserve.reportPath,
   );
 }
 
@@ -1270,6 +1284,7 @@ function buildLongmaV3Summary(input: {
   generatedAt: string;
   pendingReturnItems: readonly HudPendingReturnItem[];
   semanticRebuild: HudSemanticRebuildSummary;
+  mirrorObserve: HudMirrorObserveSummary;
   autoEvolutionObserve: HudAutoEvolutionObserveSummary;
   recoveryCandidates: HudRecoveryCandidatesSummary;
   returnConsumerPlan: HudReturnConsumerPlanSummary;
@@ -1282,7 +1297,10 @@ function buildLongmaV3Summary(input: {
   const lanes = {
     memoryContinuity: buildLongmaV3MemoryLane(input.semanticRebuild),
     skillDistillation: buildLongmaV3SkillLane(input.promotionCandidates, input.promoteGate),
-    autonomousEvolution: buildLongmaV3EvolutionLane(input.autoEvolutionObserve),
+    autonomousEvolution: buildLongmaV3EvolutionLane({
+      autoEvolutionObserve: input.autoEvolutionObserve,
+      mirrorObserve: input.mirrorObserve,
+    }),
     recoveryLoop: buildLongmaV3RecoveryLane(input),
   };
   const laneValues = Object.values(lanes);
@@ -1564,6 +1582,7 @@ export function generateHudState(input: HudStateInput): HudState {
       generatedAt: input.generatedAt,
       pendingReturnItems,
       semanticRebuild,
+      mirrorObserve,
       autoEvolutionObserve,
       recoveryCandidates,
       returnConsumerPlan,
