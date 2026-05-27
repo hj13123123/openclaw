@@ -225,6 +225,7 @@ export class LongmaCockpit extends LitElement {
   @state() private cameraStatus = "摄像头待接入";
   @state() private cameraActive = false;
   @state() private distillStatus = "技能沉淀预检待命";
+  @state() private memoryStatus = "记忆连续预检待命";
 
   @query(".core-canvas") private coreCanvas?: HTMLCanvasElement;
   @query(".vision-preview") private visionPreview?: HTMLVideoElement;
@@ -280,6 +281,20 @@ export class LongmaCockpit extends LitElement {
       await this.refreshHud();
     } catch (error) {
       this.distillStatus = "技能沉淀预检失败";
+      this.notice = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  private async runMemoryContinuityCheck() {
+    this.memoryStatus = "记忆连续预检中";
+    try {
+      const response = await fetch("/api/kb/semantic-rebuild-plan", { method: "POST" });
+      if (!response.ok) throw new Error(`记忆连续预检失败：${response.status}`);
+      this.memoryStatus = "记忆连续预检完成";
+      this.notice = "记忆连续预检已完成：只生成语义 dry-run 计划，未写入向量索引。";
+      await this.refreshHud();
+    } catch (error) {
+      this.memoryStatus = "记忆连续预检失败";
       this.notice = error instanceof Error ? error.message : String(error);
     }
   }
@@ -949,6 +964,13 @@ export class LongmaCockpit extends LitElement {
               @click=${() => void this.runSkillDistillationCheck()}
             >
               ${this.distillStatus}
+            </button>
+            <button
+              type="button"
+              class="sensory-button"
+              @click=${() => void this.runMemoryContinuityCheck()}
+            >
+              ${this.memoryStatus}
             </button>
           </div>
           ${this.cameraActive

@@ -93,6 +93,17 @@ describe("LongmaCockpit", () => {
           promoted: "none",
         });
       }
+      if (url.endsWith("/api/kb/semantic-rebuild-plan")) {
+        expect(init?.method).toBe("POST");
+        return jsonResponse({
+          status: "ready",
+          mode: "dry-run",
+          constraintsVerified: {
+            embeddingCalls: "no",
+            vectorIndexWritten: "no",
+          },
+        });
+      }
       return jsonResponse(hudPayload);
     });
 
@@ -233,6 +244,17 @@ describe("LongmaCockpit", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/promote-gate/dry-run", { method: "POST" });
     expect(element.shadowRoot?.textContent).toContain("技能沉淀预检完成");
     expect(element.shadowRoot?.textContent).toContain("只读 dry-run，未写入技能库");
+
+    const memoryButton = [...(element.shadowRoot?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent?.includes("记忆连续预检待命"),
+    );
+    memoryButton?.click();
+    await element.updateComplete;
+    await nextFrame();
+    await element.updateComplete;
+    expect(fetchMock).toHaveBeenCalledWith("/api/kb/semantic-rebuild-plan", { method: "POST" });
+    expect(element.shadowRoot?.textContent).toContain("记忆连续预检完成");
+    expect(element.shadowRoot?.textContent).toContain("未写入向量索引");
 
     sendMessage.mockClear();
     const input = element.shadowRoot?.querySelector("input") as HTMLInputElement | null;
