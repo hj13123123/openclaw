@@ -118,6 +118,7 @@ describe("LongmaCockpit", () => {
 
     const element = document.createElement("longma-cockpit") as HTMLElement & {
       connected: boolean;
+      devices?: unknown;
       messages?: unknown[];
       sendMessage?: (message: string) => Promise<void>;
       updateComplete: Promise<boolean>;
@@ -181,6 +182,10 @@ describe("LongmaCockpit", () => {
       speaking: false,
     };
     element.connected = true;
+    element.devices = {
+      pending: [{ deviceId: "rk3588-node" }],
+      paired: [{ deviceId: "windows-main" }],
+    };
     element.messages = [
       { role: "user", content: "检查 V3 状态" },
       { role: "assistant", content: [{ type: "text", text: "D13 操作舱在线。" }] },
@@ -202,6 +207,7 @@ describe("LongmaCockpit", () => {
     expect(text).toContain("记忆 在线 14 语义项");
     expect(text).toContain("技能 就绪 2 候选");
     expect(text).toContain("进化 需要关注 1 建议");
+    expect(text).toContain("设备 1 已配对 1 待审批");
     expect(text).toContain("drain return and recovery queues through dry-run gates");
     expect(text).toContain("main 已完成");
     expect(text).toContain("语义知识：已完成");

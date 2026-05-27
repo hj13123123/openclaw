@@ -2047,6 +2047,7 @@ export function renderApp(state: AppViewState) {
         .chatSending=${state.chatSending}
         .chatError=${state.lastError}
         .messages=${state.chatMessages}
+        .devices=${state.devicesList}
         .sendMessage=${async (message: string) => {
           state.chatMessage = message;
           requestHostUpdate?.();

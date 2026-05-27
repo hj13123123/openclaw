@@ -67,6 +67,11 @@ type ChatMessageLike = {
   content?: unknown;
 };
 
+type LongmaDeviceList = {
+  pending?: unknown[];
+  paired?: unknown[];
+};
+
 type Particle = {
   x: number;
   y: number;
@@ -209,6 +214,7 @@ export class LongmaCockpit extends LitElement {
   @property({ type: Boolean }) chatSending = false;
   @property({ attribute: false }) chatError: string | null = null;
   @property({ attribute: false }) messages: unknown[] = [];
+  @property({ attribute: false }) devices: LongmaDeviceList | null = null;
   @property({ attribute: false }) sendMessage?: (message: string) => Promise<void> | void;
 
   @state() private hud: HudState | null = null;
@@ -739,6 +745,8 @@ export class LongmaCockpit extends LitElement {
     const skillLane = this.v3Lane("skillDistillation");
     const evolutionLane = this.v3Lane("autonomousEvolution");
     const recoveryLane = this.v3Lane("recoveryLoop");
+    const pairedDevices = Array.isArray(this.devices?.paired) ? this.devices.paired.length : 0;
+    const pendingDevices = Array.isArray(this.devices?.pending) ? this.devices.pending.length : 0;
     return [
       {
         label: "记忆",
@@ -767,8 +775,8 @@ export class LongmaCockpit extends LitElement {
       },
       {
         label: "设备",
-        value: this.connected ? "在线" : "离线",
-        meta: "本机节点",
+        value: this.connected ? `${pairedDevices} 已配对` : "离线",
+        meta: pendingDevices > 0 ? `${pendingDevices} 待审批` : "本机节点",
       },
       {
         label: "进化",
