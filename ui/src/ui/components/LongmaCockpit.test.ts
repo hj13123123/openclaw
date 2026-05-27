@@ -204,7 +204,9 @@ describe("LongmaCockpit", () => {
     element.connected = true;
     element.devices = {
       pending: [{ deviceId: "rk3588-node" }],
-      paired: [{ deviceId: "windows-main" }],
+      paired: [
+        { deviceId: "windows-main", roles: ["operator"], scopes: ["session.read", "tool.invoke"] },
+      ],
     };
     element.messages = [
       { role: "user", content: "检查 V3 状态" },
@@ -227,7 +229,7 @@ describe("LongmaCockpit", () => {
     expect(text).toContain("记忆 在线 14 语义项");
     expect(text).toContain("技能 就绪 2 候选");
     expect(text).toContain("进化 需要关注 1 建议");
-    expect(text).toContain("设备 1 已配对 1 待审批");
+    expect(text).toContain("设备 1 已配对 1 待审批 · 1 角色");
     expect(text).toContain("镜像 观察中 3 观察 · 2 发现");
     expect(text).toContain("先处理镜像观察发现，再开放自进化应用");
     expect(text).not.toContain("triage mirror observe findings before enabling auto-evolution apply");

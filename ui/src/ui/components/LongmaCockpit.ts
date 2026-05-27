@@ -129,6 +129,19 @@ function itemCount(value: unknown): number {
   return 0;
 }
 
+function uniqueDeviceFieldCount(devices: unknown[] | undefined, field: "roles" | "scopes"): number {
+  const values = new Set<string>();
+  for (const device of devices ?? []) {
+    if (!device || typeof device !== "object") continue;
+    const fieldValue = (device as Record<string, unknown>)[field];
+    if (!Array.isArray(fieldValue)) continue;
+    for (const value of fieldValue) {
+      if (typeof value === "string" && value.trim()) values.add(value.trim());
+    }
+  }
+  return values.size;
+}
+
 function formatFreshness(value: string | undefined): string {
   if (!value) return "遥测未生成";
   const timestamp = Date.parse(value);
@@ -797,6 +810,15 @@ export class LongmaCockpit extends LitElement {
     const recoveryLane = this.v3Lane("recoveryLoop");
     const pairedDevices = Array.isArray(this.devices?.paired) ? this.devices.paired.length : 0;
     const pendingDevices = Array.isArray(this.devices?.pending) ? this.devices.pending.length : 0;
+    const pairedList = Array.isArray(this.devices?.paired) ? this.devices.paired : [];
+    const deviceRoles = uniqueDeviceFieldCount(pairedList, "roles");
+    const deviceScopes = uniqueDeviceFieldCount(pairedList, "scopes");
+    const deviceMeta =
+      pendingDevices > 0
+        ? `${pendingDevices} 待审批${deviceRoles > 0 ? ` · ${deviceRoles} 角色` : ""}`
+        : deviceRoles > 0 || deviceScopes > 0
+          ? `${deviceRoles} 角色 · ${deviceScopes} 权限`
+          : "本机节点";
     const mirrorStats = this.hud?.mirrorObserve?.stats;
     return [
       {
@@ -827,7 +849,7 @@ export class LongmaCockpit extends LitElement {
       {
         label: "设备",
         value: this.connected ? `${pairedDevices} 已配对` : "离线",
-        meta: pendingDevices > 0 ? `${pendingDevices} 待审批` : "本机节点",
+        meta: deviceMeta,
       },
       {
         label: "镜像",
