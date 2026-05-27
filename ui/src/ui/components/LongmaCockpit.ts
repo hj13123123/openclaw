@@ -253,6 +253,7 @@ export class LongmaCockpit extends LitElement {
   @state() private cameraActive = false;
   @state() private distillStatus = "技能沉淀预检待命";
   @state() private memoryStatus = "记忆连续预检待命";
+  @state() private mirrorStatus = "镜像观察待命";
   @state() private evolutionStatus = "自进化观察待命";
 
   @query(".core-canvas") private coreCanvas?: HTMLCanvasElement;
@@ -323,6 +324,20 @@ export class LongmaCockpit extends LitElement {
       await this.refreshHud();
     } catch (error) {
       this.memoryStatus = "记忆连续预检失败";
+      this.notice = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  private async runMirrorObserve() {
+    this.mirrorStatus = "镜像观察中";
+    try {
+      const response = await fetch("/api/mirror/observe", { method: "POST" });
+      if (!response.ok) throw new Error(`镜像观察失败：${response.status}`);
+      this.mirrorStatus = "镜像观察完成";
+      this.notice = "镜像观察已完成：observe-only，未执行推广或应用。";
+      await this.refreshHud();
+    } catch (error) {
+      this.mirrorStatus = "镜像观察失败";
       this.notice = error instanceof Error ? error.message : String(error);
     }
   }
@@ -1016,6 +1031,13 @@ export class LongmaCockpit extends LitElement {
               @click=${() => void this.runMemoryContinuityCheck()}
             >
               ${this.memoryStatus}
+            </button>
+            <button
+              type="button"
+              class="sensory-button"
+              @click=${() => void this.runMirrorObserve()}
+            >
+              ${this.mirrorStatus}
             </button>
             <button
               type="button"

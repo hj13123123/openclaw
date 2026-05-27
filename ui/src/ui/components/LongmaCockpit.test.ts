@@ -113,6 +113,16 @@ describe("LongmaCockpit", () => {
           autoEvolutionApplied: false,
         });
       }
+      if (url.endsWith("/api/mirror/observe")) {
+        expect(init?.method).toBe("POST");
+        return jsonResponse({
+          status: "PASS",
+          mode: "observe-only",
+          observeOnly: true,
+          promoted: "none",
+          applied: false,
+        });
+      }
       return jsonResponse(hudPayload);
     });
 
@@ -271,6 +281,17 @@ describe("LongmaCockpit", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/kb/semantic-rebuild-plan", { method: "POST" });
     expect(element.shadowRoot?.textContent).toContain("记忆连续预检完成");
     expect(element.shadowRoot?.textContent).toContain("未写入向量索引");
+
+    const mirrorButton = [...(element.shadowRoot?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent?.includes("镜像观察待命"),
+    );
+    mirrorButton?.click();
+    await element.updateComplete;
+    await nextFrame();
+    await element.updateComplete;
+    expect(fetchMock).toHaveBeenCalledWith("/api/mirror/observe", { method: "POST" });
+    expect(element.shadowRoot?.textContent).toContain("镜像观察完成");
+    expect(element.shadowRoot?.textContent).toContain("未执行推广或应用");
 
     const evolutionButton = [...(element.shadowRoot?.querySelectorAll("button") ?? [])].find(
       (button) => button.textContent?.includes("自进化观察待命"),
