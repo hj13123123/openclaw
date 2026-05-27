@@ -2,6 +2,11 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import path from "node:path";
 import { scanControlSignals } from "./control-signals.js";
 import { scanPromotionCandidates } from "./distillation/promotion-candidates.js";
+import {
+  PROMOTE_GATE_REPORT_DIR_RELATIVE_PATH,
+  readLatestPromoteGateReport,
+  summarizePromoteGateDryRun,
+} from "./distillation/promote-gate-dry-run.js";
 import { readAutoEvolutionState } from "./evolution/auto-evolution-observe.js";
 import {
   generateHudState,
@@ -12,6 +17,7 @@ import {
   type HudPositionConfigAuditSummary,
   type HudPositionConfigCleanupGateSummary,
   type HudPositionConfigCleanupPlanSummary,
+  type HudPromoteGateSummary,
   type HudPromotionCandidatesSummary,
   type HudReturnDiagnosisSummary,
   type HudReturnReconciliationApplyPlanSummary,
@@ -242,6 +248,54 @@ function readPromotionCandidates(workspaceRoot: string): HudPromotionCandidatesS
     stats: scan.stats,
     errorCount: scan.errors.length,
     constraintsVerified: scan.constraintsVerified,
+  };
+}
+
+function readPromoteGateSummary(workspaceRoot: string): HudPromoteGateSummary {
+  const latest = readLatestPromoteGateReport(workspaceRoot);
+  if (!latest.path) {
+    return {
+      available: false,
+      reportDir: PROMOTE_GATE_REPORT_DIR_RELATIVE_PATH,
+      reportPath: null,
+      error: null,
+      status: null,
+      mode: null,
+      generatedAt: null,
+      frozenActive: null,
+      outputFile: null,
+      stats: null,
+      constraintsVerified: null,
+    };
+  }
+  if (latest.error || !latest.data) {
+    return {
+      available: false,
+      reportDir: PROMOTE_GATE_REPORT_DIR_RELATIVE_PATH,
+      reportPath: latest.path,
+      error: `Promote gate state read failed: ${latest.error ?? "report missing"}`,
+      status: null,
+      mode: null,
+      generatedAt: null,
+      frozenActive: null,
+      outputFile: null,
+      stats: null,
+      constraintsVerified: null,
+    };
+  }
+  const summary = summarizePromoteGateDryRun(latest.data);
+  return {
+    available: true,
+    reportDir: PROMOTE_GATE_REPORT_DIR_RELATIVE_PATH,
+    reportPath: latest.path,
+    error: null,
+    status: summary.status,
+    mode: summary.mode,
+    generatedAt: summary.generatedAt,
+    frozenActive: summary.frozenActive,
+    outputFile: summary.outputFile,
+    stats: summary.stats,
+    constraintsVerified: summary.constraintsVerified,
   };
 }
 
@@ -592,6 +646,7 @@ export function generateHudStateFromWorkspace(
       };
     })(),
     promotionCandidates: readPromotionCandidates(workspaceRoot),
+    promoteGate: readPromoteGateSummary(workspaceRoot),
     schedulerTickPlan: readSchedulerTickPlan(workspaceRoot, generatedAt),
     warnings,
   });

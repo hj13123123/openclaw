@@ -300,6 +300,24 @@ export type HudPromotionCandidatesSummary = Pick<
   | "constraintsVerified"
 > & { errorCount: number };
 
+export interface HudPromoteGateSummary {
+  available: boolean;
+  reportDir: string;
+  reportPath: string | null;
+  error: string | null;
+  status: string | null;
+  mode: string | null;
+  generatedAt: string | null;
+  frozenActive: boolean | null;
+  outputFile: string | null;
+  stats: {
+    total: number;
+    byVerdict: Record<string, number>;
+    byType: Record<string, number>;
+  } | null;
+  constraintsVerified: Record<string, string> | null;
+}
+
 export type HudSchedulerTickPlanSummary = Pick<
   SchedulerTickPlan,
   | "mode"
@@ -413,6 +431,7 @@ export interface HudStateInput {
   positionConfigCleanupGate?: HudPositionConfigCleanupGateSummary;
   recoveryCandidates?: HudRecoveryCandidatesSummary;
   promotionCandidates?: HudPromotionCandidatesSummary;
+  promoteGate?: HudPromoteGateSummary;
   schedulerTickPlan?: HudSchedulerTickPlanSummary;
   longmaV3?: HudLongmaV3Summary;
   warnings?: string[];
@@ -474,6 +493,7 @@ export interface HudState {
   positionConfigCleanupGate: HudPositionConfigCleanupGateSummary;
   recoveryCandidates: HudRecoveryCandidatesSummary;
   promotionCandidates: HudPromotionCandidatesSummary;
+  promoteGate: HudPromoteGateSummary;
   schedulerTickPlan: HudSchedulerTickPlanSummary;
   longmaV3: HudLongmaV3Summary;
   warnings: string[];
@@ -943,6 +963,22 @@ function defaultPromotionCandidatesSummary(): HudPromotionCandidatesSummary {
   };
 }
 
+function defaultPromoteGateSummary(): HudPromoteGateSummary {
+  return {
+    available: false,
+    reportDir: "runtime/main/tmp",
+    reportPath: null,
+    error: null,
+    status: null,
+    mode: null,
+    generatedAt: null,
+    frozenActive: null,
+    outputFile: null,
+    stats: null,
+    constraintsVerified: null,
+  };
+}
+
 function defaultSchedulerTickPlanSummary(generatedAt: string): HudSchedulerTickPlanSummary {
   return {
     mode: "observe-only",
@@ -1119,32 +1155,48 @@ function buildLongmaV3MemoryLane(
 
 function buildLongmaV3SkillLane(
   promotionCandidates: HudPromotionCandidatesSummary,
+  promoteGate: HudPromoteGateSummary,
 ): HudLongmaV3Lane {
   const consistencyIssueCount = Object.entries(promotionCandidates.stats.byConsistency).reduce(
     (sum, [key, value]) => (key === "ok" ? sum : sum + Math.max(0, value)),
     0,
   );
+  const gateStats = promoteGate.stats;
+  const promoteReady =
+    numberFromRecord(gateStats?.byVerdict, "READY_FOR_PROMOTE_GATE") +
+    numberFromRecord(gateStats?.byVerdict, "ROUTE_D1_CONTROLLED_APPLY") +
+    numberFromRecord(gateStats?.byVerdict, "WAITING_SEPARATE_ENGINEERING_RULE_APPROVAL");
+  const promoteAttention =
+    numberFromRecord(gateStats?.byVerdict, "WAITING_REVIEW") +
+    numberFromRecord(gateStats?.byVerdict, "NEEDS_EVIDENCE") +
+    numberFromRecord(gateStats?.byVerdict, "FROZEN_BLOCKED") +
+    numberFromRecord(gateStats?.byVerdict, "BLOCKED") +
+    (promoteGate.error ? 1 : 0);
   const issueCount =
-    promotionCandidates.stats.invalid + promotionCandidates.errorCount + consistencyIssueCount;
+    promotionCandidates.stats.invalid +
+    promotionCandidates.errorCount +
+    consistencyIssueCount +
+    promoteAttention;
   const safeApplyEligible = promotionCandidates.stats.safeApplyEligible;
   const totalCandidates = promotionCandidates.stats.total;
+  const gateTotal = gateStats?.total ?? 0;
   const status: HudLongmaV3LaneStatus =
     issueCount > 0
       ? "needs_attention"
-      : safeApplyEligible > 0
+      : safeApplyEligible > 0 || promoteReady > 0
         ? "ready"
-        : totalCandidates > 0
+        : totalCandidates > 0 || gateTotal > 0
           ? "observe_only"
-          : promotionCandidates.available
+          : promotionCandidates.available || promoteGate.available
             ? "online"
             : "bootstrapping";
   return buildLongmaLane(
     "skill_distillation",
     "skill-distillation",
     status,
-    totalCandidates,
-    `${safeApplyEligible} safe candidate(s), ${issueCount} issue(s)`,
-    promotionCandidates.sourceFile,
+    totalCandidates + gateTotal,
+    `${safeApplyEligible} safe candidate(s), ${promoteReady} promote-ready plan(s), ${issueCount} issue(s)`,
+    promoteGate.reportPath ?? promotionCandidates.sourceFile,
   );
 }
 
@@ -1225,10 +1277,11 @@ function buildLongmaV3Summary(input: {
   returnRepairDryRun: HudReturnRepairDryRunSummary;
   returnReconciliationApplyPlan: HudReturnReconciliationApplyPlanSummary;
   promotionCandidates: HudPromotionCandidatesSummary;
+  promoteGate: HudPromoteGateSummary;
 }): HudLongmaV3Summary {
   const lanes = {
     memoryContinuity: buildLongmaV3MemoryLane(input.semanticRebuild),
-    skillDistillation: buildLongmaV3SkillLane(input.promotionCandidates),
+    skillDistillation: buildLongmaV3SkillLane(input.promotionCandidates, input.promoteGate),
     autonomousEvolution: buildLongmaV3EvolutionLane(input.autoEvolutionObserve),
     recoveryLoop: buildLongmaV3RecoveryLane(input),
   };
@@ -1498,6 +1551,7 @@ export function generateHudState(input: HudStateInput): HudState {
     input.returnReconciliationApplyPlan ??
     defaultReturnReconciliationApplyPlanSummary(input.generatedAt);
   const promotionCandidates = input.promotionCandidates ?? defaultPromotionCandidatesSummary();
+  const promoteGate = input.promoteGate ?? defaultPromoteGateSummary();
   const schedulerTickPlan =
     input.schedulerTickPlan ?? defaultSchedulerTickPlanSummary(input.generatedAt);
   const taskGraphReturnPreview =
@@ -1517,6 +1571,7 @@ export function generateHudState(input: HudStateInput): HudState {
       returnRepairDryRun,
       returnReconciliationApplyPlan,
       promotionCandidates,
+      promoteGate,
     });
   const watchdogConditions = buildWatchdogConditions(
     mirrorObserve,
@@ -1608,6 +1663,7 @@ export function generateHudState(input: HudStateInput): HudState {
     positionConfigCleanupGate,
     recoveryCandidates,
     promotionCandidates,
+    promoteGate,
     schedulerTickPlan,
     longmaV3,
     warnings,

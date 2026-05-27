@@ -1120,6 +1120,51 @@ describe("HUD state core", () => {
     ]);
   });
 
+  it("includes promote gate dry-run plans in the V3 skill distillation lane", () => {
+    const state = generateHudState({
+      generatedAt,
+      promoteGate: {
+        available: true,
+        reportDir: "runtime/main/tmp",
+        reportPath: "runtime/main/tmp/d9-promote-gate-dryrun-a.json",
+        error: null,
+        status: "PASS",
+        mode: "dry-run",
+        generatedAt,
+        frozenActive: false,
+        outputFile: "runtime/main/tmp/d9-promote-gate-dryrun-a.json",
+        stats: {
+          total: 2,
+          byVerdict: {
+            READY_FOR_PROMOTE_GATE: 1,
+            WAITING_REVIEW: 1,
+          },
+          byType: {
+            skill: 2,
+          },
+        },
+        constraintsVerified: {
+          promoted: "none",
+          autoPromote: "disabled",
+        },
+      },
+    });
+
+    expect(state.promoteGate).toMatchObject({
+      available: true,
+      reportPath: "runtime/main/tmp/d9-promote-gate-dryrun-a.json",
+      stats: {
+        total: 2,
+      },
+    });
+    expect(state.longmaV3.lanes.skillDistillation).toMatchObject({
+      status: "needs_attention",
+      signalCount: 2,
+      sourcePath: "runtime/main/tmp/d9-promote-gate-dryrun-a.json",
+      detail: "0 safe candidate(s), 1 promote-ready plan(s), 1 issue(s)",
+    });
+  });
+
   it("adds scheduler tick plan safety states to watchdog conditions", () => {
     const state = generateHudState({
       generatedAt,

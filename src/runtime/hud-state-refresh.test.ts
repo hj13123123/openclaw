@@ -111,6 +111,35 @@ describe("HUD state refresh", () => {
         lastSyncedAt: "2026-05-20T00:01:20.000Z",
         candidates: [{ index: 0, approvedAt: "2026-05-20T00:01:21.000Z" }],
       });
+      writeJson(
+        workspaceRoot,
+        "runtime/main/tmp/d9-promote-gate-dryrun-2026-05-20T00-01-30-000Z.json",
+        {
+          status: "PASS",
+          mode: "dry-run",
+          generatedAt: "2026-05-20T00:01:30.000Z",
+          frozenActive: false,
+          outputFile: null,
+          stats: {
+            total: 1,
+            byVerdict: {
+              READY_FOR_PROMOTE_GATE: 1,
+            },
+            byType: {
+              skill: 1,
+            },
+          },
+          constraintsVerified: {
+            MEMORYWritten: "no",
+            ENGINEERING_RULESWritten: "no",
+            skillLibraryWritten: "no",
+            caseLibraryWritten: "no",
+            appliedLogWritten: "no",
+            promoted: "none",
+            autoPromote: "disabled",
+          },
+        },
+      );
       writeJson(workspaceRoot, "runtime/main/tmp/task-scheduler-enabled.json", {
         enabled: true,
         mode: "observe",
@@ -486,6 +515,26 @@ describe("HUD state refresh", () => {
           rolledBack: "none",
           autoPromote: "disabled",
         },
+      });
+      expect(written.promoteGate).toMatchObject({
+        available: true,
+        reportPath: "runtime/main/tmp/d9-promote-gate-dryrun-2026-05-20T00-01-30-000Z.json",
+        status: "PASS",
+        mode: "dry-run",
+        stats: {
+          total: 1,
+          byVerdict: {
+            READY_FOR_PROMOTE_GATE: 1,
+          },
+          byType: {
+            skill: 1,
+          },
+        },
+      });
+      expect(written.longmaV3.lanes.skillDistillation).toMatchObject({
+        status: "ready",
+        signalCount: 2,
+        sourcePath: "runtime/main/tmp/d9-promote-gate-dryrun-2026-05-20T00-01-30-000Z.json",
       });
       expect(written.schedulerTickPlan).toMatchObject({
         mode: "observe-only",
