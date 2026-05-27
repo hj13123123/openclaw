@@ -39,52 +39,62 @@ describe("LongmaCockpit", () => {
   it("renders the Chinese Longma OS shell and sends prompt input to the main session", async () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 0);
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse({
-        generatedAt: "2026-05-26T13:46:18.066Z",
-        globalStatus: {
-          status: "attention_required",
-          runningCount: 0,
-          pendingReviewCount: 2,
-          alertCount: 0,
+    const hudPayload = {
+      generatedAt: "2026-05-26T13:46:18.066Z",
+      globalStatus: {
+        status: "attention_required",
+        runningCount: 0,
+        pendingReviewCount: 2,
+        alertCount: 0,
+      },
+      agentGroups: [
+        { agentId: "main", displayName: "main", role: "orchestrator", status: "completed" },
+        {
+          agentId: "engineering-executive",
+          displayName: "Engineering Executive",
+          role: "execution",
+          status: "completed",
         },
-        agentGroups: [
-          { agentId: "main", displayName: "main", role: "orchestrator", status: "completed" },
-          {
-            agentId: "engineering-executive",
-            displayName: "Engineering Executive",
-            role: "execution",
-            status: "completed",
-          },
-          {
-            agentId: "front-end-executive",
-            displayName: "Front-End Executive",
-            role: "execution",
-            status: "completed",
-          },
-          { agentId: "patrol", displayName: "Patrol", role: "observability", status: "unknown" },
+        {
+          agentId: "front-end-executive",
+          displayName: "Front-End Executive",
+          role: "execution",
+          status: "completed",
+        },
+        { agentId: "patrol", displayName: "Patrol", role: "observability", status: "unknown" },
+      ],
+      semanticRebuild: {
+        stage: "applied",
+        executionStatus: "applied",
+      },
+      promotionCandidates: { candidateCount: 2 },
+      longmaV3: {
+        status: "attention_required",
+        lanes: {
+          memoryContinuity: { status: "online", signalCount: 14 },
+          skillDistillation: { status: "ready", signalCount: 2 },
+          autonomousEvolution: { status: "needs_attention", signalCount: 1 },
+          recoveryLoop: { status: "ready", signalCount: 2 },
+        },
+        nextActions: [
+          "review safe promotion candidates before controlled skill-library writes",
+          "drain return and recovery queues through dry-run gates",
         ],
-        semanticRebuild: {
-          stage: "applied",
-          executionStatus: "applied",
-        },
-        promotionCandidates: { candidateCount: 2 },
-        longmaV3: {
-          status: "attention_required",
-          lanes: {
-            memoryContinuity: { status: "online", signalCount: 14 },
-            skillDistillation: { status: "ready", signalCount: 2 },
-            autonomousEvolution: { status: "needs_attention", signalCount: 1 },
-            recoveryLoop: { status: "ready", signalCount: 2 },
-          },
-          nextActions: [
-            "review safe promotion candidates before controlled skill-library writes",
-            "drain return and recovery queues through dry-run gates",
-          ],
-        },
-        warnings: [{ id: "w1" }],
-      }),
-    );
+      },
+      warnings: [{ id: "w1" }],
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : "";
+      if (url.endsWith("/api/promote-gate/dry-run")) {
+        expect(init?.method).toBe("POST");
+        return jsonResponse({
+          status: "PASS",
+          mode: "dry-run",
+          promoted: "none",
+        });
+      }
+      return jsonResponse(hudPayload);
+    });
 
     const element = document.createElement("longma-cockpit") as HTMLElement & {
       connected: boolean;
@@ -212,6 +222,17 @@ describe("LongmaCockpit", () => {
     await element.updateComplete;
     expect(speak).toHaveBeenCalledWith(expect.objectContaining({ text: "D13 操作舱在线。" }));
     expect(element.shadowRoot?.textContent).toContain("正在朗读回复");
+
+    const distillButton = [...(element.shadowRoot?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent?.includes("技能沉淀预检待命"),
+    );
+    distillButton?.click();
+    await element.updateComplete;
+    await nextFrame();
+    await element.updateComplete;
+    expect(fetchMock).toHaveBeenCalledWith("/api/promote-gate/dry-run", { method: "POST" });
+    expect(element.shadowRoot?.textContent).toContain("技能沉淀预检完成");
+    expect(element.shadowRoot?.textContent).toContain("只读 dry-run，未写入技能库");
 
     sendMessage.mockClear();
     const input = element.shadowRoot?.querySelector("input") as HTMLInputElement | null;

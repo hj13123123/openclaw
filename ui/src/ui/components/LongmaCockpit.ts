@@ -224,6 +224,7 @@ export class LongmaCockpit extends LitElement {
   @state() private ttsActive = false;
   @state() private cameraStatus = "摄像头待接入";
   @state() private cameraActive = false;
+  @state() private distillStatus = "技能沉淀预检待命";
 
   @query(".core-canvas") private coreCanvas?: HTMLCanvasElement;
   @query(".vision-preview") private visionPreview?: HTMLVideoElement;
@@ -266,6 +267,20 @@ export class LongmaCockpit extends LitElement {
       this.error = error instanceof Error ? error.message : String(error);
     } finally {
       this.loading = false;
+    }
+  }
+
+  private async runSkillDistillationCheck() {
+    this.distillStatus = "技能沉淀预检中";
+    try {
+      const response = await fetch("/api/promote-gate/dry-run", { method: "POST" });
+      if (!response.ok) throw new Error(`技能沉淀预检失败：${response.status}`);
+      this.distillStatus = "技能沉淀预检完成";
+      this.notice = "技能沉淀预检已完成：只读 dry-run，未写入技能库。";
+      await this.refreshHud();
+    } catch (error) {
+      this.distillStatus = "技能沉淀预检失败";
+      this.notice = error instanceof Error ? error.message : String(error);
     }
   }
 
@@ -927,6 +942,13 @@ export class LongmaCockpit extends LitElement {
               @click=${() => this.speakLatestReply()}
             >
               ${this.ttsStatus}
+            </button>
+            <button
+              type="button"
+              class="sensory-button"
+              @click=${() => void this.runSkillDistillationCheck()}
+            >
+              ${this.distillStatus}
             </button>
           </div>
           ${this.cameraActive
