@@ -132,6 +132,27 @@ function formatFreshness(value: string | undefined): string {
   return `遥测 ${Math.floor(hours / 24)} 天前`;
 }
 
+function localizeV3Action(action: string): string {
+  switch (action) {
+    case "run approved semantic rebuild through the controlled execution gate":
+      return "通过受控闸口执行已批准的语义记忆重建";
+    case "generate a semantic rebuild plan from current memory sources":
+      return "基于当前记忆源生成语义重建计划";
+    case "review safe promotion candidates before controlled skill-library writes":
+      return "复核安全候选后再受控写入技能库";
+    case "repair invalid or inconsistent promotion candidates":
+      return "修复无效或不一致的技能沉淀候选";
+    case "resolve high-priority auto-evolution observations before enabling apply loop":
+      return "先处理高优先进化观察，再开放应用闭环";
+    case "drain return and recovery queues through dry-run gates":
+      return "通过 dry-run 闸口处理回流与恢复队列";
+    case "keep V3 observe loop refreshing HUD state":
+      return "保持 V3 观察循环刷新遥测状态";
+    default:
+      return action;
+  }
+}
+
 function random(seed: number): number {
   const value = Math.sin(seed * 12.9898) * 43758.5453;
   return value - Math.floor(value);
@@ -681,7 +702,8 @@ export class LongmaCockpit extends LitElement {
   }
 
   private commandActions(): CommandAction[] {
-    const nextActions = this.hud?.longmaV3?.nextActions?.join("；") ?? "保持观察刷新。";
+    const nextActions =
+      this.hud?.longmaV3?.nextActions?.map(localizeV3Action).join("；") ?? "保持观察刷新。";
     return [
       {
         label: "V3 自检",
@@ -914,7 +936,7 @@ export class LongmaCockpit extends LitElement {
               ? html`
                   <div class="next-actions" aria-label="V3 下一步">
                     ${this.hud.longmaV3.nextActions.slice(0, 2).map(
-                      (action) => html`<p>${action}</p>`,
+                      (action) => html`<p>${localizeV3Action(action)}</p>`,
                     )}
                   </div>
                 `
