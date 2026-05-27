@@ -104,6 +104,15 @@ describe("LongmaCockpit", () => {
           },
         });
       }
+      if (url.endsWith("/api/auto-evolution/observe")) {
+        expect(init?.method).toBe("POST");
+        return jsonResponse({
+          status: "PASS",
+          mode: "observe-only",
+          observeOnly: true,
+          autoEvolutionApplied: false,
+        });
+      }
       return jsonResponse(hudPayload);
     });
 
@@ -255,6 +264,17 @@ describe("LongmaCockpit", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/kb/semantic-rebuild-plan", { method: "POST" });
     expect(element.shadowRoot?.textContent).toContain("记忆连续预检完成");
     expect(element.shadowRoot?.textContent).toContain("未写入向量索引");
+
+    const evolutionButton = [...(element.shadowRoot?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent?.includes("自进化观察待命"),
+    );
+    evolutionButton?.click();
+    await element.updateComplete;
+    await nextFrame();
+    await element.updateComplete;
+    expect(fetchMock).toHaveBeenCalledWith("/api/auto-evolution/observe", { method: "POST" });
+    expect(element.shadowRoot?.textContent).toContain("自进化观察完成");
+    expect(element.shadowRoot?.textContent).toContain("未执行自动应用");
 
     sendMessage.mockClear();
     const input = element.shadowRoot?.querySelector("input") as HTMLInputElement | null;
