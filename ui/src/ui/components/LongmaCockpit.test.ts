@@ -69,6 +69,19 @@ describe("LongmaCockpit", () => {
           executionStatus: "applied",
         },
         promotionCandidates: { candidateCount: 2 },
+        longmaV3: {
+          status: "attention_required",
+          lanes: {
+            memoryContinuity: { status: "online", signalCount: 14 },
+            skillDistillation: { status: "ready", signalCount: 2 },
+            autonomousEvolution: { status: "needs_attention", signalCount: 1 },
+            recoveryLoop: { status: "ready", signalCount: 2 },
+          },
+          nextActions: [
+            "review safe promotion candidates before controlled skill-library writes",
+            "drain return and recovery queues through dry-run gates",
+          ],
+        },
         warnings: [{ id: "w1" }],
       }),
     );
@@ -155,8 +168,11 @@ describe("LongmaCockpit", () => {
     expect(text).toContain("4 岗位");
     expect(text).toContain("2 待验收");
     expect(text).toContain("1 警告");
-    expect(text).toContain("记忆 已完成 D1 / D8");
-    expect(text).toContain("技能 2 候选 D9 沉淀");
+    expect(text).toContain("V3 需要关注");
+    expect(text).toContain("记忆 在线 14 语义项");
+    expect(text).toContain("技能 就绪 2 候选");
+    expect(text).toContain("进化 需要关注 1 建议");
+    expect(text).toContain("drain return and recovery queues through dry-run gates");
     expect(text).toContain("main 已完成");
     expect(text).toContain("语义知识：已完成");
     expect(text).toContain("龙马回复");

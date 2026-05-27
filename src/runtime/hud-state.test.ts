@@ -991,6 +991,135 @@ describe("HUD state core", () => {
     });
   });
 
+  it("derives Longma V3 autonomy lanes from existing HUD signals", () => {
+    const state = generateHudState({
+      generatedAt,
+      pendingReturnItems: [pendingReturn()],
+      semanticRebuild: {
+        available: true,
+        stage: "applied",
+        latestPlanPath: "runtime/main/tmp/kb-semantic-rebuild-plan-a.json",
+        latestAcceptancePath: "runtime/main/tmp/kb-semantic-rebuild-acceptance-a.json",
+        latestApprovalPath: "runtime/main/tmp/kb-semantic-rebuild-approval-a.json",
+        latestExecutionPath: "runtime/main/tmp/kb-semantic-rebuild-execution-run-a.json",
+        executionStatus: "applied",
+        totalItems: 14,
+        plannedBatches: 2,
+        readyForHumanGate: true,
+        readyForExecution: true,
+        readyForRealRebuildImplementation: false,
+        constraintsVerified: {
+          applied: "yes",
+        },
+      },
+      promotionCandidates: {
+        available: true,
+        status: "ok",
+        sourceFile: "evolution/promotion-candidates.json",
+        stateFile: "evolution/candidate-gate-state.json",
+        generatedAt,
+        lastSyncedAt: generatedAt,
+        stats: {
+          total: 2,
+          byState: {
+            pending: 2,
+          },
+          byRisk: {
+            low: 2,
+          },
+          byConsistency: {
+            ok: 2,
+          },
+          invalid: 0,
+          safeApplyEligible: 2,
+        },
+        errorCount: 0,
+        constraintsVerified: {
+          readOnly: "yes",
+          candidateStateWritten: "no",
+          truthFilesWritten: "no",
+          applied: "none",
+          rolledBack: "none",
+          autoPromote: "disabled",
+        },
+      },
+      autoEvolutionObserve: {
+        available: true,
+        reportPath: "runtime/main/tmp/auto-evolution-observe-a.json",
+        generatedAt,
+        mode: "observe-only",
+        stats: {
+          totalSuggestions: 3,
+          byPriority: {
+            P1: 1,
+            P2: 2,
+          },
+          bySource: {
+            runtime_loop: 3,
+          },
+        },
+        constraintsVerified: {
+          autoEvolutionApplied: "no",
+        },
+        verdict: "attention",
+      },
+      recoveryCandidates: {
+        mode: "observe-only",
+        sourcePath: "runtime/main/tmp/v2-task-graph-01/",
+        frozen: false,
+        graphCount: 1,
+        candidateCount: 1,
+        byStatus: [],
+        bySuggestedAction: [],
+        errorCount: 0,
+        constraintsVerified: {
+          readOnly: "yes",
+          recoveryDecisionWritten: "no",
+          taskGraphMutated: "no",
+          sessionsSent: "no",
+          autoDispatchTriggered: "no",
+          applied: "no",
+        },
+      },
+    });
+
+    expect(state.longmaV3).toMatchObject({
+      mode: "observe-only",
+      status: "attention_required",
+      lanes: {
+        memoryContinuity: {
+          status: "online",
+          signalCount: 14,
+          sourcePath: "runtime/main/tmp/kb-semantic-rebuild-execution-run-a.json",
+        },
+        skillDistillation: {
+          status: "ready",
+          signalCount: 2,
+        },
+        autonomousEvolution: {
+          status: "needs_attention",
+          signalCount: 3,
+        },
+        recoveryLoop: {
+          status: "ready",
+          signalCount: 2,
+        },
+      },
+      constraintsVerified: {
+        readOnly: "yes",
+        MEMORYWritten: "no",
+        skillLibraryWritten: "no",
+        codeWritten: "no",
+        autoApplyTriggered: "no",
+      },
+    });
+    expect(state.longmaV3.nextActions).toEqual([
+      "review safe promotion candidates before controlled skill-library writes",
+      "resolve high-priority auto-evolution observations before enabling apply loop",
+      "drain return and recovery queues through dry-run gates",
+    ]);
+  });
+
   it("adds scheduler tick plan safety states to watchdog conditions", () => {
     const state = generateHudState({
       generatedAt,

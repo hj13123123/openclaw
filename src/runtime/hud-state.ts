@@ -317,6 +317,43 @@ export type HudSchedulerTickPlanSummary = Pick<
   | "constraintsVerified"
 > & { warningCount: number };
 
+export type HudLongmaV3LaneStatus =
+  | "online"
+  | "ready"
+  | "observe_only"
+  | "needs_attention"
+  | "blocked"
+  | "bootstrapping";
+
+export type HudLongmaV3Status = "online" | "ready" | "attention_required" | "bootstrapping";
+
+export interface HudLongmaV3Lane {
+  id:
+    | "memory_continuity"
+    | "skill_distillation"
+    | "autonomous_evolution"
+    | "recovery_loop";
+  label: string;
+  status: HudLongmaV3LaneStatus;
+  signalCount: number;
+  detail: string;
+  sourcePath: string | null;
+}
+
+export interface HudLongmaV3Summary {
+  mode: "observe-only";
+  status: HudLongmaV3Status;
+  generatedAt: string;
+  lanes: {
+    memoryContinuity: HudLongmaV3Lane;
+    skillDistillation: HudLongmaV3Lane;
+    autonomousEvolution: HudLongmaV3Lane;
+    recoveryLoop: HudLongmaV3Lane;
+  };
+  nextActions: string[];
+  constraintsVerified: Record<string, string>;
+}
+
 export type HudTaskGraphReturnPreviewSummary = Pick<
   TaskGraphReturnPreviewResult,
   | "mode"
@@ -377,6 +414,7 @@ export interface HudStateInput {
   recoveryCandidates?: HudRecoveryCandidatesSummary;
   promotionCandidates?: HudPromotionCandidatesSummary;
   schedulerTickPlan?: HudSchedulerTickPlanSummary;
+  longmaV3?: HudLongmaV3Summary;
   warnings?: string[];
   agentDefaults?: HudAgentDefault[];
 }
@@ -437,6 +475,7 @@ export interface HudState {
   recoveryCandidates: HudRecoveryCandidatesSummary;
   promotionCandidates: HudPromotionCandidatesSummary;
   schedulerTickPlan: HudSchedulerTickPlanSummary;
+  longmaV3: HudLongmaV3Summary;
   warnings: string[];
 }
 
@@ -999,6 +1038,248 @@ function defaultTaskGraphReturnLinkDryRunSummary(
   };
 }
 
+function constraintViolationCount(
+  constraints: Record<string, string> | null | undefined,
+  expected: Record<string, string>,
+): number {
+  const actual = constraints ?? {};
+  return Object.entries(expected).filter(
+    ([key, expectedValue]) => actual[key] !== undefined && actual[key] !== expectedValue,
+  ).length;
+}
+
+function buildLongmaLane(
+  id: HudLongmaV3Lane["id"],
+  label: string,
+  status: HudLongmaV3LaneStatus,
+  signalCount: number,
+  detail: string,
+  sourcePath: string | null,
+): HudLongmaV3Lane {
+  return {
+    id,
+    label,
+    status,
+    signalCount: Math.max(0, signalCount),
+    detail,
+    sourcePath,
+  };
+}
+
+function buildLongmaV3MemoryLane(
+  semanticRebuild: HudSemanticRebuildSummary,
+): HudLongmaV3Lane {
+  const totalItems = semanticRebuild.totalItems ?? 0;
+  const sourcePath =
+    semanticRebuild.latestExecutionPath ??
+    semanticRebuild.latestApprovalPath ??
+    semanticRebuild.latestAcceptancePath ??
+    semanticRebuild.latestPlanPath;
+  if (semanticRebuild.stage === "applied") {
+    return buildLongmaLane(
+      "memory_continuity",
+      "memory-continuity",
+      "online",
+      totalItems,
+      `${totalItems} semantic item(s) indexed`,
+      sourcePath,
+    );
+  }
+  if (semanticRebuild.readyForRealRebuildImplementation) {
+    return buildLongmaLane(
+      "memory_continuity",
+      "memory-continuity",
+      "ready",
+      totalItems,
+      "approved semantic rebuild is ready for controlled execution",
+      sourcePath,
+    );
+  }
+  if (semanticRebuild.stage === "blocked") {
+    return buildLongmaLane(
+      "memory_continuity",
+      "memory-continuity",
+      "blocked",
+      totalItems,
+      "semantic rebuild is blocked",
+      sourcePath,
+    );
+  }
+  return buildLongmaLane(
+    "memory_continuity",
+    "memory-continuity",
+    semanticRebuild.available ? "observe_only" : "bootstrapping",
+    totalItems,
+    semanticRebuild.available
+      ? `semantic rebuild stage: ${semanticRebuild.stage}`
+      : "semantic rebuild plan has not been generated",
+    sourcePath,
+  );
+}
+
+function buildLongmaV3SkillLane(
+  promotionCandidates: HudPromotionCandidatesSummary,
+): HudLongmaV3Lane {
+  const consistencyIssueCount = Object.entries(promotionCandidates.stats.byConsistency).reduce(
+    (sum, [key, value]) => (key === "ok" ? sum : sum + Math.max(0, value)),
+    0,
+  );
+  const issueCount =
+    promotionCandidates.stats.invalid + promotionCandidates.errorCount + consistencyIssueCount;
+  const safeApplyEligible = promotionCandidates.stats.safeApplyEligible;
+  const totalCandidates = promotionCandidates.stats.total;
+  const status: HudLongmaV3LaneStatus =
+    issueCount > 0
+      ? "needs_attention"
+      : safeApplyEligible > 0
+        ? "ready"
+        : totalCandidates > 0
+          ? "observe_only"
+          : promotionCandidates.available
+            ? "online"
+            : "bootstrapping";
+  return buildLongmaLane(
+    "skill_distillation",
+    "skill-distillation",
+    status,
+    totalCandidates,
+    `${safeApplyEligible} safe candidate(s), ${issueCount} issue(s)`,
+    promotionCandidates.sourceFile,
+  );
+}
+
+function buildLongmaV3EvolutionLane(
+  autoEvolutionObserve: HudAutoEvolutionObserveSummary,
+): HudLongmaV3Lane {
+  const suggestions = autoEvolutionObserve.stats?.totalSuggestions ?? 0;
+  const highPriority =
+    numberFromRecord(autoEvolutionObserve.stats?.byPriority, "P0") +
+    numberFromRecord(autoEvolutionObserve.stats?.byPriority, "P1");
+  const constraintIssues = constraintViolationCount(autoEvolutionObserve.constraintsVerified, {
+    MEMORYWritten: "no",
+    ENGINEERING_RULESWritten: "no",
+    codeWritten: "no",
+    skillLibraryWritten: "no",
+    caseLibraryWritten: "no",
+    promoted: "none",
+    applyPerformed: "no",
+    autoEvolutionApplied: "no",
+    continuousAutoLoopTriggered: "no",
+  });
+  const status: HudLongmaV3LaneStatus =
+    highPriority > 0 || constraintIssues > 0
+      ? "needs_attention"
+      : suggestions > 0
+        ? "observe_only"
+        : autoEvolutionObserve.available
+          ? "online"
+          : "bootstrapping";
+  return buildLongmaLane(
+    "autonomous_evolution",
+    "autonomous-evolution",
+    status,
+    suggestions,
+    `${suggestions} suggestion(s), ${highPriority} high-priority`,
+    autoEvolutionObserve.reportPath,
+  );
+}
+
+function buildLongmaV3RecoveryLane(input: {
+  pendingReturnItems: readonly HudPendingReturnItem[];
+  recoveryCandidates: HudRecoveryCandidatesSummary;
+  returnConsumerPlan: HudReturnConsumerPlanSummary;
+  returnDiagnosis: HudReturnDiagnosisSummary;
+  returnRepairDryRun: HudReturnRepairDryRunSummary;
+  returnReconciliationApplyPlan: HudReturnReconciliationApplyPlanSummary;
+}): HudLongmaV3Lane {
+  const pendingReturns = input.pendingReturnItems.length;
+  const readyCount =
+    input.recoveryCandidates.candidateCount +
+    input.returnConsumerPlan.processCount +
+    input.returnDiagnosis.diagnosableCount +
+    input.returnRepairDryRun.repairableCount +
+    input.returnReconciliationApplyPlan.readyStepCount;
+  const blockedCount =
+    input.returnRepairDryRun.blockedCount + input.returnReconciliationApplyPlan.blockedStepCount;
+  const signalCount = pendingReturns + readyCount + blockedCount;
+  const status: HudLongmaV3LaneStatus =
+    blockedCount > 0 ? "needs_attention" : signalCount > 0 ? "ready" : "online";
+  return buildLongmaLane(
+    "recovery_loop",
+    "recovery-loop",
+    status,
+    signalCount,
+    `${pendingReturns} return(s), ${input.recoveryCandidates.candidateCount} recovery candidate(s)`,
+    input.returnRepairDryRun.inboxPath,
+  );
+}
+
+function buildLongmaV3Summary(input: {
+  generatedAt: string;
+  pendingReturnItems: readonly HudPendingReturnItem[];
+  semanticRebuild: HudSemanticRebuildSummary;
+  autoEvolutionObserve: HudAutoEvolutionObserveSummary;
+  recoveryCandidates: HudRecoveryCandidatesSummary;
+  returnConsumerPlan: HudReturnConsumerPlanSummary;
+  returnDiagnosis: HudReturnDiagnosisSummary;
+  returnRepairDryRun: HudReturnRepairDryRunSummary;
+  returnReconciliationApplyPlan: HudReturnReconciliationApplyPlanSummary;
+  promotionCandidates: HudPromotionCandidatesSummary;
+}): HudLongmaV3Summary {
+  const lanes = {
+    memoryContinuity: buildLongmaV3MemoryLane(input.semanticRebuild),
+    skillDistillation: buildLongmaV3SkillLane(input.promotionCandidates),
+    autonomousEvolution: buildLongmaV3EvolutionLane(input.autoEvolutionObserve),
+    recoveryLoop: buildLongmaV3RecoveryLane(input),
+  };
+  const laneValues = Object.values(lanes);
+  const status: HudLongmaV3Status = laneValues.some(
+    (lane) => lane.status === "needs_attention" || lane.status === "blocked",
+  )
+    ? "attention_required"
+    : laneValues.some((lane) => lane.status === "ready")
+      ? "ready"
+      : laneValues.some((lane) => lane.status === "bootstrapping")
+        ? "bootstrapping"
+        : "online";
+  const nextActions: string[] = [];
+  if (lanes.memoryContinuity.status === "ready") {
+    nextActions.push("run approved semantic rebuild through the controlled execution gate");
+  } else if (lanes.memoryContinuity.status === "bootstrapping") {
+    nextActions.push("generate a semantic rebuild plan from current memory sources");
+  }
+  if (lanes.skillDistillation.status === "ready") {
+    nextActions.push("review safe promotion candidates before controlled skill-library writes");
+  } else if (lanes.skillDistillation.status === "needs_attention") {
+    nextActions.push("repair invalid or inconsistent promotion candidates");
+  }
+  if (lanes.autonomousEvolution.status === "needs_attention") {
+    nextActions.push("resolve high-priority auto-evolution observations before enabling apply loop");
+  }
+  if (lanes.recoveryLoop.status === "ready" || lanes.recoveryLoop.status === "needs_attention") {
+    nextActions.push("drain return and recovery queues through dry-run gates");
+  }
+  if (nextActions.length === 0) {
+    nextActions.push("keep V3 observe loop refreshing HUD state");
+  }
+  return {
+    mode: "observe-only",
+    status,
+    generatedAt: input.generatedAt,
+    lanes,
+    nextActions,
+    constraintsVerified: {
+      readOnly: "yes",
+      MEMORYWritten: "no",
+      skillLibraryWritten: "no",
+      codeWritten: "no",
+      deviceAccessed: "no",
+      autoApplyTriggered: "no",
+      applied: "no",
+    },
+  };
+}
+
 function buildWatchdogConditions(
   mirrorObserve: HudMirrorObserveSummary,
   autoEvolutionObserve: HudAutoEvolutionObserveSummary,
@@ -1223,6 +1504,20 @@ export function generateHudState(input: HudStateInput): HudState {
     input.taskGraphReturnPreview ?? defaultTaskGraphReturnPreviewSummary(input.generatedAt);
   const taskGraphReturnLinkDryRun =
     input.taskGraphReturnLinkDryRun ?? defaultTaskGraphReturnLinkDryRunSummary(input.generatedAt);
+  const longmaV3 =
+    input.longmaV3 ??
+    buildLongmaV3Summary({
+      generatedAt: input.generatedAt,
+      pendingReturnItems,
+      semanticRebuild,
+      autoEvolutionObserve,
+      recoveryCandidates,
+      returnConsumerPlan,
+      returnDiagnosis,
+      returnRepairDryRun,
+      returnReconciliationApplyPlan,
+      promotionCandidates,
+    });
   const watchdogConditions = buildWatchdogConditions(
     mirrorObserve,
     autoEvolutionObserve,
@@ -1314,6 +1609,7 @@ export function generateHudState(input: HudStateInput): HudState {
     recoveryCandidates,
     promotionCandidates,
     schedulerTickPlan,
+    longmaV3,
     warnings,
   };
 }

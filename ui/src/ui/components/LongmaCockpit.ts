@@ -33,6 +33,23 @@ type HudState = {
   mirrorObserve?: { status?: string; latestReportPath?: string | null };
   autoEvolutionObserve?: { status?: string; latestReportPath?: string | null };
   watchdogSnapshot?: { conditions?: unknown[] };
+  longmaV3?: {
+    status?: string;
+    lanes?: {
+      memoryContinuity?: LongmaV3Lane;
+      skillDistillation?: LongmaV3Lane;
+      autonomousEvolution?: LongmaV3Lane;
+      recoveryLoop?: LongmaV3Lane;
+    };
+    nextActions?: string[];
+  };
+};
+
+type LongmaV3Lane = {
+  status?: string;
+  signalCount?: number;
+  detail?: string;
+  sourcePath?: string | null;
 };
 
 type ChatEntry = {
@@ -151,7 +168,10 @@ function statusLabel(status: string | undefined): string {
   switch (status) {
     case "healthy":
       return "健康";
+    case "online":
+      return "在线";
     case "attention_required":
+    case "needs_attention":
       return "需要关注";
     case "completed":
       return "已完成";
@@ -170,7 +190,10 @@ function statusLabel(status: string | undefined): string {
     case "failed":
       return "失败";
     case "observe-only":
+    case "observe_only":
       return "观察中";
+    case "bootstrapping":
+      return "启动中";
     case "syncing":
       return "同步中";
     case "unknown":
@@ -607,7 +630,12 @@ export class LongmaCockpit extends LitElement {
   }
 
   private commandActions(): CommandAction[] {
+    const nextActions = this.hud?.longmaV3?.nextActions?.join("；") ?? "保持观察刷新。";
     return [
+      {
+        label: "V3 自检",
+        message: `执行龙马 V3 自检：${this.systemSummary()}。下一步候选：${nextActions}。只读判断，不执行写入或自动应用。`,
+      },
       {
         label: "状态查询",
         message: `查询龙马当前状态：${this.systemSummary()}。请只返回需要关注的异常和下一步建议。`,
@@ -634,7 +662,8 @@ export class LongmaCockpit extends LitElement {
     const review = count(global?.pendingReviewCount);
     const alerts = count(global?.alertCount);
     const agents = this.hud?.agentGroups?.length ?? 0;
-    return `${status} · ${agents} 岗位 · ${running} 运行 · ${review} 待验收 · ${alerts} 警告`;
+    const v3 = this.hud?.longmaV3?.status ? ` · V3 ${statusLabel(this.hud.longmaV3.status)}` : "";
+    return `${status} · ${agents} 岗位 · ${running} 运行 · ${review} 待验收 · ${alerts} 警告${v3}`;
   }
 
   private telemetryFreshness(): string {
@@ -650,22 +679,45 @@ export class LongmaCockpit extends LitElement {
       itemCount(this.hud?.warnings) * 1.4 +
       itemCount(this.hud?.promotionCandidates) * 0.35 +
       itemCount(this.hud?.returnInbox) * 0.5 +
-      itemCount(this.hud?.controlSignals) * 0.5;
+      itemCount(this.hud?.controlSignals) * 0.5 +
+      itemCount(this.hud?.longmaV3?.nextActions) * 0.25;
     return Math.max(0, Math.min(1, signal / 10));
+  }
+
+  private v3Lane(name: keyof NonNullable<NonNullable<HudState["longmaV3"]>["lanes"]>) {
+    return this.hud?.longmaV3?.lanes?.[name];
   }
 
   private domainCards() {
     const global = this.hud?.globalStatus;
+    const memoryLane = this.v3Lane("memoryContinuity");
+    const skillLane = this.v3Lane("skillDistillation");
+    const evolutionLane = this.v3Lane("autonomousEvolution");
+    const recoveryLane = this.v3Lane("recoveryLoop");
     return [
-      { label: "记忆", value: statusLabel(this.hud?.semanticRebuild?.stage), meta: "D1 / D8" },
       {
-        label: "技能",
-        value: `${itemCount(this.hud?.promotionCandidates)} 候选`,
-        meta: "D9 沉淀",
+        label: "记忆",
+        value: statusLabel(memoryLane?.status ?? this.hud?.semanticRebuild?.stage),
+        meta:
+          typeof memoryLane?.signalCount === "number"
+            ? `${memoryLane.signalCount} 语义项`
+            : "D1 / D8",
       },
       {
-        label: "任务",
-        value: `${count(global?.runningCount)} 运行`,
+        label: "技能",
+        value: skillLane?.status
+          ? statusLabel(skillLane.status)
+          : `${itemCount(this.hud?.promotionCandidates)} 候选`,
+        meta:
+          typeof skillLane?.signalCount === "number"
+            ? `${skillLane.signalCount} 候选`
+            : "D9 沉淀",
+      },
+      {
+        label: "回流",
+        value: recoveryLane?.status
+          ? statusLabel(recoveryLane.status)
+          : `${count(global?.runningCount)} 运行`,
         meta: `${count(global?.pendingReviewCount)} 待验收`,
       },
       {
@@ -676,9 +728,14 @@ export class LongmaCockpit extends LitElement {
       {
         label: "进化",
         value: statusLabel(
-          this.hud?.autoEvolutionObserve?.status ?? this.hud?.mirrorObserve?.status,
+          evolutionLane?.status ??
+            this.hud?.autoEvolutionObserve?.status ??
+            this.hud?.mirrorObserve?.status,
         ),
-        meta: "观察优先",
+        meta:
+          typeof evolutionLane?.signalCount === "number"
+            ? `${evolutionLane.signalCount} 建议`
+            : "观察优先",
       },
     ];
   }
@@ -800,6 +857,15 @@ export class LongmaCockpit extends LitElement {
                 `,
               )}
             </div>
+            ${this.hud?.longmaV3?.nextActions?.length
+              ? html`
+                  <div class="next-actions" aria-label="V3 下一步">
+                    ${this.hud.longmaV3.nextActions.slice(0, 2).map(
+                      (action) => html`<p>${action}</p>`,
+                    )}
+                  </div>
+                `
+              : nothing}
             <button
               type="button"
               class="developer-button"
@@ -1225,7 +1291,8 @@ export class LongmaCockpit extends LitElement {
 
     .status-grid span,
     .domain-readout p,
-    .agent-list p {
+    .agent-list p,
+    .next-actions p {
       margin: 0;
       border: 1px solid rgba(255, 255, 255, 0.07);
       border-radius: 14px;
@@ -1248,13 +1315,15 @@ export class LongmaCockpit extends LitElement {
     }
 
     .agent-list,
-    .domain-readout {
+    .domain-readout,
+    .next-actions {
       display: grid;
       gap: 8px;
     }
 
     .agent-list p,
-    .domain-readout p {
+    .domain-readout p,
+    .next-actions p {
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -1282,6 +1351,12 @@ export class LongmaCockpit extends LitElement {
 
     .agent-list p.alert strong {
       color: #ffb37e;
+    }
+
+    .next-actions p {
+      display: block;
+      color: #b8cbd4;
+      line-height: 1.5;
     }
 
     .developer-button {
