@@ -1324,7 +1324,12 @@ function buildLongmaV3Summary(input: {
   } else if (lanes.skillDistillation.status === "needs_attention") {
     nextActions.push("repair invalid or inconsistent promotion candidates");
   }
-  if (lanes.autonomousEvolution.status === "needs_attention") {
+  const mirrorAttention =
+    numberFromRecord(input.mirrorObserve.stats?.bySeverity, "critical") +
+    numberFromRecord(input.mirrorObserve.stats?.bySeverity, "attention");
+  if (mirrorAttention > 0) {
+    nextActions.push("triage mirror observe findings before enabling auto-evolution apply");
+  } else if (lanes.autonomousEvolution.status === "needs_attention") {
     nextActions.push("resolve high-priority auto-evolution observations before enabling apply loop");
   }
   if (lanes.recoveryLoop.status === "ready" || lanes.recoveryLoop.status === "needs_attention") {

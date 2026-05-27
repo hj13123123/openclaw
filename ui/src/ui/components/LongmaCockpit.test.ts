@@ -78,6 +78,7 @@ describe("LongmaCockpit", () => {
         },
         nextActions: [
           "review safe promotion candidates before controlled skill-library writes",
+          "triage mirror observe findings before enabling auto-evolution apply",
           "drain return and recovery queues through dry-run gates",
         ],
       },
@@ -228,8 +229,8 @@ describe("LongmaCockpit", () => {
     expect(text).toContain("进化 需要关注 1 建议");
     expect(text).toContain("设备 1 已配对 1 待审批");
     expect(text).toContain("镜像 观察中 3 观察 · 2 发现");
-    expect(text).toContain("通过 dry-run 闸口处理回流与恢复队列");
-    expect(text).not.toContain("drain return and recovery queues through dry-run gates");
+    expect(text).toContain("先处理镜像观察发现，再开放自进化应用");
+    expect(text).not.toContain("triage mirror observe findings before enabling auto-evolution apply");
     expect(text).toContain("main 已完成");
     expect(text).toContain("语义知识：已完成");
     expect(text).toContain("龙马回复");

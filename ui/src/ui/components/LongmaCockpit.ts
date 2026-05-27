@@ -155,6 +155,8 @@ function localizeV3Action(action: string): string {
       return "修复无效或不一致的技能沉淀候选";
     case "resolve high-priority auto-evolution observations before enabling apply loop":
       return "先处理高优先进化观察，再开放应用闭环";
+    case "triage mirror observe findings before enabling auto-evolution apply":
+      return "先处理镜像观察发现，再开放自进化应用";
     case "drain return and recovery queues through dry-run gates":
       return "通过 dry-run 闸口处理回流与恢复队列";
     case "keep V3 observe loop refreshing HUD state":

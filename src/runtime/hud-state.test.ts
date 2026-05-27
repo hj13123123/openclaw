@@ -1140,7 +1140,7 @@ describe("HUD state core", () => {
     });
     expect(state.longmaV3.nextActions).toEqual([
       "review safe promotion candidates before controlled skill-library writes",
-      "resolve high-priority auto-evolution observations before enabling apply loop",
+      "triage mirror observe findings before enabling auto-evolution apply",
       "drain return and recovery queues through dry-run gates",
     ]);
   });
