@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
+import { isSttSupported, isTtsSupported, speakText, startStt, stopStt, stopTts } from "../chat/speech.ts";
 import { icons } from "../icons.ts";
 
 type HudState = {
@@ -7,19 +8,46 @@ type HudState = {
   globalStatus?: {
     status?: string;
     runningCount?: number;
+    completedCount?: number;
     pendingReviewCount?: number;
     alertCount?: number;
+    lastUpdatedAt?: string;
   };
-  agentGroups?: unknown[];
+  agentGroups?: Array<{
+    agentId?: string;
+    displayName?: string;
+    status?: string;
+    hasAlerts?: boolean;
+  }>;
   semanticRebuild?: {
     stage?: string;
     executionStatus?: string | null;
+    totalItems?: number;
   };
+  taskGraphs?: unknown[];
+  activeTasks?: unknown[];
+  warnings?: unknown[];
+  promotionCandidates?: unknown[] | { candidateCount?: number; items?: unknown[] };
+  returnInbox?: unknown[] | { pendingCount?: number; items?: unknown[] };
+  controlSignals?: unknown[] | { pendingCount?: number; items?: unknown[] };
+  mirrorObserve?: { status?: string; latestReportPath?: string | null };
+  autoEvolutionObserve?: { status?: string; latestReportPath?: string | null };
+  watchdogSnapshot?: { conditions?: unknown[] };
 };
 
 type ChatEntry = {
   speaker: "user" | "system";
   text: string;
+};
+
+type CommandAction = {
+  label: string;
+  message: string;
+};
+
+type ChatMessageLike = {
+  role?: unknown;
+  content?: unknown;
 };
 
 type Particle = {
@@ -36,6 +64,50 @@ const DIFFUSION_PARTICLE_COUNT = 360;
 
 function count(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function textFromContent(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => textFromContent(item))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  if (!value || typeof value !== "object") return "";
+  const record = value as { text?: unknown; content?: unknown };
+  return textFromContent(record.text ?? record.content);
+}
+
+function itemCount(value: unknown): number {
+  if (Array.isArray(value)) return value.length;
+  if (!value || typeof value !== "object") return 0;
+  const record = value as {
+    candidateCount?: unknown;
+    pendingCount?: unknown;
+    items?: unknown;
+    conditions?: unknown;
+  };
+  if (typeof record.candidateCount === "number") return count(record.candidateCount);
+  if (typeof record.pendingCount === "number") return count(record.pendingCount);
+  if (Array.isArray(record.items)) return record.items.length;
+  if (Array.isArray(record.conditions)) return record.conditions.length;
+  return 0;
+}
+
+function formatFreshness(value: string | undefined): string {
+  if (!value) return "遥测未生成";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "遥测时间未知";
+  const diffMs = Date.now() - timestamp;
+  if (diffMs < 0) return "遥测刚生成";
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return "遥测刚刚更新";
+  if (minutes < 60) return `遥测 ${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `遥测 ${hours} 小时前`;
+  return `遥测 ${Math.floor(hours / 24)} 天前`;
 }
 
 function random(seed: number): number {
@@ -81,8 +153,14 @@ function statusLabel(status: string | undefined): string {
       return "健康";
     case "attention_required":
       return "需要关注";
+    case "completed":
+      return "已完成";
     case "ready":
       return "就绪";
+    case "running":
+      return "运行中";
+    case "idle":
+      return "空闲";
     case "applied":
       return "已完成";
     case "blocked":
@@ -95,6 +173,8 @@ function statusLabel(status: string | undefined): string {
       return "观察中";
     case "syncing":
       return "同步中";
+    case "unknown":
+      return "未知";
     default:
       return "待同步";
   }
@@ -105,6 +185,7 @@ export class LongmaCockpit extends LitElement {
   @property({ type: Boolean }) connected = false;
   @property({ type: Boolean }) chatSending = false;
   @property({ attribute: false }) chatError: string | null = null;
+  @property({ attribute: false }) messages: unknown[] = [];
   @property({ attribute: false }) sendMessage?: (message: string) => Promise<void> | void;
 
   @state() private hud: HudState | null = null;
@@ -113,11 +194,20 @@ export class LongmaCockpit extends LitElement {
   @state() private draft = "";
   @state() private notice = "龙马在线，等待输入。";
   @state() private chatEntries: ChatEntry[] = [];
+  @state() private developerMode = false;
+  @state() private voiceStatus = "语音待命";
+  @state() private voiceActive = false;
+  @state() private ttsStatus = "语音回复待命";
+  @state() private ttsActive = false;
+  @state() private cameraStatus = "摄像头待接入";
+  @state() private cameraActive = false;
 
   @query(".core-canvas") private coreCanvas?: HTMLCanvasElement;
+  @query(".vision-preview") private visionPreview?: HTMLVideoElement;
 
   private frameHandle = 0;
   private refreshHandle = 0;
+  private cameraStream: MediaStream | null = null;
   private pointerX = 0.64;
   private pointerY = -0.16;
   private activationStartedAt = 0;
@@ -132,6 +222,9 @@ export class LongmaCockpit extends LitElement {
   disconnectedCallback() {
     window.cancelAnimationFrame(this.frameHandle);
     window.clearInterval(this.refreshHandle);
+    this.stopVoiceInput();
+    this.stopVoiceOutput();
+    this.stopCamera();
     super.disconnectedCallback();
   }
 
@@ -173,6 +266,128 @@ export class LongmaCockpit extends LitElement {
 
   private handlePointerDown(event: PointerEvent) {
     this.handlePointerMove(event);
+  }
+
+  private enterDeveloperMode() {
+    this.developerMode = true;
+    this.toggleAttribute("developer-mode", true);
+  }
+
+  private exitDeveloperMode() {
+    this.developerMode = false;
+    this.toggleAttribute("developer-mode", false);
+  }
+
+  private toggleVoiceInput() {
+    if (this.voiceActive) {
+      this.stopVoiceInput();
+      return;
+    }
+    if (!isSttSupported()) {
+      this.voiceStatus = "当前浏览器不支持语音识别";
+      return;
+    }
+    this.voiceStatus = "正在启动语音";
+    startStt({
+      onStart: () => {
+        this.voiceActive = true;
+        this.voiceStatus = "正在听你说话";
+      },
+      onTranscript: (text, isFinal) => {
+        this.draft = text.trim();
+        this.voiceStatus = isFinal ? "语音已转文字" : "正在识别语音";
+      },
+      onEnd: () => {
+        this.voiceActive = false;
+        if (this.voiceStatus === "正在听你说话" || this.voiceStatus === "正在识别语音") {
+          this.voiceStatus = "语音待命";
+        }
+      },
+      onError: (error) => {
+        this.voiceActive = false;
+        this.voiceStatus = `语音识别失败：${error}`;
+      },
+    });
+  }
+
+  private stopVoiceInput() {
+    stopStt();
+    this.voiceActive = false;
+    if (this.voiceStatus !== "语音已转文字") {
+      this.voiceStatus = "语音待命";
+    }
+  }
+
+  private async toggleCamera() {
+    if (this.cameraActive) {
+      this.stopCamera();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.cameraStatus = "当前浏览器不支持摄像头";
+      return;
+    }
+    try {
+      this.cameraStatus = "正在接入摄像头";
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      this.cameraStream = stream;
+      this.cameraActive = true;
+      this.cameraStatus = "摄像头已接入";
+      await this.updateComplete;
+      if (this.visionPreview) {
+        this.visionPreview.srcObject = stream;
+      }
+    } catch (error) {
+      this.cameraActive = false;
+      this.cameraStatus = `摄像头接入失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  private stopCamera() {
+    this.cameraStream?.getTracks().forEach((track) => track.stop());
+    this.cameraStream = null;
+    this.cameraActive = false;
+    this.cameraStatus = "摄像头待接入";
+    if (this.visionPreview) {
+      this.visionPreview.srcObject = null;
+    }
+  }
+
+  private speakLatestReply() {
+    if (this.ttsActive) {
+      this.stopVoiceOutput();
+      return;
+    }
+    const text = this.latestAssistantText();
+    if (!text) {
+      this.ttsStatus = "暂无可朗读回复";
+      return;
+    }
+    if (!isTtsSupported()) {
+      this.ttsStatus = "当前浏览器不支持语音回复";
+      return;
+    }
+    this.ttsStatus = "正在启动朗读";
+    speakText(text, {
+      onStart: () => {
+        this.ttsActive = true;
+        this.ttsStatus = "正在朗读回复";
+      },
+      onEnd: () => {
+        this.ttsActive = false;
+        this.ttsStatus = "语音回复待命";
+      },
+      onError: (error) => {
+        this.ttsActive = false;
+        this.ttsStatus = `语音回复失败：${error}`;
+      },
+    });
+  }
+
+  private stopVoiceOutput() {
+    stopTts();
+    this.ttsActive = false;
+    this.ttsStatus = "语音回复待命";
   }
 
   private drawGlowDot(
@@ -226,7 +441,8 @@ export class LongmaCockpit extends LitElement {
     const now = performance.now();
     const triggered = Math.max(0, Math.min(1, (this.activationUntil - now) / 1800));
     const triggeredAge = Math.max(0, Math.min(1, (now - this.activationStartedAt) / 1200));
-    const idlePulse = 0.08 + Math.sin(timestamp / 1300) * 0.025;
+    const pressure = this.telemetryPressure();
+    const idlePulse = 0.08 + pressure * 0.11 + Math.sin(timestamp / 1300) * (0.025 + pressure * 0.018);
     const activation = Math.max(triggered, idlePulse);
     const direction = Math.atan2(this.pointerY, this.pointerX || 0.01);
     const warmRed: [number, number, number] = [255, 48, 36];
@@ -364,9 +580,12 @@ export class LongmaCockpit extends LitElement {
     event.preventDefault();
     const message = this.draft.trim();
     if (!message) return;
-
-    this.chatEntries = [...this.chatEntries, { speaker: "user", text: message }];
     this.draft = "";
+    await this.sendCommand(message);
+  }
+
+  private async sendCommand(message: string) {
+    this.chatEntries = [...this.chatEntries, { speaker: "user", text: message }];
 
     if (!this.connected || !this.sendMessage) {
       const text = "主会话尚未连接，消息未发送。";
@@ -387,6 +606,27 @@ export class LongmaCockpit extends LitElement {
     }
   }
 
+  private commandActions(): CommandAction[] {
+    return [
+      {
+        label: "状态查询",
+        message: `查询龙马当前状态：${this.systemSummary()}。请只返回需要关注的异常和下一步建议。`,
+      },
+      {
+        label: "任务概览",
+        message: "查询当前任务、运行岗位、待验收项和阻塞项，并按优先级汇总。",
+      },
+      {
+        label: "安全闸",
+        message: "检查当前安全闸、控制信号、高风险操作和需要人工确认的事项。",
+      },
+      {
+        label: "恢复预览",
+        message: "预览 return、repair、recovery 相关待处理项，只读汇总，不执行修改。",
+      },
+    ];
+  }
+
   private systemSummary(): string {
     const global = this.hud?.globalStatus;
     const status = statusLabel(global?.status);
@@ -397,32 +637,177 @@ export class LongmaCockpit extends LitElement {
     return `${status} · ${agents} 岗位 · ${running} 运行 · ${review} 待验收 · ${alerts} 警告`;
   }
 
+  private telemetryFreshness(): string {
+    return formatFreshness(this.hud?.globalStatus?.lastUpdatedAt ?? this.hud?.generatedAt);
+  }
+
+  private telemetryPressure(): number {
+    const global = this.hud?.globalStatus;
+    const signal =
+      count(global?.runningCount) +
+      count(global?.pendingReviewCount) * 0.7 +
+      count(global?.alertCount) * 1.4 +
+      itemCount(this.hud?.warnings) * 1.4 +
+      itemCount(this.hud?.promotionCandidates) * 0.35 +
+      itemCount(this.hud?.returnInbox) * 0.5 +
+      itemCount(this.hud?.controlSignals) * 0.5;
+    return Math.max(0, Math.min(1, signal / 10));
+  }
+
+  private domainCards() {
+    const global = this.hud?.globalStatus;
+    return [
+      { label: "记忆", value: statusLabel(this.hud?.semanticRebuild?.stage), meta: "D1 / D8" },
+      {
+        label: "技能",
+        value: `${itemCount(this.hud?.promotionCandidates)} 候选`,
+        meta: "D9 沉淀",
+      },
+      {
+        label: "任务",
+        value: `${count(global?.runningCount)} 运行`,
+        meta: `${count(global?.pendingReviewCount)} 待验收`,
+      },
+      {
+        label: "设备",
+        value: this.connected ? "在线" : "离线",
+        meta: "本机节点",
+      },
+      {
+        label: "进化",
+        value: statusLabel(
+          this.hud?.autoEvolutionObserve?.status ?? this.hud?.mirrorObserve?.status,
+        ),
+        meta: "观察优先",
+      },
+    ];
+  }
+
+  private activeAgents() {
+    return (this.hud?.agentGroups ?? []).slice(0, 4).map((agent) => ({
+      name: agent.displayName ?? agent.agentId ?? "岗位",
+      status: statusLabel(agent.status),
+      alert: agent.hasAlerts === true,
+    }));
+  }
+
+  private latestAssistantText(): string {
+    for (let index = this.messages.length - 1; index >= 0; index -= 1) {
+      const message = this.messages[index] as ChatMessageLike | null | undefined;
+      if (!message || typeof message !== "object" || message.role !== "assistant") continue;
+      const text = textFromContent(message.content);
+      if (text) return text;
+    }
+    return "";
+  }
+
   protected render() {
     const semantic = statusLabel(this.hud?.semanticRebuild?.stage);
+    const global = this.hud?.globalStatus;
+    const domainCards = this.domainCards();
+    const agents = this.activeAgents();
+    const latestAssistantText = this.latestAssistantText();
+    const commandActions = this.commandActions();
+    if (this.developerMode) {
+      return html`
+        <button type="button" class="developer-return" @click=${() => this.exitDeveloperMode()}>
+          返回龙马 OS
+        </button>
+      `;
+    }
+
     return html`
       <main class="os-shell" aria-label="龙马操作系统">
         <header class="topbar">
           <div>
             <strong>龙马操作系统</strong>
             <h1>龙马</h1>
-            <p>记忆连续 · 语音待命 · 摄像头待接入</p>
+            <p>记忆连续 · ${this.voiceStatus} · ${this.cameraStatus}</p>
           </div>
           <button type="button" class="sync-button" @click=${() => void this.refreshHud()}>
             ${this.loading ? "同步中" : "同步"}
           </button>
         </header>
 
-        <section
-          class="core-stage"
-          aria-label="龙马核心"
-          @pointermove=${this.handlePointerMove}
-          @pointerdown=${this.handlePointerDown}
-        >
-          <canvas class="core-canvas" aria-hidden="true"></canvas>
-          <div class="core-readout">
-            <strong>龙马核心</strong>
-            <span>橙红凝聚 · 触发扩散 · 渐变青蓝</span>
-          </div>
+        <section class="desktop-stage" aria-label="龙马操作舱">
+          <div class="holo-plane" aria-hidden="true"></div>
+          <aside class="launcher" aria-label="核心能力">
+            ${domainCards.map(
+              (card) => html`
+                <button type="button" class="launcher-tile">
+                  <span>${card.label}</span>
+                  <strong>${card.value}</strong>
+                  <small>${card.meta}</small>
+                </button>
+              `,
+            )}
+          </aside>
+
+          <section
+            class="core-stage"
+            aria-label="龙马核心"
+            @pointermove=${this.handlePointerMove}
+            @pointerdown=${this.handlePointerDown}
+          >
+            <canvas class="core-canvas" aria-hidden="true"></canvas>
+            <div class="core-readout">
+              <strong>龙马核心</strong>
+              <span>橙红凝聚 · 触发扩散 · 渐变青蓝</span>
+            </div>
+            <div class="core-status" aria-label="核心状态">
+              <span>${this.systemSummary()}</span>
+              <small>${this.telemetryFreshness()}</small>
+            </div>
+          </section>
+
+          <aside class="telemetry-panel" aria-label="遥测">
+            <h2>运行态</h2>
+            <div class="status-grid">
+              <span>
+                <strong>${this.hud?.agentGroups?.length ?? 0}</strong>
+                岗位
+              </span>
+              <span>
+                <strong>${count(global?.runningCount)}</strong>
+                运行
+              </span>
+              <span>
+                <strong>${count(global?.pendingReviewCount)}</strong>
+                待验收
+              </span>
+              <span>
+                <strong>${count(global?.alertCount) + itemCount(this.hud?.warnings)}</strong>
+                警告
+              </span>
+            </div>
+            <div class="agent-list" aria-label="岗位状态">
+              ${agents.map(
+                (agent) => html`
+                  <p class=${agent.alert ? "alert" : ""}>
+                    <span>${agent.name}</span>
+                    <strong>${agent.status}</strong>
+                  </p>
+                `,
+              )}
+            </div>
+            <div class="domain-readout">
+              ${domainCards.map(
+                (card) => html`
+                  <p>
+                    <span>${card.label}</span>
+                    <strong>${card.value}</strong>
+                  </p>
+                `,
+              )}
+            </div>
+            <button
+              type="button"
+              class="developer-button"
+              @click=${() => this.enterDeveloperMode()}
+            >
+              开发者
+            </button>
+          </aside>
         </section>
 
         <section class="prompt-zone" aria-label="对话输入">
@@ -437,7 +822,12 @@ export class LongmaCockpit extends LitElement {
                 (this.draft = (event.target as HTMLInputElement).value)}
               placeholder="和龙马说点什么..."
             />
-            <button type="button" class="round-button accent" aria-label="语音输入">
+            <button
+              type="button"
+              class=${this.voiceActive ? "round-button accent active" : "round-button accent"}
+              aria-label="语音输入"
+              @click=${() => this.toggleVoiceInput()}
+            >
               ${icons.mic}
             </button>
             <button
@@ -450,16 +840,61 @@ export class LongmaCockpit extends LitElement {
             </button>
           </form>
           <p class="notice">${this.chatError ?? this.notice}</p>
+          <div class="sensory-row" aria-label="多模态状态">
+            <button
+              type="button"
+              class=${this.voiceActive ? "sensory-button active" : "sensory-button"}
+              @click=${() => this.toggleVoiceInput()}
+            >
+              ${this.voiceStatus}
+            </button>
+            <button
+              type="button"
+              class=${this.cameraActive ? "sensory-button active" : "sensory-button"}
+              @click=${() => void this.toggleCamera()}
+            >
+              ${this.cameraStatus}
+            </button>
+            <button
+              type="button"
+              class=${this.ttsActive ? "sensory-button active" : "sensory-button"}
+              @click=${() => this.speakLatestReply()}
+            >
+              ${this.ttsStatus}
+            </button>
+          </div>
+          ${this.cameraActive
+            ? html`<div class="vision-card" aria-label="摄像头画面">
+                <video class="vision-preview" autoplay muted playsinline></video>
+                <span>视觉上下文预览</span>
+              </div>`
+            : nothing}
           <div class="quick-actions" aria-label="快捷入口">
-            <button type="button">文字</button>
-            <button type="button">语音</button>
-            <button type="button">摄像头</button>
-            <button type="button">操作舱</button>
+            ${commandActions.map(
+              (action) => html`
+                <button
+                  type="button"
+                  ?disabled=${this.chatSending}
+                  @click=${() => void this.sendCommand(action.message)}
+                >
+                  ${action.label}
+                </button>
+              `,
+            )}
             <button type="button">语义知识：${semantic}</button>
           </div>
           ${this.chatEntries.length > 0
             ? html`<div class="history" aria-label="最近对话">
                 ${this.chatEntries.slice(-2).map((entry) => html`<p>${entry.text}</p>`)}
+              </div>`
+            : nothing}
+          ${latestAssistantText
+            ? html`<div class="assistant-reply" aria-label="龙马回复">
+                <div>
+                  <strong>龙马回复</strong>
+                  <button type="button" @click=${() => this.speakLatestReply()}>朗读回复</button>
+                </div>
+                <p>${latestAssistantText}</p>
               </div>`
             : nothing}
         </section>
@@ -475,6 +910,12 @@ export class LongmaCockpit extends LitElement {
       display: block;
       color: #f4fbff;
       font-family: "Microsoft YaHei UI", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+      background: #020407;
+    }
+
+    :host([developer-mode]) {
+      pointer-events: none;
+      background: transparent;
     }
 
     *,
@@ -492,6 +933,22 @@ export class LongmaCockpit extends LitElement {
       cursor: pointer;
     }
 
+    .developer-return {
+      position: fixed;
+      top: 24px;
+      right: 24px;
+      z-index: 1;
+      min-height: 42px;
+      border: 1px solid rgba(69, 247, 255, 0.38);
+      border-radius: 999px;
+      padding: 0 18px;
+      color: #dffcff;
+      background: rgba(4, 14, 20, 0.84);
+      box-shadow: 0 0 32px rgba(69, 247, 255, 0.18);
+      pointer-events: auto;
+      backdrop-filter: blur(18px);
+    }
+
     .os-shell {
       position: relative;
       display: grid;
@@ -502,9 +959,9 @@ export class LongmaCockpit extends LitElement {
       min-height: 0;
       padding: 34px 48px 44px;
       background:
-        radial-gradient(circle at 50% 35%, rgba(255, 112, 45, 0.11), transparent 30%),
-        radial-gradient(circle at 70% 36%, rgba(69, 247, 255, 0.09), transparent 28%),
-        linear-gradient(180deg, #020407 0%, #050b10 52%, #071017 100%);
+        radial-gradient(circle at 48% 33%, rgba(255, 101, 38, 0.13), transparent 27%),
+        radial-gradient(circle at 70% 38%, rgba(69, 247, 255, 0.11), transparent 29%),
+        linear-gradient(180deg, #020407 0%, #05090d 48%, #081117 100%);
       overflow: hidden;
     }
 
@@ -534,6 +991,7 @@ export class LongmaCockpit extends LitElement {
     }
 
     .topbar,
+    .desktop-stage,
     .core-stage,
     .prompt-zone {
       position: relative;
@@ -577,30 +1035,111 @@ export class LongmaCockpit extends LitElement {
       background: rgba(255, 138, 61, 0.08);
     }
 
+    .desktop-stage {
+      display: grid;
+      grid-template-columns: minmax(86px, 140px) minmax(0, 1fr) minmax(230px, 300px);
+      align-items: center;
+      gap: clamp(18px, 3vw, 34px);
+      min-height: 0;
+    }
+
+    .holo-plane {
+      position: absolute;
+      inset: 8% 8% 2%;
+      border: 1px solid rgba(255, 138, 61, 0.12);
+      border-radius: 28px;
+      background:
+        radial-gradient(ellipse at 48% 45%, rgba(255, 98, 34, 0.14), transparent 22%),
+        radial-gradient(ellipse at 74% 40%, rgba(69, 247, 255, 0.1), transparent 28%),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01));
+      box-shadow:
+        0 38px 80px rgba(0, 0, 0, 0.5),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08),
+        0 0 72px rgba(255, 110, 40, 0.08);
+      transform: perspective(1200px) rotateX(63deg) rotateZ(-1.5deg);
+      transform-origin: 50% 82%;
+      opacity: 0.78;
+    }
+
+    .launcher {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .launcher-tile {
+      display: grid;
+      justify-items: start;
+      gap: 4px;
+      min-height: 60px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 11px 12px;
+      color: #f7fbff;
+      background:
+        linear-gradient(135deg, rgba(255, 126, 42, 0.16), rgba(69, 247, 255, 0.06)),
+        rgba(7, 14, 20, 0.62);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      backdrop-filter: blur(14px);
+    }
+
+    .launcher-tile span {
+      font-size: 13px;
+      color: #9eb2bc;
+    }
+
+    .launcher-tile strong {
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .launcher-tile small {
+      color: #8ea6b2;
+      font-size: 12px;
+    }
+
     .core-stage {
       display: grid;
-      min-height: 0;
+      position: relative;
+      height: min(58vh, 590px);
+      min-height: 360px;
       place-items: center;
       touch-action: none;
     }
 
+    .core-stage::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 47%;
+      width: min(52vw, 610px);
+      height: min(34vw, 390px);
+      border-radius: 42% 58% 52% 48%;
+      background:
+        radial-gradient(circle at 44% 45%, rgba(255, 126, 42, 0.2), transparent 42%),
+        radial-gradient(circle at 70% 42%, rgba(69, 247, 255, 0.16), transparent 40%);
+      filter: blur(14px);
+      transform: translate(-50%, -50%) rotate(-5deg);
+      opacity: 0.8;
+    }
+
     .core-canvas {
       position: absolute;
-      inset: 0;
+      inset: -6% -5% -2%;
       width: 100%;
       height: 100%;
       mask-image: radial-gradient(
         ellipse at 50% 43%,
-        #000 0 38%,
-        rgba(0, 0, 0, 0.86) 54%,
-        transparent 78%
+        #000 0 46%,
+        rgba(0, 0, 0, 0.88) 61%,
+        transparent 83%
       );
     }
 
     .core-readout {
       position: absolute;
       left: 50%;
-      top: calc(43% + min(24vw, 150px));
+      top: calc(45% + min(20vw, 132px));
       transform: translateX(-50%);
       display: grid;
       place-items: center;
@@ -627,6 +1166,132 @@ export class LongmaCockpit extends LitElement {
       backdrop-filter: blur(10px);
     }
 
+    .core-status {
+      position: absolute;
+      left: 50%;
+      bottom: 5%;
+      display: grid;
+      min-width: min(520px, 92%);
+      transform: translateX(-50%);
+      justify-items: center;
+      gap: 4px;
+      border: 1px solid rgba(255, 138, 61, 0.18);
+      border-radius: 999px;
+      padding: 8px 16px;
+      color: #dbe9ee;
+      background: rgba(3, 8, 12, 0.56);
+      box-shadow: 0 0 32px rgba(255, 115, 39, 0.08);
+      backdrop-filter: blur(14px);
+    }
+
+    .core-status span {
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .core-status small {
+      color: #7e929d;
+      font-size: 12px;
+    }
+
+    .telemetry-panel {
+      display: grid;
+      gap: 14px;
+      align-self: center;
+      min-width: 0;
+      border: 1px solid rgba(69, 247, 255, 0.18);
+      border-radius: 22px;
+      padding: 18px;
+      background:
+        linear-gradient(180deg, rgba(69, 247, 255, 0.09), rgba(255, 138, 61, 0.045)),
+        rgba(4, 12, 18, 0.62);
+      box-shadow:
+        0 0 56px rgba(69, 247, 255, 0.09),
+        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      backdrop-filter: blur(18px);
+    }
+
+    .telemetry-panel h2 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .status-grid span,
+    .domain-readout p,
+    .agent-list p {
+      margin: 0;
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .status-grid span {
+      display: grid;
+      gap: 3px;
+      min-height: 58px;
+      padding: 9px 10px;
+      color: #99afb9;
+      font-size: 12px;
+    }
+
+    .status-grid strong {
+      color: #f8fdff;
+      font-size: 23px;
+      line-height: 1;
+    }
+
+    .agent-list,
+    .domain-readout {
+      display: grid;
+      gap: 8px;
+    }
+
+    .agent-list p,
+    .domain-readout p {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+      padding: 9px 10px;
+      color: #9eb2bc;
+      font-size: 12px;
+    }
+
+    .agent-list span,
+    .domain-readout span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .agent-list strong,
+    .domain-readout strong {
+      flex: 0 0 auto;
+      color: #dffcff;
+      font-size: 12px;
+    }
+
+    .agent-list p.alert strong {
+      color: #ffb37e;
+    }
+
+    .developer-button {
+      min-height: 40px;
+      border: 1px solid rgba(255, 138, 61, 0.28);
+      border-radius: 999px;
+      color: #ffd7bf;
+      background: rgba(255, 138, 61, 0.08);
+    }
+
     .prompt-zone {
       display: grid;
       justify-items: center;
@@ -646,14 +1311,17 @@ export class LongmaCockpit extends LitElement {
       grid-template-columns: auto minmax(0, 1fr) auto auto;
       align-items: center;
       gap: 12px;
-      width: min(760px, calc(100vw - 48px));
+      width: min(820px, calc(100vw - 48px));
       min-height: 70px;
       border: 1px solid rgba(255, 138, 61, 0.42);
-      border-radius: 24px;
+      border-radius: 26px;
       padding: 10px 14px;
-      background: rgba(9, 16, 22, 0.78);
+      background:
+        linear-gradient(90deg, rgba(255, 138, 61, 0.08), rgba(69, 247, 255, 0.06)),
+        rgba(9, 16, 22, 0.82);
       box-shadow:
-        0 0 48px rgba(255, 104, 38, 0.12),
+        0 0 56px rgba(255, 104, 38, 0.14),
+        0 0 42px rgba(69, 247, 255, 0.06),
         inset 0 1px 0 rgba(255, 255, 255, 0.04);
       backdrop-filter: blur(18px);
     }
@@ -686,6 +1354,11 @@ export class LongmaCockpit extends LitElement {
       color: #45f7ff;
     }
 
+    .round-button.active {
+      background: rgba(69, 247, 255, 0.14);
+      box-shadow: 0 0 24px rgba(69, 247, 255, 0.18);
+    }
+
     .round-button:disabled {
       color: #61727b;
       cursor: not-allowed;
@@ -699,6 +1372,53 @@ export class LongmaCockpit extends LitElement {
       stroke-width: 2;
       stroke-linecap: round;
       stroke-linejoin: round;
+    }
+
+    .sensory-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      width: min(760px, calc(100vw - 48px));
+    }
+
+    .sensory-button {
+      min-height: 34px;
+      border: 1px solid rgba(69, 247, 255, 0.18);
+      border-radius: 999px;
+      padding: 7px 14px;
+      color: #9eb2bc;
+      background: rgba(69, 247, 255, 0.06);
+      font-size: 13px;
+    }
+
+    .sensory-button.active {
+      color: #dffcff;
+      background: rgba(69, 247, 255, 0.14);
+      box-shadow: 0 0 24px rgba(69, 247, 255, 0.14);
+    }
+
+    .vision-card {
+      display: grid;
+      grid-template-columns: 96px minmax(0, auto);
+      align-items: center;
+      gap: 12px;
+      width: min(360px, calc(100vw - 48px));
+      border: 1px solid rgba(69, 247, 255, 0.2);
+      border-radius: 18px;
+      padding: 8px 12px 8px 8px;
+      color: #dbe9ee;
+      background: rgba(4, 12, 18, 0.58);
+      font-size: 13px;
+      backdrop-filter: blur(14px);
+    }
+
+    .vision-preview {
+      width: 96px;
+      height: 54px;
+      border-radius: 12px;
+      background: #020407;
+      object-fit: cover;
     }
 
     .quick-actions {
@@ -731,6 +1451,66 @@ export class LongmaCockpit extends LitElement {
       margin: 0;
     }
 
+    .assistant-reply {
+      display: grid;
+      gap: 6px;
+      width: min(760px, calc(100vw - 48px));
+      border: 1px solid rgba(69, 247, 255, 0.18);
+      border-radius: 18px;
+      padding: 10px 14px;
+      color: #dbe9ee;
+      background: rgba(4, 12, 18, 0.52);
+      font-size: 13px;
+      backdrop-filter: blur(14px);
+    }
+
+    .assistant-reply strong {
+      color: #45f7ff;
+      font-size: 12px;
+    }
+
+    .assistant-reply > div {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .assistant-reply button {
+      border: 1px solid rgba(69, 247, 255, 0.22);
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: #dffcff;
+      background: rgba(69, 247, 255, 0.08);
+      font-size: 12px;
+    }
+
+    .assistant-reply p {
+      display: -webkit-box;
+      max-height: 44px;
+      margin: 0;
+      overflow: hidden;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+
+    @media (max-width: 1100px) {
+      .desktop-stage {
+        grid-template-columns: 92px minmax(0, 1fr);
+      }
+
+      .telemetry-panel {
+        position: absolute;
+        right: 0;
+        top: 4%;
+        width: min(300px, 42vw);
+      }
+
+      .domain-readout {
+        display: none;
+      }
+    }
+
     @media (max-width: 720px) {
       .os-shell {
         padding: 22px 18px 28px;
@@ -748,6 +1528,56 @@ export class LongmaCockpit extends LitElement {
 
       .sync-button {
         min-width: 68px;
+      }
+
+      .desktop-stage {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .holo-plane {
+        inset: 14% 2% 8%;
+        border-radius: 22px;
+        transform: perspective(900px) rotateX(64deg) rotateZ(-1deg);
+      }
+
+      .launcher {
+        display: none;
+      }
+
+      .telemetry-panel {
+        position: absolute;
+        top: 2%;
+        right: 0;
+        width: min(235px, 64vw);
+        padding: 12px;
+        gap: 10px;
+      }
+
+      .telemetry-panel h2,
+      .agent-list {
+        display: none;
+      }
+
+      .status-grid {
+        gap: 7px;
+      }
+
+      .status-grid span {
+        min-height: 46px;
+      }
+
+      .core-stage {
+        min-height: 430px;
+        height: 54vh;
+      }
+
+      .core-readout {
+        top: calc(45% + 118px);
+      }
+
+      .core-status {
+        bottom: 0;
+        border-radius: 18px;
       }
 
       .prompt-form {

@@ -2046,6 +2046,7 @@ export function renderApp(state: AppViewState) {
         .connected=${state.connected}
         .chatSending=${state.chatSending}
         .chatError=${state.lastError}
+        .messages=${state.chatMessages}
         .sendMessage=${async (message: string) => {
           state.chatMessage = message;
           requestHostUpdate?.();
