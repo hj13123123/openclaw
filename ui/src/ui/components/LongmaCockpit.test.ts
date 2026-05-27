@@ -81,6 +81,15 @@ describe("LongmaCockpit", () => {
           "drain return and recovery queues through dry-run gates",
         ],
       },
+      mirrorObserve: {
+        available: true,
+        mode: "observe-only",
+        stats: {
+          observationCount: 3,
+          findingCount: 2,
+          bySeverity: { attention: 1, warning: 1 },
+        },
+      },
       warnings: [{ id: "w1" }],
     };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -218,6 +227,7 @@ describe("LongmaCockpit", () => {
     expect(text).toContain("技能 就绪 2 候选");
     expect(text).toContain("进化 需要关注 1 建议");
     expect(text).toContain("设备 1 已配对 1 待审批");
+    expect(text).toContain("镜像 观察中 3 观察 · 2 发现");
     expect(text).toContain("通过 dry-run 闸口处理回流与恢复队列");
     expect(text).not.toContain("drain return and recovery queues through dry-run gates");
     expect(text).toContain("main 已完成");

@@ -30,7 +30,18 @@ type HudState = {
   promotionCandidates?: unknown[] | { candidateCount?: number; items?: unknown[] };
   returnInbox?: unknown[] | { pendingCount?: number; items?: unknown[] };
   controlSignals?: unknown[] | { pendingCount?: number; items?: unknown[] };
-  mirrorObserve?: { status?: string; latestReportPath?: string | null };
+  mirrorObserve?: {
+    available?: boolean;
+    status?: string;
+    mode?: string | null;
+    latestReportPath?: string | null;
+    reportPath?: string | null;
+    stats?: {
+      observationCount?: number;
+      findingCount?: number;
+      bySeverity?: Record<string, number>;
+    } | null;
+  };
   autoEvolutionObserve?: { status?: string; latestReportPath?: string | null };
   watchdogSnapshot?: { conditions?: unknown[] };
   longmaV3?: {
@@ -784,6 +795,7 @@ export class LongmaCockpit extends LitElement {
     const recoveryLane = this.v3Lane("recoveryLoop");
     const pairedDevices = Array.isArray(this.devices?.paired) ? this.devices.paired.length : 0;
     const pendingDevices = Array.isArray(this.devices?.pending) ? this.devices.pending.length : 0;
+    const mirrorStats = this.hud?.mirrorObserve?.stats;
     return [
       {
         label: "记忆",
@@ -814,6 +826,16 @@ export class LongmaCockpit extends LitElement {
         label: "设备",
         value: this.connected ? `${pairedDevices} 已配对` : "离线",
         meta: pendingDevices > 0 ? `${pendingDevices} 待审批` : "本机节点",
+      },
+      {
+        label: "镜像",
+        value: statusLabel(this.hud?.mirrorObserve?.mode ?? this.hud?.mirrorObserve?.status),
+        meta:
+          mirrorStats &&
+          typeof mirrorStats.observationCount === "number" &&
+          typeof mirrorStats.findingCount === "number"
+            ? `${mirrorStats.observationCount} 观察 · ${mirrorStats.findingCount} 发现`
+            : "observe-only",
       },
       {
         label: "进化",
